@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -13,11 +14,15 @@ import (
 )
 
 func Load(root string) (Environment, error) {
+	return LoadFS(os.DirFS(root))
+}
+
+func LoadFS(filesystem fs.FS) (Environment, error) {
 	var environment Environment
 	environment.Catalog.SchemaVersion = 1
 	environment.Profiles = make(map[string]Profile)
 
-	componentPaths, err := filepath.Glob(filepath.Join(root, "components", "*.yaml"))
+	componentPaths, err := fs.Glob(filesystem, "components/*.yaml")
 	if err != nil {
 		return Environment{}, fmt.Errorf("find component documents: %w", err)
 	}
@@ -27,7 +32,7 @@ func Load(root string) (Environment, error) {
 	}
 	for _, path := range componentPaths {
 		var document Catalog
-		if err := decodeStrict(path, &document); err != nil {
+		if err := decodeStrictFS(filesystem, path, &document); err != nil {
 			return Environment{}, err
 		}
 		if document.SchemaVersion != 1 {
@@ -39,14 +44,14 @@ func Load(root string) (Environment, error) {
 		)
 	}
 
-	profilePaths, err := filepath.Glob(filepath.Join(root, "profiles", "*.yaml"))
+	profilePaths, err := fs.Glob(filesystem, "profiles/*.yaml")
 	if err != nil {
 		return Environment{}, fmt.Errorf("find profiles: %w", err)
 	}
 	sort.Strings(profilePaths)
 	for _, path := range profilePaths {
 		var profile Profile
-		if err := decodeStrict(path, &profile); err != nil {
+		if err := decodeStrictFS(filesystem, path, &profile); err != nil {
 			return Environment{}, err
 		}
 		if profile.ID == "" {
@@ -66,8 +71,8 @@ func Load(root string) (Environment, error) {
 		environment.Profiles[profile.ID] = profile
 	}
 
-	lockPath := filepath.Join(root, "locks", "versions.lock.yaml")
-	if err := decodeStrict(lockPath, &environment.Lock); err != nil {
+	lockPath := "locks/versions.lock.yaml"
+	if err := decodeStrictFS(filesystem, lockPath, &environment.Lock); err != nil {
 		return Environment{}, err
 	}
 	if err := Validate(environment); err != nil {
@@ -76,8 +81,8 @@ func Load(root string) (Environment, error) {
 	return environment, nil
 }
 
-func decodeStrict(path string, target any) error {
-	file, err := os.Open(path)
+func decodeStrictFS(filesystem fs.FS, path string, target any) error {
+	file, err := filesystem.Open(path)
 	if err != nil {
 		return fmt.Errorf("open %s: %w", path, err)
 	}

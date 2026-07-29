@@ -1,0 +1,68 @@
+{
+  "schema_version": "mds.plan/v1",
+  "catalog_revision": "sha256:21cd35d093d42168f1df5b12a504280eb25c9ee125989382ca4f6ec6bd58e1bb",
+  "target": {
+    "id": {
+      "kind": "lima-guest",
+      "name": "mds"
+    },
+    "os": "linux",
+    "os_version": "",
+    "architecture": "arm64",
+    "systemd_supported": false,
+    "systemd_active": false,
+    "reachable": true
+  },
+  "selection": [
+    "bun",
+    "notion-cli"
+  ],
+  "actions": [
+    {
+      "id": "lima-guest:mds/bun",
+      "component_id": "bun",
+      "target_id": "lima-guest:mds",
+      "status": "planned",
+      "installer": "script",
+      "package": "bun",
+      "version": "1.3.14",
+      "dependencies": [],
+      "verification": [
+        [
+          "bun",
+          "--version"
+        ],
+        [
+          "bun",
+          "-e",
+          "console.log('ok')"
+        ]
+      ]
+    },
+    {
+      "id": "lima-guest:mds/notion-cli",
+      "component_id": "notion-cli",
+      "target_id": "lima-guest:mds",
+      "status": "action-required",
+      "version": "manual",
+      "dependencies": [
+        "lima-guest:mds/bun"
+      ],
+      "verification": [
+        [
+          "ntn",
+          "--version"
+        ]
+      ],
+      "reason": "The ntn package and version source must be verified before installation."
+    }
+  ],
+  "blockers": [
+    {
+      "action_id": "lima-guest:mds/notion-cli",
+      "status": "action-required",
+      "reason": "The ntn package and version source must be verified before installation."
+    }
+  ],
+  "digest": "sha256:6e162dbd5bceda3439ae45866bff7343f244f1fb3cbb65b475a0dc4ce40473b7"
+}

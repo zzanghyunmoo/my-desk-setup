@@ -41,6 +41,14 @@ func Validate(environment Environment) error {
 		if len(component.Provides) == 0 {
 			problems = append(problems, fmt.Sprintf("component %q provides no capabilities", component.ID))
 		}
+		problems = append(
+			problems,
+			duplicateValues("component "+component.ID+" provides", component.Provides)...,
+		)
+		problems = append(
+			problems,
+			duplicateValues("component "+component.ID+" dependencies", component.Dependencies)...,
+		)
 		for _, capability := range component.Provides {
 			if owner, exists := capabilityOwner[capability]; exists {
 				problems = append(
@@ -95,6 +103,10 @@ func Validate(environment Environment) error {
 		if profile.ID == "all" {
 			problems = append(problems, `profile id "all" is reserved for computed selection`)
 		}
+		problems = append(
+			problems,
+			duplicateValues("profile "+profile.ID+" selection", profile.Selection)...,
+		)
 		for _, selection := range profile.Selection {
 			if _, component := components[selection]; component {
 				continue
@@ -120,6 +132,19 @@ func Validate(environment Environment) error {
 	}
 	sort.Strings(problems)
 	return errors.New(strings.Join(problems, "; "))
+}
+
+func duplicateValues(scope string, values []string) []string {
+	seen := make(map[string]bool, len(values))
+	var problems []string
+	for _, value := range values {
+		if seen[value] {
+			problems = append(problems, fmt.Sprintf("%s contains duplicate %q", scope, value))
+			continue
+		}
+		seen[value] = true
+	}
+	return problems
 }
 
 func validateTargets(component Component) []string {

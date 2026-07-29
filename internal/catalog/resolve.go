@@ -66,7 +66,9 @@ func ResolveSelection(
 		return nil
 	}
 
-	for _, reference := range selection {
+	references := append([]string(nil), selection...)
+	sort.Strings(references)
+	for _, reference := range references {
 		if err := add(reference); err != nil {
 			return nil, err
 		}
@@ -83,7 +85,11 @@ func resolveAll(environment Environment, target TargetKind) []ResolvedComponent 
 		}
 	}
 	sort.Strings(ids)
-	return materialize(ids, components, target)
+	resolved, err := ResolveSelection(environment, ids, target)
+	if err != nil {
+		return nil
+	}
+	return resolved
 }
 
 func materialize(
