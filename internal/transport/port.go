@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"sort"
+	"strings"
 	"time"
 )
 
@@ -57,6 +58,10 @@ func (Executor) Run(
 	if outputLimit <= 0 {
 		outputLimit = DefaultOutputLimit
 	}
+	commandEnv, err := commandEnvironment(environment)
+	if err != nil {
+		return Result{}, fmt.Errorf("prepare command environment: %w", err)
+	}
 
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
@@ -64,13 +69,11 @@ func (Executor) Run(
 	stdout := newLimitedBuffer(outputLimit)
 	stderr := newLimitedBuffer(outputLimit)
 	command := exec.CommandContext(ctx, executable, arguments...)
-	if environment := commandEnvironment(environment); environment != nil {
-		command.Env = environment
-	}
+	command.Env = commandEnv
 	command.Dir = workingDirectory
 	command.Stdout = stdout
 	command.Stderr = stderr
-	err := command.Run()
+	err = command.Run()
 	result := Result{
 		Executable: executable,
 		Arguments:  append([]string(nil), arguments...),
@@ -94,20 +97,102 @@ func (Executor) Run(
 	return result, fmt.Errorf("run %s: %w", executable, err)
 }
 
-func commandEnvironment(overrides map[string]string) []string {
-	if len(overrides) == 0 {
-		return nil
+func commandEnvironment(overrides map[string]string) ([]string, error) {
+	values := make(map[string]string, len(safeInheritedEnvironmentKeys)+len(overrides))
+	for _, key := range safeInheritedEnvironmentKeys {
+		if value, ok := os.LookupEnv(key); ok {
+			values[key] = value
+		}
 	}
-	keys := make([]string, 0, len(overrides))
-	for key := range overrides {
+	for key, value := range overrides {
+		if err := validateEnvironmentEntry(key, value); err != nil {
+			return nil, err
+		}
+		for inheritedKey := range values {
+			if strings.EqualFold(inheritedKey, key) {
+				delete(values, inheritedKey)
+			}
+		}
+		values[key] = value
+	}
+
+	keys := make([]string, 0, len(values))
+	for key := range values {
 		keys = append(keys, key)
 	}
 	sort.Strings(keys)
-	environment := os.Environ()
+	environment := make([]string, 0, len(keys))
 	for _, key := range keys {
-		environment = append(environment, key+"="+overrides[key])
+		environment = append(environment, key+"="+values[key])
 	}
-	return environment
+	return environment, nil
+}
+
+var safeInheritedEnvironmentKeys = []string{
+	"APPDATA",
+	"ComSpec",
+	"HOME",
+	"LANG",
+	"LC_ALL",
+	"LC_CTYPE",
+	"LOCALAPPDATA",
+	"LOGNAME",
+	"PATH",
+	"PATHEXT",
+	"ProgramData",
+	"ProgramFiles",
+	"ProgramFiles(x86)",
+	"SHELL",
+	"SystemRoot",
+	"TEMP",
+	"TERM",
+	"TMP",
+	"TMPDIR",
+	"USER",
+	"USERPROFILE",
+	"XDG_CACHE_HOME",
+	"XDG_CONFIG_HOME",
+	"XDG_DATA_HOME",
+	"XDG_STATE_HOME",
+}
+
+func validateEnvironmentEntry(key, value string) error {
+	if key == "" || strings.ContainsAny(key, "=\x00") {
+		return fmt.Errorf("invalid environment key %q", key)
+	}
+	if strings.ContainsRune(value, '\x00') {
+		return fmt.Errorf("environment value for %q contains NUL", key)
+	}
+	normalized := strings.ToUpper(key)
+	normalized = strings.Map(func(character rune) rune {
+		switch {
+		case character >= 'A' && character <= 'Z':
+			return character
+		case character >= '0' && character <= '9':
+			return character
+		default:
+			return -1
+		}
+	}, normalized)
+	for _, marker := range []string{
+		"APIKEY",
+		"ACCESSKEY",
+		"AUTHENTICATION",
+		"AUTHORIZATION",
+		"COOKIE",
+		"CREDENTIAL",
+		"PASSWORD",
+		"PASSWD",
+		"PRIVATEKEY",
+		"SECRET",
+		"SSHAUTHSOCK",
+		"TOKEN",
+	} {
+		if strings.Contains(normalized, marker) {
+			return fmt.Errorf("credential-shaped environment key %q is not allowed", key)
+		}
+	}
+	return nil
 }
 
 func guestArgv(command Command) (string, []string) {
