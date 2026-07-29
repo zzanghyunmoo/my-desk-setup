@@ -1,0 +1,515 @@
+schema_version: 1
+components:
+  - id: base-cli
+    name: Linux Base CLI
+    kind: cli
+    provides: [base-cli, git, curl, archive-tools]
+    dependencies: []
+    version_policy:
+      mode: manager
+    verification:
+      command: [git, --version]
+    targets:
+      macos-host:
+        status: unsupported
+        reason: Development CLI belongs to the Linux guest.
+      windows-host:
+        status: unsupported
+        reason: Development CLI belongs to the Linux guest.
+      wsl-guest:
+        status: supported
+        installer: apt
+        package: git curl ca-certificates unzip zip jq
+      lima-guest:
+        status: supported
+        installer: apt
+        package: git curl ca-certificates unzip zip jq
+
+  - id: bun
+    name: Bun
+    kind: build
+    provides: [bun, javascript-runtime, package-manager]
+    dependencies: []
+    version_policy:
+      mode: pinned
+      lock_key: bun
+    verification:
+      command: [bun, --version]
+      functional: [bun, -e, "console.log('ok')"]
+    targets:
+      macos-host:
+        status: supported
+        installer: script
+        package: bun
+      windows-host:
+        status: supported
+        installer: script
+        package: bun
+      wsl-guest:
+        status: supported
+        installer: script
+        package: bun
+      lima-guest:
+        status: supported
+        installer: script
+        package: bun
+
+  - id: java
+    name: Java
+    kind: language
+    provides: [java, jdk]
+    dependencies: [base-cli]
+    version_policy:
+      mode: pinned
+      lock_key: java
+    verification:
+      command: [java, --version]
+      functional: [javac, -version]
+    targets:
+      macos-host:
+        status: unsupported
+        reason: Primary language toolchains belong to the Linux guest.
+      windows-host:
+        status: unsupported
+        reason: Primary language toolchains belong to the Linux guest.
+      wsl-guest:
+        status: supported
+        installer: mise
+        package: java
+      lima-guest:
+        status: supported
+        installer: mise
+        package: java
+
+  - id: kotlin
+    name: Kotlin
+    kind: language
+    provides: [kotlin, kotlinc]
+    dependencies: [java]
+    version_policy:
+      mode: pinned
+      lock_key: kotlin
+    verification:
+      command: [kotlinc, -version]
+    targets:
+      macos-host:
+        status: unsupported
+        reason: Primary language toolchains belong to the Linux guest.
+      windows-host:
+        status: unsupported
+        reason: Primary language toolchains belong to the Linux guest.
+      wsl-guest:
+        status: supported
+        installer: mise
+        package: kotlin
+      lima-guest:
+        status: supported
+        installer: mise
+        package: kotlin
+
+  - id: go
+    name: Go
+    kind: language
+    provides: [go, go-toolchain]
+    dependencies: [base-cli]
+    version_policy:
+      mode: pinned
+      lock_key: go
+    verification:
+      command: [go, version]
+      functional: [go, env, GOROOT]
+    targets:
+      macos-host:
+        status: unsupported
+        reason: Primary language toolchains belong to the Linux guest.
+      windows-host:
+        status: unsupported
+        reason: Primary language toolchains belong to the Linux guest.
+      wsl-guest:
+        status: supported
+        installer: mise
+        package: go
+      lima-guest:
+        status: supported
+        installer: mise
+        package: go
+
+  - id: python
+    name: Python
+    kind: language
+    provides: [python, python3]
+    dependencies: [base-cli]
+    version_policy:
+      mode: pinned
+      lock_key: python
+    verification:
+      command: [python, --version]
+      functional: [python, -c, "print('ok')"]
+    targets:
+      macos-host:
+        status: unsupported
+        reason: Primary language toolchains belong to the Linux guest.
+      windows-host:
+        status: unsupported
+        reason: Primary language toolchains belong to the Linux guest.
+      wsl-guest:
+        status: supported
+        installer: mise
+        package: python
+      lima-guest:
+        status: supported
+        installer: mise
+        package: python
+
+  - id: typescript
+    name: TypeScript
+    kind: language
+    provides: [typescript, tsc]
+    dependencies: [bun]
+    version_policy:
+      mode: pinned
+      lock_key: typescript
+    verification:
+      command: [tsc, --version]
+      functional: [bun, -e, "const value: number = 1; console.log(value)"]
+    targets:
+      macos-host:
+        status: unsupported
+        reason: Primary language toolchains belong to the Linux guest.
+      windows-host:
+        status: unsupported
+        reason: Primary language toolchains belong to the Linux guest.
+      wsl-guest:
+        status: supported
+        installer: bun
+        package: typescript
+      lima-guest:
+        status: supported
+        installer: bun
+        package: typescript
+
+  - id: c-toolchain
+    name: C Toolchain
+    kind: language
+    provides: [c, cc, build-essential]
+    dependencies: [base-cli]
+    version_policy:
+      mode: manager
+    verification:
+      command: [cc, --version]
+      functional: [cc, --help]
+    targets:
+      macos-host:
+        status: unsupported
+        reason: Primary language toolchains belong to the Linux guest.
+      windows-host:
+        status: unsupported
+        reason: Primary language toolchains belong to the Linux guest.
+      wsl-guest:
+        status: supported
+        installer: apt
+        package: build-essential pkg-config
+      lima-guest:
+        status: supported
+        installer: apt
+        package: build-essential pkg-config
+
+  - id: flutter
+    name: Flutter and Dart
+    kind: language
+    provides: [flutter, dart]
+    dependencies: [base-cli]
+    version_policy:
+      mode: pinned
+      lock_key: flutter
+    verification:
+      command: [flutter, --version]
+      functional: [flutter, doctor]
+    targets:
+      macos-host:
+        status: unsupported
+        reason: Primary Flutter work belongs to the Linux guest; iOS signing uses the Xcode exception.
+      windows-host:
+        status: unsupported
+        reason: Primary language toolchains belong to the Linux guest.
+      wsl-guest:
+        status: supported
+        installer: mise
+        package: flutter
+      lima-guest:
+        status: supported
+        installer: mise
+        package: flutter
+
+  - id: gradle
+    name: Gradle
+    kind: build
+    provides: [gradle]
+    dependencies: [java]
+    version_policy:
+      mode: pinned
+      lock_key: gradle
+    verification:
+      command: [gradle, --version]
+    targets:
+      macos-host:
+        status: unsupported
+        reason: Build tools belong to the Linux guest.
+      windows-host:
+        status: unsupported
+        reason: Build tools belong to the Linux guest.
+      wsl-guest:
+        status: supported
+        installer: mise
+        package: gradle
+      lima-guest:
+        status: supported
+        installer: mise
+        package: gradle
+
+  - id: uv
+    name: uv
+    kind: build
+    provides: [uv, python-package-manager]
+    dependencies: [base-cli]
+    version_policy:
+      mode: pinned
+      lock_key: uv
+    verification:
+      command: [uv, --version]
+    targets:
+      macos-host:
+        status: unsupported
+        reason: Build tools belong to the Linux guest.
+      windows-host:
+        status: unsupported
+        reason: Build tools belong to the Linux guest.
+      wsl-guest:
+        status: supported
+        installer: script
+        package: uv
+      lima-guest:
+        status: supported
+        installer: script
+        package: uv
+
+  - id: neovim
+    name: Neovim
+    kind: editor
+    provides: [neovim, nvim]
+    dependencies: [base-cli]
+    version_policy:
+      mode: pinned
+      lock_key: neovim
+    verification:
+      command: [nvim, --version]
+      functional: [nvim, --headless, "+quit"]
+    targets:
+      macos-host:
+        status: unsupported
+        reason: The primary editor belongs to the Linux guest.
+      windows-host:
+        status: unsupported
+        reason: The primary editor belongs to the Linux guest.
+      wsl-guest:
+        status: supported
+        installer: mise
+        package: neovim
+      lima-guest:
+        status: supported
+        installer: mise
+        package: neovim
+
+  - id: nvchad
+    name: NvChad-derived Configuration
+    kind: editor
+    provides: [nvchad, neovim-config]
+    dependencies: [neovim]
+    version_policy:
+      mode: pinned
+      lock_key: nvchad
+    verification:
+      command: [nvim, --headless, "+checkhealth", "+quit"]
+    targets:
+      macos-host:
+        status: unsupported
+        reason: The primary editor belongs to the Linux guest.
+      windows-host:
+        status: unsupported
+        reason: The primary editor belongs to the Linux guest.
+      wsl-guest:
+        status: supported
+        installer: script
+        package: nvchad-derived
+      lima-guest:
+        status: supported
+        installer: script
+        package: nvchad-derived
+
+  - id: herdr
+    name: Herdr
+    kind: terminal
+    provides: [herdr]
+    dependencies: [bun]
+    version_policy:
+      mode: manual
+    verification:
+      command: [herdr, --version]
+    targets:
+      macos-host:
+        status: unsupported
+        reason: Herdr belongs to the Linux guest profile.
+      windows-host:
+        status: unsupported
+        reason: Herdr belongs to the Linux guest profile.
+      wsl-guest:
+        status: action-required
+        reason: A verified upstream package and version source must be selected before installation.
+      lima-guest:
+        status: action-required
+        reason: A verified upstream package and version source must be selected before installation.
+
+  - id: atlassian-cli
+    name: Atlassian CLI
+    kind: cli
+    provides: [atlassian-cli, jira-cli, confluence-cli]
+    dependencies: [base-cli]
+    version_policy:
+      mode: manual
+    verification:
+      command: [acli, --version]
+    targets:
+      macos-host:
+        status: unsupported
+        reason: Collaboration CLI belongs to the Linux guest.
+      windows-host:
+        status: unsupported
+        reason: Collaboration CLI belongs to the Linux guest.
+      wsl-guest:
+        status: action-required
+        reason: The official package identifier and noninteractive installer must be verified.
+      lima-guest:
+        status: action-required
+        reason: The official package identifier and noninteractive installer must be verified.
+
+  - id: notion-cli
+    name: Notion CLI
+    kind: cli
+    provides: [notion-cli]
+    dependencies: [bun]
+    version_policy:
+      mode: manual
+    verification:
+      command: [ntn, --version]
+    targets:
+      macos-host:
+        status: unsupported
+        reason: Collaboration CLI belongs to the Linux guest.
+      windows-host:
+        status: unsupported
+        reason: Collaboration CLI belongs to the Linux guest.
+      wsl-guest:
+        status: action-required
+        reason: The ntn package and version source must be verified before installation.
+      lima-guest:
+        status: action-required
+        reason: The ntn package and version source must be verified before installation.
+
+  - id: linear-cli
+    name: Linear CLI
+    kind: cli
+    provides: [linear-cli]
+    dependencies: [bun]
+    version_policy:
+      mode: manual
+    verification:
+      command: [linear, --version]
+    targets:
+      macos-host:
+        status: unsupported
+        reason: Collaboration CLI belongs to the Linux guest.
+      windows-host:
+        status: unsupported
+        reason: Collaboration CLI belongs to the Linux guest.
+      wsl-guest:
+        status: action-required
+        reason: An upstream package and version source must be verified before installation.
+      lima-guest:
+        status: action-required
+        reason: An upstream package and version source must be verified before installation.
+
+  - id: gh
+    name: GitHub CLI
+    kind: cli
+    provides: [gh, github-cli]
+    dependencies: [base-cli]
+    version_policy:
+      mode: manager
+    verification:
+      command: [gh, --version]
+    targets:
+      macos-host:
+        status: unsupported
+        reason: Collaboration CLI belongs to the Linux guest.
+      windows-host:
+        status: unsupported
+        reason: Collaboration CLI belongs to the Linux guest.
+      wsl-guest:
+        status: supported
+        installer: apt
+        package: gh
+      lima-guest:
+        status: supported
+        installer: apt
+        package: gh
+
+  - id: glab
+    name: GitLab CLI
+    kind: cli
+    provides: [glab, gitlab-cli]
+    dependencies: [base-cli]
+    version_policy:
+      mode: manager
+    verification:
+      command: [glab, --version]
+    targets:
+      macos-host:
+        status: unsupported
+        reason: Collaboration CLI belongs to the Linux guest.
+      windows-host:
+        status: unsupported
+        reason: Collaboration CLI belongs to the Linux guest.
+      wsl-guest:
+        status: supported
+        installer: apt
+        package: glab
+      lima-guest:
+        status: supported
+        installer: apt
+        package: glab
+
+  - id: docker-engine
+    name: Docker Engine and CLI
+    kind: container
+    provides: [docker-engine, docker-cli, docker-compose]
+    dependencies: [base-cli]
+    version_policy:
+      mode: manager
+    verification:
+      command: [docker, version]
+      functional: [docker, run, --rm, hello-world]
+    targets:
+      macos-host:
+        status: unsupported
+        reason: Docker Desktop and host Docker engine are outside v1.
+      windows-host:
+        status: unsupported
+        reason: Docker Desktop and host Docker engine are outside v1.
+      wsl-guest:
+        status: supported
+        installer: docker-apt
+        package: docker-ce docker-ce-cli containerd.io docker-compose-plugin
+      lima-guest:
+        status: supported
+        installer: docker-apt
+        package: docker-ce docker-ce-cli containerd.io docker-compose-plugin

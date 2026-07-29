@@ -1,0 +1,73 @@
+schema_version: 1
+components:
+  - id: lima
+    name: Lima
+    kind: platform
+    provides: [lima, linux-guest-runtime]
+    dependencies: []
+    version_policy:
+      mode: pinned
+      lock_key: lima
+    verification:
+      command: [limactl, --version]
+    targets:
+      macos-host:
+        status: supported
+        installer: brew
+        package: lima
+      windows-host:
+        status: unsupported
+        reason: Lima is a macOS guest runtime in this product.
+      wsl-guest:
+        status: unsupported
+        reason: Guest runtimes are host-owned.
+      lima-guest:
+        status: unsupported
+        reason: Guest runtimes are host-owned.
+
+  - id: wsl
+    name: Windows Subsystem for Linux
+    kind: platform
+    provides: [wsl, linux-guest-runtime-windows]
+    dependencies: []
+    version_policy:
+      mode: manager
+    verification:
+      command: [wsl.exe, --version]
+    targets:
+      macos-host:
+        status: unsupported
+        reason: WSL is a Windows platform feature.
+      windows-host:
+        status: supported
+        installer: system
+        package: Microsoft.WSL
+      wsl-guest:
+        status: unsupported
+        reason: Guest runtimes are host-owned.
+      lima-guest:
+        status: unsupported
+        reason: Guest runtimes are host-owned.
+
+  - id: xcode
+    name: Xcode
+    kind: platform
+    provides: [xcode, ios-toolchain]
+    dependencies: []
+    version_policy:
+      mode: manual
+    verification:
+      command: [xcodebuild, -version]
+    targets:
+      macos-host:
+        status: action-required
+        reason: App Store installation, license acceptance, and signing remain manual.
+      windows-host:
+        status: unsupported
+        reason: Xcode is only available on macOS.
+      wsl-guest:
+        status: unsupported
+        reason: iOS build and signing are macOS-only.
+      lima-guest:
+        status: unsupported
+        reason: iOS build and signing are macOS-only.

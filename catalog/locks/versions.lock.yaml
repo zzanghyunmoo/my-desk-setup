@@ -1,0 +1,62 @@
+schema_version: 1
+versions:
+  bun:
+    version: 1.3.14
+    source: GitHub release
+    provenance: https://github.com/oven-sh/bun/releases/tag/bun-v1.3.14
+  claude-code:
+    version: 2.1.212
+    source: npm registry
+    provenance: https://www.npmjs.com/package/@anthropic-ai/claude-code
+  codex:
+    version: 0.144.6
+    source: GitHub release
+    provenance: https://github.com/openai/codex/releases
+  flutter:
+    version: 3.44.4
+    source: Flutter stable archive
+    provenance: https://docs.flutter.dev/install/archive
+  go:
+    version: 1.26.5
+    source: Go release history
+    provenance: https://go.dev/doc/devel/release
+  gradle:
+    version: 9.6.1
+    source: Gradle release notes
+    provenance: https://docs.gradle.org/9.6.1/release-notes.html
+  java:
+    version: 25.0.4
+    source: Oracle Java LTS release
+    provenance: https://www.oracle.com/java/technologies/java-se-glance.html
+  kotlin:
+    version: 2.3.20
+    source: Kotlin release history
+    provenance: https://kotlinlang.org/docs/releases.html
+  lima:
+    version: 2.1.1
+    source: GitHub release
+    provenance: https://github.com/lima-vm/lima/releases
+  neovim:
+    version: 0.11.5
+    source: GitHub release
+    provenance: https://github.com/neovim/neovim/releases
+  nvchad:
+    version: 2.5
+    source: NvChad tagged configuration
+    provenance: https://github.com/NvChad/starter
+  opencode:
+    version: 1.17.7
+    source: GitHub release
+    provenance: https://github.com/anomalyco/opencode/releases
+  python:
+    version: 3.14.6
+    source: Python release page
+    provenance: https://www.python.org/downloads/release/python-3146/
+  typescript:
+    version: 6.0.2
+    source: npm registry
+    provenance: https://www.npmjs.com/package/typescript
+  uv:
+    version: 0.11.7
+    source: GitHub changelog
+    provenance: https://github.com/astral-sh/uv/blob/main/CHANGELOG.md

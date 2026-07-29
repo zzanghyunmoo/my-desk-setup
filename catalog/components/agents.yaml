@@ -1,0 +1,85 @@
+schema_version: 1
+components:
+  - id: claude-code
+    name: Claude Code
+    kind: agent
+    provides: [claude-code]
+    dependencies: [bun]
+    version_policy:
+      mode: pinned
+      lock_key: claude-code
+    verification:
+      command: [claude, --version]
+    targets:
+      macos-host:
+        status: supported
+        installer: bun
+        package: "@anthropic-ai/claude-code"
+      windows-host:
+        status: supported
+        installer: bun
+        package: "@anthropic-ai/claude-code"
+      wsl-guest:
+        status: supported
+        installer: bun
+        package: "@anthropic-ai/claude-code"
+      lima-guest:
+        status: supported
+        installer: bun
+        package: "@anthropic-ai/claude-code"
+
+  - id: opencode
+    name: OpenCode
+    kind: agent
+    provides: [opencode]
+    dependencies: [bun]
+    version_policy:
+      mode: pinned
+      lock_key: opencode
+    verification:
+      command: [opencode, --version]
+    targets:
+      macos-host:
+        status: supported
+        installer: bun
+        package: opencode-ai
+      windows-host:
+        status: supported
+        installer: bun
+        package: opencode-ai
+      wsl-guest:
+        status: supported
+        installer: bun
+        package: opencode-ai
+      lima-guest:
+        status: supported
+        installer: bun
+        package: opencode-ai
+
+  - id: codex
+    name: OpenAI Codex
+    kind: agent
+    provides: [codex]
+    dependencies: [bun]
+    version_policy:
+      mode: pinned
+      lock_key: codex
+    verification:
+      command: [codex, --version]
+    targets:
+      macos-host:
+        status: supported
+        installer: bun
+        package: "@openai/codex"
+      windows-host:
+        status: supported
+        installer: bun
+        package: "@openai/codex"
+      wsl-guest:
+        status: supported
+        installer: bun
+        package: "@openai/codex"
+      lima-guest:
+        status: supported
+        installer: bun
+        package: "@openai/codex"
