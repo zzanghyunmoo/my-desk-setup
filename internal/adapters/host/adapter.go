@@ -16,11 +16,13 @@ func New(
 	home,
 	platform,
 	architecture string,
+	allowReplace bool,
 ) (adapters.Component, error) {
 	packagesAdapter := packages.Adapter{
-		Environment: environment,
-		Port:        port,
-		Home:        home,
+		Environment:  environment,
+		Port:         port,
+		Home:         home,
+		AllowReplace: allowReplace,
 		Vendor: packages.Vendor{
 			Home: home, Platform: platform, Arch: architecture,
 		},

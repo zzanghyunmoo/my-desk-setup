@@ -86,6 +86,61 @@ func TestEditorPublishesExactManagedRevision(t *testing.T) {
 	}
 }
 
+func TestExplicitUpdateReplacesOnlyManagedEditorConfiguration(t *testing.T) {
+	home := t.TempDir()
+	revision := "1111111111111111111111111111111111111111"
+	port := &recordingPort{
+		result: func(command transport.Command) transport.Result {
+			if command.Executable == "git" &&
+				len(command.Arguments) >= 3 &&
+				command.Arguments[2] == "rev-parse" {
+				return transport.Result{Stdout: revision + "\n"}
+			}
+			return transport.Result{}
+		},
+	}
+	action := nvchadAction()
+	action.Version = revision
+	editor := guestadapter.Editor{
+		Home: home, Port: port, Delegate: readyComponent{},
+		Now: func() time.Time {
+			return time.Date(2026, 7, 29, 8, 0, 0, 0, time.UTC)
+		},
+	}
+	if err := editor.Apply(context.Background(), action); err != nil {
+		t.Fatalf("Apply(initial): %v", err)
+	}
+	revision = "2222222222222222222222222222222222222222"
+	action.Version = revision
+	editor.AllowReplace = true
+	if err := editor.Apply(context.Background(), action); err != nil {
+		t.Fatalf("Apply(update): %v", err)
+	}
+	observation, err := editor.Observe(context.Background(), action)
+	if err != nil {
+		t.Fatalf("Observe(updated): %v", err)
+	}
+	if observation.State != adapters.StateReady ||
+		observation.InstalledVersion != revision {
+		t.Fatalf("observation = %+v, want updated managed revision", observation)
+	}
+
+	userHome := t.TempDir()
+	userRoot := filepath.Join(userHome, ".config", "nvim")
+	if err := os.MkdirAll(userRoot, 0o700); err != nil {
+		t.Fatalf("create user config: %v", err)
+	}
+	userEditor := editor
+	userEditor.Home = userHome
+	observation, err = userEditor.Observe(context.Background(), action)
+	if err != nil {
+		t.Fatalf("Observe(user-owned): %v", err)
+	}
+	if observation.State != adapters.StateConflict {
+		t.Fatalf("user-owned observation = %+v, want conflict", observation)
+	}
+}
+
 func TestDockerRequiresActiveSystemdBeforeMutation(t *testing.T) {
 	port := &recordingPort{}
 	docker := guestadapter.Docker{

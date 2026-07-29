@@ -16,9 +16,11 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/zzanghyunmoo/my-desk-setup/internal/adapters"
 	"github.com/zzanghyunmoo/my-desk-setup/internal/adapters/packages"
 	"github.com/zzanghyunmoo/my-desk-setup/internal/catalog"
 	"github.com/zzanghyunmoo/my-desk-setup/internal/planning"
+	"github.com/zzanghyunmoo/my-desk-setup/internal/transport"
 )
 
 func TestAPTUsesNoninteractiveSudoArgv(t *testing.T) {
@@ -107,6 +109,53 @@ func TestPackageAdapterPublishesStableGuestLauncher(t *testing.T) {
 	if err := adapter.Apply(context.Background(), action); err == nil ||
 		!strings.Contains(err.Error(), "user-owned") {
 		t.Fatalf("Apply(user-owned) error = %v", err)
+	}
+}
+
+func TestExplicitUpdateMayReplacePinnedPackageButNormalApplyMayNot(t *testing.T) {
+	port := &recordingPort{
+		result: func(transport.Command) transport.Result {
+			return transport.Result{Stdout: "tool 1.0.0\n"}
+		},
+	}
+	environment := catalog.Environment{
+		Catalog: catalog.Catalog{Components: []catalog.Component{
+			{
+				ID: "tool", Kind: "build",
+				VersionPolicy: catalog.VersionPolicy{
+					Mode: "pinned", LockKey: "tool",
+				},
+			},
+		}},
+		Lock: catalog.VersionLock{Versions: map[string]catalog.LockEntry{
+			"tool": {Version: "2.0.0"},
+		}},
+	}
+	action := planning.Action{
+		ID: "lima-guest:mds/tool", ComponentID: "tool",
+		Installer: "mise", Package: "tool", Version: "2.0.0",
+		Verification: [][]string{
+			{"tool", "--version"},
+		},
+	}
+	normal := packages.Adapter{
+		Home: t.TempDir(), Port: port, Environment: environment,
+	}
+	observation, err := normal.Observe(context.Background(), action)
+	if err != nil {
+		t.Fatalf("normal Observe(): %v", err)
+	}
+	if observation.State != adapters.StateConflict {
+		t.Fatalf("normal observation = %+v, want conflict", observation)
+	}
+	explicit := normal
+	explicit.AllowReplace = true
+	observation, err = explicit.Observe(context.Background(), action)
+	if err != nil {
+		t.Fatalf("explicit Observe(): %v", err)
+	}
+	if observation.State != adapters.StateAbsent {
+		t.Fatalf("explicit observation = %+v, want replaceable absent", observation)
 	}
 }
 

@@ -36,6 +36,9 @@ func newApplyCommand(streams Streams, system Runtime) *cobra.Command {
 		Short: "Apply one reviewed plan to the current target",
 		Args:  cobra.NoArgs,
 		RunE: func(command *cobra.Command, _ []string) error {
+			if err := validateOutputFormat(format); err != nil {
+				return err
+			}
 			if expectedDigest == "" {
 				return errors.New("--plan-digest is required")
 			}
@@ -80,7 +83,7 @@ func newApplyCommand(streams Streams, system Runtime) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			componentAdapter, err := currentAdapter(environment, facts, home, system)
+			componentAdapter, err := currentAdapter(environment, facts, home, system, false)
 			if err != nil {
 				return err
 			}
@@ -155,6 +158,7 @@ func currentAdapter(
 	facts target.Facts,
 	home string,
 	system Runtime,
+	allowReplace bool,
 ) (adapters.Component, error) {
 	port := transport.NewLocal()
 	switch facts.ID.Kind {
@@ -165,6 +169,7 @@ func currentAdapter(
 			home,
 			facts.OS,
 			facts.Architecture,
+			allowReplace,
 		)
 	case target.KindWSLGuest, target.KindLimaGuest:
 		now := system.Now
@@ -180,6 +185,7 @@ func currentAdapter(
 			facts.Architecture,
 			&http.Client{Timeout: 5 * time.Minute},
 			now,
+			allowReplace,
 		), nil
 	default:
 		return nil, fmt.Errorf("no adapter for target %s", facts.ID.String())

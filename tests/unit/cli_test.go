@@ -84,6 +84,41 @@ func TestCLIRequiresExactlyOneSelectionSource(t *testing.T) {
 	}
 }
 
+func TestCLIMutatingCommandsRejectInvalidFormatBeforeWork(t *testing.T) {
+	for _, command := range [][]string{
+		{
+			"apply", "--component", "xcode",
+			"--plan-digest", "sha256:not-reviewed", "--format", "yaml",
+		},
+		{"update", "--component", "typescript", "--format", "yaml"},
+	} {
+		var stdout bytes.Buffer
+		var stderr bytes.Buffer
+		code := cli.Run(
+			command,
+			cli.Streams{
+				Input: strings.NewReader(""), Output: &stdout, Error: &stderr,
+			},
+			cli.Runtime{
+				GOOS: "darwin", GOARCH: "arm64",
+				Getenv:  func(string) string { return "" },
+				HomeDir: func() (string, error) { return t.TempDir(), nil },
+			},
+		)
+		if code == 0 || !strings.Contains(stderr.String(), "unsupported format") {
+			t.Fatalf(
+				"Run(%v) code=%d stderr=%q, want early format rejection",
+				command,
+				code,
+				stderr.String(),
+			)
+		}
+		if stdout.Len() != 0 {
+			t.Fatalf("Run(%v) wrote stdout before format rejection: %q", command, stdout.String())
+		}
+	}
+}
+
 func TestCLIApplyRejectsStaleDigestBeforeStateMutation(t *testing.T) {
 	home := t.TempDir()
 	stateRoot := filepath.Join(home, "state")

@@ -64,16 +64,8 @@ func NewRoot(streams Streams, system Runtime) *cobra.Command {
 	root.SetErr(streams.Error)
 	root.AddCommand(newPlanCommand(streams, system))
 	root.AddCommand(newApplyCommand(streams, system))
-	for _, name := range []string{"doctor", "update"} {
-		commandName := name
-		root.AddCommand(&cobra.Command{
-			Use:   commandName,
-			Short: commandName + " is introduced by the next implementation unit",
-			RunE: func(_ *cobra.Command, _ []string) error {
-				return fmt.Errorf("%s is not available in this build", commandName)
-			},
-		})
-	}
+	root.AddCommand(newDoctorCommand(streams, system))
+	root.AddCommand(newUpdateCommand(streams, system))
 	return root
 }
 
@@ -98,6 +90,9 @@ func newPlanCommand(streams Streams, system Runtime) *cobra.Command {
 		Short: "Create a read-only deterministic installation plan",
 		Args:  cobra.NoArgs,
 		RunE: func(command *cobra.Command, _ []string) error {
+			if err := validateOutputFormat(format); err != nil {
+				return err
+			}
 			environment, err := loadEnvironment(catalogPath)
 			if err != nil {
 				return err
@@ -154,6 +149,15 @@ func newPlanCommand(streams Streams, system Runtime) *cobra.Command {
 	flags.StringVar(&format, "format", "human", "output format: human or json")
 	flags.StringVar(&catalogPath, "catalog", "", "override the embedded catalog directory")
 	return command
+}
+
+func validateOutputFormat(format string) error {
+	switch format {
+	case "human", "json":
+		return nil
+	default:
+		return fmt.Errorf("unsupported format %q; use human or json", format)
+	}
 }
 
 func loadEnvironment(path string) (catalog.Environment, error) {

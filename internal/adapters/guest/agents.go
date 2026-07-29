@@ -86,6 +86,10 @@ func (agent Agent) Apply(
 		if err != nil {
 			return fmt.Errorf("inspect agent launcher: %w", err)
 		}
+		existing, readErr := os.ReadFile(path)
+		if readErr == nil && string(existing) == content {
+			return nil
+		}
 		return errors.New("existing agent launcher will not be overwritten")
 	}
 	temporary, err := os.CreateTemp(filepath.Dir(path), ".mds-agent-*")

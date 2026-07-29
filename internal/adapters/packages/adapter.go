@@ -16,10 +16,11 @@ import (
 )
 
 type Adapter struct {
-	Environment catalog.Environment
-	Port        transport.Port
-	Vendor      Vendor
-	Home        string
+	Environment  catalog.Environment
+	Port         transport.Port
+	Vendor       Vendor
+	Home         string
+	AllowReplace bool
 }
 
 func (adapter Adapter) Observe(
@@ -53,6 +54,15 @@ func (adapter Adapter) Observe(
 	output := strings.TrimSpace(result.Stdout + "\n" + result.Stderr)
 	if action.Version != "manager-owned" && action.Version != "manual" &&
 		!strings.Contains(output, action.Version) {
+		if adapter.AllowReplace {
+			return adapters.Observation{
+				State: adapters.StateAbsent,
+				Detail: fmt.Sprintf(
+					"installed version differs from explicit update target %s",
+					action.Version,
+				),
+			}, nil
+		}
 		return adapters.Observation{
 			State: adapters.StateConflict,
 			Detail: fmt.Sprintf(
