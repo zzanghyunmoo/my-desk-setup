@@ -70,9 +70,17 @@ type VersionLock struct {
 }
 
 type LockEntry struct {
-	Version    string `yaml:"version" json:"version"`
-	Source     string `yaml:"source" json:"source"`
-	Provenance string `yaml:"provenance" json:"provenance"`
+	Version    string              `yaml:"version" json:"version"`
+	Source     string              `yaml:"source" json:"source"`
+	Provenance string              `yaml:"provenance" json:"provenance"`
+	Artifacts  map[string]Artifact `yaml:"artifacts,omitempty" json:"artifacts,omitempty"`
+}
+
+type Artifact struct {
+	URL        string `yaml:"url" json:"url"`
+	SHA256     string `yaml:"sha256" json:"sha256"`
+	Format     string `yaml:"format" json:"format"`
+	Executable string `yaml:"executable" json:"executable"`
 }
 
 type Environment struct {

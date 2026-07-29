@@ -6,8 +6,7 @@ components:
     provides: [lima, linux-guest-runtime]
     dependencies: []
     version_policy:
-      mode: pinned
-      lock_key: lima
+      mode: manager
     verification:
       command: [limactl, --version]
     targets:

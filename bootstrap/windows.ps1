@@ -29,6 +29,25 @@ try {
     Expand-Archive -Path $archive -DestinationPath $temporary
     New-Item -ItemType Directory -Force -Path $destination | Out-Null
     Copy-Item -Force (Join-Path $temporary "mds.exe") (Join-Path $destination "mds.exe")
+
+    $managedPaths = @(
+        $destination
+        (Join-Path $env:USERPROFILE ".local\\bin")
+        (Join-Path $env:USERPROFILE ".local\\share\\bun\\bin")
+    )
+    $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
+    $pathEntries = @($userPath -split ";" | Where-Object { $_ })
+    foreach ($managedPath in $managedPaths) {
+        if ($pathEntries -notcontains $managedPath) {
+            $pathEntries += $managedPath
+        }
+    }
+    [Environment]::SetEnvironmentVariable("Path", ($pathEntries -join ";"), "User")
+    [Environment]::SetEnvironmentVariable("DISABLE_AUTOUPDATER", "1", "User")
+    [Environment]::SetEnvironmentVariable("OPENCODE_DISABLE_AUTOUPDATE", "1", "User")
+    $env:Path = (($managedPaths + @($env:Path)) -join ";")
+    $env:DISABLE_AUTOUPDATER = "1"
+    $env:OPENCODE_DISABLE_AUTOUPDATE = "1"
 }
 finally {
     if (Test-Path $temporary) {

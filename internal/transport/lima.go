@@ -25,13 +25,20 @@ func (lima Lima) Run(ctx context.Context, command Command) (Result, error) {
 		ctx,
 		executable,
 		arguments,
+		nil,
+		"",
 		command.Timeout,
 		command.OutputLimit,
 	)
 }
 
 func LimaArgv(instance string, command Command) (string, []string) {
-	arguments := []string{"shell", instance, "--", command.Executable}
-	arguments = append(arguments, command.Arguments...)
+	guestExecutable, guestArguments := guestArgv(command)
+	arguments := []string{"shell", "--tty=false"}
+	if command.WorkingDirectory != "" {
+		arguments = append(arguments, "--workdir", command.WorkingDirectory)
+	}
+	arguments = append(arguments, instance, "--", guestExecutable)
+	arguments = append(arguments, guestArguments...)
 	return "limactl", arguments
 }

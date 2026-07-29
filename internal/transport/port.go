@@ -5,7 +5,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
+	"sort"
 	"time"
 )
 
@@ -15,10 +17,12 @@ const (
 )
 
 type Command struct {
-	Executable  string
-	Arguments   []string
-	Timeout     time.Duration
-	OutputLimit int
+	Executable       string
+	Arguments        []string
+	Environment      map[string]string
+	WorkingDirectory string
+	Timeout          time.Duration
+	OutputLimit      int
 }
 
 type Result struct {
@@ -39,6 +43,8 @@ func (Executor) Run(
 	ctx context.Context,
 	executable string,
 	arguments []string,
+	environment map[string]string,
+	workingDirectory string,
 	timeout time.Duration,
 	outputLimit int,
 ) (Result, error) {
@@ -58,6 +64,10 @@ func (Executor) Run(
 	stdout := newLimitedBuffer(outputLimit)
 	stderr := newLimitedBuffer(outputLimit)
 	command := exec.CommandContext(ctx, executable, arguments...)
+	if environment := commandEnvironment(environment); environment != nil {
+		command.Env = environment
+	}
+	command.Dir = workingDirectory
 	command.Stdout = stdout
 	command.Stderr = stderr
 	err := command.Run()
@@ -82,6 +92,40 @@ func (Executor) Run(
 	}
 	result.ExitCode = -1
 	return result, fmt.Errorf("run %s: %w", executable, err)
+}
+
+func commandEnvironment(overrides map[string]string) []string {
+	if len(overrides) == 0 {
+		return nil
+	}
+	keys := make([]string, 0, len(overrides))
+	for key := range overrides {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	environment := os.Environ()
+	for _, key := range keys {
+		environment = append(environment, key+"="+overrides[key])
+	}
+	return environment
+}
+
+func guestArgv(command Command) (string, []string) {
+	if len(command.Environment) == 0 {
+		return command.Executable, append([]string(nil), command.Arguments...)
+	}
+	keys := make([]string, 0, len(command.Environment))
+	for key := range command.Environment {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	arguments := make([]string, 0, len(keys)+1+len(command.Arguments))
+	for _, key := range keys {
+		arguments = append(arguments, key+"="+command.Environment[key])
+	}
+	arguments = append(arguments, command.Executable)
+	arguments = append(arguments, command.Arguments...)
+	return "env", arguments
 }
 
 type CommandError struct {

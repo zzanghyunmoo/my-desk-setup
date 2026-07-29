@@ -2,6 +2,7 @@ package execution
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -138,13 +139,21 @@ func (runner Runner) Apply(
 			return state.Receipt{}, err
 		}
 		if err := runner.Adapter.Apply(ctx, action); err != nil {
-			outcome.Status = "failed"
-			outcome.Reason = "apply: " + err.Error()
+			var actionRequired *adapters.ActionRequiredError
+			journalPhase := "apply-failed"
+			if errors.As(err, &actionRequired) {
+				outcome.Status = "action-required"
+				outcome.Reason = actionRequired.Reason
+				journalPhase = "apply-action-required"
+			} else {
+				outcome.Status = "failed"
+				outcome.Reason = "apply: " + err.Error()
+			}
 			statuses[action.ID] = outcome.Status
 			outcomes = append(outcomes, outcome)
 			if journalErr := journal.Append(state.JournalEvent{
 				At: runner.Now().UTC(), PlanDigest: plan.Digest,
-				ActionID: action.ID, Phase: "apply-failed", Detail: err.Error(),
+				ActionID: action.ID, Phase: journalPhase, Detail: err.Error(),
 			}); journalErr != nil {
 				return state.Receipt{}, journalErr
 			}

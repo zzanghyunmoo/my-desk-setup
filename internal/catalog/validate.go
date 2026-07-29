@@ -223,6 +223,21 @@ func validateVersionPolicy(
 				fmt.Sprintf("lock key %q requires version, source, and provenance", key),
 			}
 		}
+		for platform, artifact := range entry.Artifacts {
+			if artifact.URL == "" || len(artifact.SHA256) != 64 ||
+				(artifact.Format != "binary" &&
+					artifact.Format != "zip" &&
+					artifact.Format != "tar.gz") ||
+				artifact.Executable == "" {
+				return []string{
+					fmt.Sprintf(
+						"lock key %q artifact %q requires URL, SHA-256, binary/zip/tar.gz format, and executable",
+						key,
+						platform,
+					),
+				}
+			}
+		}
 	case "manager", "manual":
 		if component.VersionPolicy.LockKey != "" {
 			return []string{
@@ -240,16 +255,16 @@ func validateVersionPolicy(
 func installerAllowed(target TargetKind, installer string) bool {
 	allowed := map[TargetKind]map[string]bool{
 		TargetMacOSHost: {
-			"brew": true, "bun": true, "mise": true, "script": true, "manual": true, "system": true,
+			"brew": true, "bun": true, "mise": true, "script": true, "vendor": true, "manual": true, "system": true,
 		},
 		TargetWindowsHost: {
-			"winget": true, "bun": true, "mise": true, "script": true, "manual": true, "system": true,
+			"winget": true, "bun": true, "mise": true, "script": true, "vendor": true, "manual": true, "system": true,
 		},
 		TargetWSLGuest: {
-			"apt": true, "bun": true, "mise": true, "script": true, "manual": true, "docker-apt": true, "system": true,
+			"apt": true, "bun": true, "mise": true, "script": true, "vendor": true, "manual": true, "docker-apt": true, "system": true,
 		},
 		TargetLimaGuest: {
-			"apt": true, "bun": true, "mise": true, "script": true, "manual": true, "docker-apt": true, "system": true,
+			"apt": true, "bun": true, "mise": true, "script": true, "vendor": true, "manual": true, "docker-apt": true, "system": true,
 		},
 	}
 	return allowed[target][installer]

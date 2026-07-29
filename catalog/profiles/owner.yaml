@@ -21,6 +21,7 @@ selection:
   - lima
   - linear-cli
   - linear-desktop
+  - mise
   - neovim
   - notion-cli
   - notion-desktop

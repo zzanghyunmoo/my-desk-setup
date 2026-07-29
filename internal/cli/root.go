@@ -1,10 +1,12 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"os"
 	"runtime"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -13,6 +15,7 @@ import (
 	"github.com/zzanghyunmoo/my-desk-setup/internal/output"
 	"github.com/zzanghyunmoo/my-desk-setup/internal/planning"
 	"github.com/zzanghyunmoo/my-desk-setup/internal/target"
+	"github.com/zzanghyunmoo/my-desk-setup/internal/transport"
 	"github.com/zzanghyunmoo/my-desk-setup/internal/ui"
 	"github.com/zzanghyunmoo/my-desk-setup/internal/version"
 )
@@ -24,9 +27,12 @@ type Streams struct {
 }
 
 type Runtime struct {
-	GOOS   string
-	GOARCH string
-	Getenv func(string) string
+	GOOS          string
+	GOARCH        string
+	Getenv        func(string) string
+	HomeDir       func() (string, error)
+	Now           func() time.Time
+	ObserveTarget func(context.Context, target.Facts) (target.Facts, error)
 }
 
 func DefaultStreams() Streams {
@@ -34,7 +40,15 @@ func DefaultStreams() Streams {
 }
 
 func DefaultRuntime() Runtime {
-	return Runtime{GOOS: runtime.GOOS, GOARCH: runtime.GOARCH, Getenv: os.Getenv}
+	local := transport.NewLocal()
+	return Runtime{
+		GOOS: runtime.GOOS, GOARCH: runtime.GOARCH, Getenv: os.Getenv,
+		HomeDir: os.UserHomeDir,
+		Now:     time.Now,
+		ObserveTarget: func(ctx context.Context, facts target.Facts) (target.Facts, error) {
+			return target.ObserveLocal(ctx, facts, local, "")
+		},
+	}
 }
 
 func NewRoot(streams Streams, system Runtime) *cobra.Command {
@@ -49,7 +63,8 @@ func NewRoot(streams Streams, system Runtime) *cobra.Command {
 	root.SetOut(streams.Output)
 	root.SetErr(streams.Error)
 	root.AddCommand(newPlanCommand(streams, system))
-	for _, name := range []string{"apply", "doctor", "update"} {
+	root.AddCommand(newApplyCommand(streams, system))
+	for _, name := range []string{"doctor", "update"} {
 		commandName := name
 		root.AddCommand(&cobra.Command{
 			Use:   commandName,
@@ -82,7 +97,7 @@ func newPlanCommand(streams Streams, system Runtime) *cobra.Command {
 		Use:   "plan",
 		Short: "Create a read-only deterministic installation plan",
 		Args:  cobra.NoArgs,
-		RunE: func(_ *cobra.Command, _ []string) error {
+		RunE: func(command *cobra.Command, _ []string) error {
 			environment, err := loadEnvironment(catalogPath)
 			if err != nil {
 				return err
@@ -106,10 +121,16 @@ func newPlanCommand(streams Streams, system Runtime) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			facts, err := resolveTarget(targetID, system)
+			facts, err := resolveTarget(command.Context(), targetID, system, false)
 			if err != nil {
 				return err
 			}
+			revision, err := catalog.Revision(environment)
+			if err != nil {
+				return fmt.Errorf("catalog revision: %w", err)
+			}
+			facts.CLIRevision = version.String()
+			facts.CatalogRevision = revision
 			plan, err := planning.Build(environment, facts, request)
 			if err != nil {
 				return err
@@ -142,26 +163,53 @@ func loadEnvironment(path string) (catalog.Environment, error) {
 	return catalog.Load(path)
 }
 
-func resolveTarget(value string, system Runtime) (target.Facts, error) {
+func resolveTarget(
+	ctx context.Context,
+	value string,
+	system Runtime,
+	requireCurrent bool,
+) (target.Facts, error) {
+	var facts target.Facts
+	var err error
 	if value == "" {
-		return target.DiscoverLocal(
+		facts, err = target.DiscoverLocal(
 			system.GOOS,
 			system.GOARCH,
 			target.GetenvFunc(system.Getenv),
 		)
+	} else {
+		var id target.ID
+		id, err = target.ParseID(value)
+		if err == nil {
+			osName := "linux"
+			if id.Kind == target.KindMacOSHost {
+				osName = "darwin"
+			}
+			if id.Kind == target.KindWindowsHost {
+				osName = "windows"
+			}
+			facts = target.Facts{
+				ID: id, OS: osName, Architecture: system.GOARCH, Reachable: true,
+			}
+		}
 	}
-	id, err := target.ParseID(value)
 	if err != nil {
 		return target.Facts{}, err
 	}
-	osName := "linux"
-	if id.Kind == target.KindMacOSHost {
-		osName = "darwin"
+	local, localErr := target.DiscoverLocal(
+		system.GOOS,
+		system.GOARCH,
+		target.GetenvFunc(system.Getenv),
+	)
+	isCurrent := localErr == nil && local.ID == facts.ID
+	if requireCurrent && !isCurrent {
+		return target.Facts{}, fmt.Errorf(
+			"apply target %s is not the current local target; run the same mds revision inside that guest",
+			facts.ID.String(),
+		)
 	}
-	if id.Kind == target.KindWindowsHost {
-		osName = "windows"
+	if isCurrent && system.ObserveTarget != nil {
+		return system.ObserveTarget(ctx, facts)
 	}
-	return target.Facts{
-		ID: id, OS: osName, Architecture: system.GOARCH, Reachable: true,
-	}, nil
+	return facts, nil
 }

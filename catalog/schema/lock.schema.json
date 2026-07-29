@@ -30,6 +30,34 @@
           "provenance": {
             "type": "string",
             "format": "uri"
+          },
+          "artifacts": {
+            "type": "object",
+            "propertyNames": {
+              "pattern": "^[a-z0-9][a-z0-9-]*$"
+            },
+            "additionalProperties": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["url", "sha256", "format", "executable"],
+              "properties": {
+                "url": {
+                  "type": "string",
+                  "format": "uri"
+                },
+                "sha256": {
+                  "type": "string",
+                  "pattern": "^[a-f0-9]{64}$"
+                },
+                "format": {
+                  "enum": ["binary", "zip", "tar.gz"]
+                },
+                "executable": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            }
           }
         }
       }

@@ -39,26 +39,52 @@ components:
     targets:
       macos-host:
         status: supported
-        installer: script
+        installer: vendor
         package: bun
       windows-host:
         status: supported
-        installer: script
+        installer: vendor
         package: bun
       wsl-guest:
         status: supported
-        installer: script
+        installer: vendor
         package: bun
       lima-guest:
         status: supported
-        installer: script
+        installer: vendor
         package: bun
+
+  - id: mise
+    name: mise
+    kind: build
+    provides: [mise, tool-version-manager]
+    dependencies: [base-cli]
+    version_policy:
+      mode: pinned
+      lock_key: mise
+    verification:
+      command: [mise, --version]
+    targets:
+      macos-host:
+        status: unsupported
+        reason: Primary language toolchains belong to the Linux guest.
+      windows-host:
+        status: unsupported
+        reason: Primary language toolchains belong to the Linux guest.
+      wsl-guest:
+        status: supported
+        installer: vendor
+        package: mise
+      lima-guest:
+        status: supported
+        installer: vendor
+        package: mise
 
   - id: java
     name: Java
     kind: language
     provides: [java, jdk]
-    dependencies: [base-cli]
+    dependencies: [base-cli, mise]
     version_policy:
       mode: pinned
       lock_key: java
@@ -85,7 +111,7 @@ components:
     name: Kotlin
     kind: language
     provides: [kotlin, kotlinc]
-    dependencies: [java]
+    dependencies: [java, mise]
     version_policy:
       mode: pinned
       lock_key: kotlin
@@ -111,7 +137,7 @@ components:
     name: Go
     kind: language
     provides: [go, go-toolchain]
-    dependencies: [base-cli]
+    dependencies: [base-cli, mise]
     version_policy:
       mode: pinned
       lock_key: go
@@ -138,7 +164,7 @@ components:
     name: Python
     kind: language
     provides: [python, python3]
-    dependencies: [base-cli]
+    dependencies: [base-cli, mise]
     version_policy:
       mode: pinned
       lock_key: python
@@ -218,7 +244,7 @@ components:
     name: Flutter and Dart
     kind: language
     provides: [flutter, dart]
-    dependencies: [base-cli]
+    dependencies: [base-cli, mise]
     version_policy:
       mode: pinned
       lock_key: flutter
@@ -245,7 +271,7 @@ components:
     name: Gradle
     kind: build
     provides: [gradle]
-    dependencies: [java]
+    dependencies: [java, mise]
     version_policy:
       mode: pinned
       lock_key: gradle
@@ -271,7 +297,7 @@ components:
     name: uv
     kind: build
     provides: [uv, python-package-manager]
-    dependencies: [base-cli]
+    dependencies: [base-cli, mise]
     version_policy:
       mode: pinned
       lock_key: uv
@@ -286,18 +312,18 @@ components:
         reason: Build tools belong to the Linux guest.
       wsl-guest:
         status: supported
-        installer: script
+        installer: mise
         package: uv
       lima-guest:
         status: supported
-        installer: script
+        installer: mise
         package: uv
 
   - id: neovim
     name: Neovim
     kind: editor
     provides: [neovim, nvim]
-    dependencies: [base-cli]
+    dependencies: [base-cli, mise]
     version_policy:
       mode: pinned
       lock_key: neovim
@@ -350,9 +376,10 @@ components:
     name: Herdr
     kind: terminal
     provides: [herdr]
-    dependencies: [bun]
+    dependencies: [base-cli]
     version_policy:
-      mode: manual
+      mode: pinned
+      lock_key: herdr
     verification:
       command: [herdr, --version]
     targets:
@@ -363,11 +390,13 @@ components:
         status: unsupported
         reason: Herdr belongs to the Linux guest profile.
       wsl-guest:
-        status: action-required
-        reason: A verified upstream package and version source must be selected before installation.
+        status: supported
+        installer: vendor
+        package: herdr
       lima-guest:
-        status: action-required
-        reason: A verified upstream package and version source must be selected before installation.
+        status: supported
+        installer: vendor
+        package: herdr
 
   - id: atlassian-cli
     name: Atlassian CLI
@@ -375,7 +404,8 @@ components:
     provides: [atlassian-cli, jira-cli, confluence-cli]
     dependencies: [base-cli]
     version_policy:
-      mode: manual
+      mode: pinned
+      lock_key: atlassian-cli
     verification:
       command: [acli, --version]
     targets:
@@ -386,11 +416,13 @@ components:
         status: unsupported
         reason: Collaboration CLI belongs to the Linux guest.
       wsl-guest:
-        status: action-required
-        reason: The official package identifier and noninteractive installer must be verified.
+        status: supported
+        installer: vendor
+        package: acli
       lima-guest:
-        status: action-required
-        reason: The official package identifier and noninteractive installer must be verified.
+        status: supported
+        installer: vendor
+        package: acli
 
   - id: notion-cli
     name: Notion CLI
@@ -398,7 +430,8 @@ components:
     provides: [notion-cli]
     dependencies: [bun]
     version_policy:
-      mode: manual
+      mode: pinned
+      lock_key: notion-cli
     verification:
       command: [ntn, --version]
     targets:
@@ -409,11 +442,13 @@ components:
         status: unsupported
         reason: Collaboration CLI belongs to the Linux guest.
       wsl-guest:
-        status: action-required
-        reason: The ntn package and version source must be verified before installation.
+        status: supported
+        installer: bun
+        package: ntn
       lima-guest:
-        status: action-required
-        reason: The ntn package and version source must be verified before installation.
+        status: supported
+        installer: bun
+        package: ntn
 
   - id: linear-cli
     name: Linear CLI
@@ -421,7 +456,8 @@ components:
     provides: [linear-cli]
     dependencies: [bun]
     version_policy:
-      mode: manual
+      mode: pinned
+      lock_key: linear-cli
     verification:
       command: [linear, --version]
     targets:
@@ -432,11 +468,13 @@ components:
         status: unsupported
         reason: Collaboration CLI belongs to the Linux guest.
       wsl-guest:
-        status: action-required
-        reason: An upstream package and version source must be verified before installation.
+        status: supported
+        installer: bun
+        package: "@schpet/linear-cli"
       lima-guest:
-        status: action-required
-        reason: An upstream package and version source must be verified before installation.
+        status: supported
+        installer: bun
+        package: "@schpet/linear-cli"
 
   - id: gh
     name: GitHub CLI

@@ -15,6 +15,8 @@ func (local Local) Run(ctx context.Context, command Command) (Result, error) {
 		ctx,
 		command.Executable,
 		command.Arguments,
+		command.Environment,
+		command.WorkingDirectory,
 		command.Timeout,
 		command.OutputLimit,
 	)

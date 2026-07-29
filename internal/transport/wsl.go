@@ -25,13 +25,20 @@ func (wsl WSL) Run(ctx context.Context, command Command) (Result, error) {
 		ctx,
 		executable,
 		arguments,
+		nil,
+		"",
 		command.Timeout,
 		command.OutputLimit,
 	)
 }
 
 func WSLArgv(distribution string, command Command) (string, []string) {
-	arguments := []string{"--distribution", distribution, "--exec", command.Executable}
-	arguments = append(arguments, command.Arguments...)
+	guestExecutable, guestArguments := guestArgv(command)
+	arguments := []string{"--distribution", distribution}
+	if command.WorkingDirectory != "" {
+		arguments = append(arguments, "--cd", command.WorkingDirectory)
+	}
+	arguments = append(arguments, "--exec", guestExecutable)
+	arguments = append(arguments, guestArguments...)
 	return "wsl.exe", arguments
 }

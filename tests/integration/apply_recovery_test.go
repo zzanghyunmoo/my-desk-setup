@@ -1,11 +1,14 @@
 package integration_test
 
 import (
+	"bufio"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -98,6 +101,51 @@ func TestCrashAfterInstallBeforeJournalConvergesByObservation(t *testing.T) {
 	}
 	if got := adapter.applyCount["a"]; got != 1 {
 		t.Fatalf("installer repeated after observed success: count=%d", got)
+	}
+}
+
+func TestActionRequiredIsRecordedWithoutMislabelingFailure(t *testing.T) {
+	plan := singleActionPlan(t, "lima-guest:mds")
+	stateRoot := filepath.Join(t.TempDir(), "state")
+	runner := testRunner(actionRequiredAdapter{
+		reason: "restart the guest shell",
+	})
+
+	receipt, err := runner.Apply(
+		context.Background(),
+		plan,
+		plan.Digest,
+		stateRoot,
+	)
+	if err != nil {
+		t.Fatalf("Apply(): %v", err)
+	}
+	if receipt.Complete || receipt.Outcomes[0].Status != "action-required" {
+		t.Fatalf("receipt = %+v, want incomplete action-required", receipt)
+	}
+	paths, err := state.NewPaths(stateRoot, plan.Target.ID.String())
+	if err != nil {
+		t.Fatalf("NewPaths(): %v", err)
+	}
+	file, err := os.Open(paths.Journal)
+	if err != nil {
+		t.Fatalf("open journal: %v", err)
+	}
+	defer file.Close()
+	var phases []string
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		var event state.JournalEvent
+		if err := json.Unmarshal(scanner.Bytes(), &event); err != nil {
+			t.Fatalf("decode journal event: %v", err)
+		}
+		phases = append(phases, event.Phase)
+	}
+	if err := scanner.Err(); err != nil {
+		t.Fatalf("scan journal: %v", err)
+	}
+	if got, want := phases, []string{"apply-started", "apply-action-required"}; !slices.Equal(got, want) {
+		t.Fatalf("journal phases = %v, want %v", got, want)
 	}
 }
 
@@ -245,6 +293,28 @@ type fakeAdapter struct {
 	installed  map[string]bool
 	applyCount map[string]int
 	failOnce   map[string]bool
+}
+
+type actionRequiredAdapter struct {
+	reason string
+}
+
+func (actionRequiredAdapter) Observe(
+	context.Context,
+	planning.Action,
+) (adapters.Observation, error) {
+	return adapters.Observation{State: adapters.StateAbsent}, nil
+}
+
+func (adapter actionRequiredAdapter) Apply(
+	context.Context,
+	planning.Action,
+) error {
+	return &adapters.ActionRequiredError{Reason: adapter.reason}
+}
+
+func (actionRequiredAdapter) Verify(context.Context, planning.Action) error {
+	return nil
 }
 
 func newFakeAdapter() *fakeAdapter {

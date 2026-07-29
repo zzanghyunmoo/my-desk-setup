@@ -1,9 +1,12 @@
 package unit_test
 
 import (
+	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 
@@ -112,6 +115,93 @@ func TestTransportBuildsArgvWithoutShellJoining(t *testing.T) {
 	}
 	if strings.Contains(strings.Join(arguments[:len(arguments)-1], " "), "rm -rf") {
 		t.Fatalf("argument content leaked into transport prefix: %v", arguments)
+	}
+}
+
+func TestGuestTransportCarriesEnvironmentAndWorkingDirectoryAsArgv(t *testing.T) {
+	command := transport.Command{
+		Executable:       "tool",
+		Arguments:        []string{"--version"},
+		Environment:      map[string]string{"Z_KEY": "last", "A_KEY": "first"},
+		WorkingDirectory: "/workspace/project",
+	}
+	_, wsl := transport.WSLArgv("Ubuntu-26.04", command)
+	wantWSL := []string{
+		"--distribution", "Ubuntu-26.04",
+		"--cd", "/workspace/project",
+		"--exec", "env",
+		"A_KEY=first", "Z_KEY=last",
+		"tool", "--version",
+	}
+	if !slices.Equal(wsl, wantWSL) {
+		t.Fatalf("WSL argv = %v, want %v", wsl, wantWSL)
+	}
+	_, lima := transport.LimaArgv("mds", command)
+	wantLima := []string{
+		"shell", "--tty=false",
+		"--workdir", "/workspace/project",
+		"mds", "--", "env",
+		"A_KEY=first", "Z_KEY=last",
+		"tool", "--version",
+	}
+	if !slices.Equal(lima, wantLima) {
+		t.Fatalf("Lima argv = %v, want %v", lima, wantLima)
+	}
+}
+
+func TestObserveLocalRequiresUbuntu2604AndDetectsSystemd(t *testing.T) {
+	release := filepath.Join(t.TempDir(), "os-release")
+	if err := os.WriteFile(release, []byte(
+		"ID=ubuntu\nVERSION_ID=\"26.04\"\n",
+	), 0o600); err != nil {
+		t.Fatalf("write os-release: %v", err)
+	}
+	id, _ := target.NewID(target.KindLimaGuest, "mds")
+	facts, err := target.ObserveLocal(
+		context.Background(),
+		target.Facts{ID: id, OS: "linux", Architecture: "arm64"},
+		targetObservationPort{},
+		release,
+	)
+	if err != nil {
+		t.Fatalf("ObserveLocal(): %v", err)
+	}
+	if facts.OSVersion != "26.04" ||
+		!facts.SystemdSupported ||
+		!facts.SystemdActive {
+		t.Fatalf("facts = %+v, want Ubuntu 26.04 with active systemd", facts)
+	}
+
+	if err := os.WriteFile(release, []byte(
+		"ID=ubuntu\nVERSION_ID=\"24.04\"\n",
+	), 0o600); err != nil {
+		t.Fatalf("rewrite os-release: %v", err)
+	}
+	if _, err := target.ObserveLocal(
+		context.Background(),
+		target.Facts{ID: id, OS: "linux", Architecture: "arm64"},
+		targetObservationPort{},
+		release,
+	); err == nil || !strings.Contains(err.Error(), "requires Ubuntu 26.04") {
+		t.Fatalf("ObserveLocal(noncanonical) error = %v", err)
+	}
+}
+
+type targetObservationPort struct{}
+
+func (targetObservationPort) Run(
+	_ context.Context,
+	command transport.Command,
+) (transport.Result, error) {
+	switch {
+	case command.Executable == "systemctl" &&
+		slices.Equal(command.Arguments, []string{"--version"}):
+		return transport.Result{Stdout: "systemd 259\n"}, nil
+	case command.Executable == "systemctl" &&
+		slices.Equal(command.Arguments, []string{"is-system-running"}):
+		return transport.Result{Stdout: "running\n"}, nil
+	default:
+		return transport.Result{}, errors.New("unexpected command")
 	}
 }
 

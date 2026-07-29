@@ -3,6 +3,8 @@ package guest
 import (
 	"errors"
 	"fmt"
+	"io"
+	"io/fs"
 	"os"
 
 	"gopkg.in/yaml.v3"
@@ -46,9 +48,21 @@ func LoadSpec(path string) (Spec, error) {
 		return Spec{}, fmt.Errorf("open guest spec: %w", err)
 	}
 	defer file.Close()
+	return decodeSpec(file)
+}
 
+func LoadSpecFS(filesystem fs.FS, path string) (Spec, error) {
+	file, err := filesystem.Open(path)
+	if err != nil {
+		return Spec{}, fmt.Errorf("open guest spec: %w", err)
+	}
+	defer file.Close()
+	return decodeSpec(file)
+}
+
+func decodeSpec(reader io.Reader) (Spec, error) {
 	var spec Spec
-	decoder := yaml.NewDecoder(file)
+	decoder := yaml.NewDecoder(reader)
 	decoder.KnownFields(true)
 	if err := decoder.Decode(&spec); err != nil {
 		return Spec{}, fmt.Errorf("decode guest spec: %w", err)

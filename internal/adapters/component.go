@@ -2,9 +2,18 @@ package adapters
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/zzanghyunmoo/my-desk-setup/internal/planning"
 )
+
+type ActionRequiredError struct {
+	Reason string
+}
+
+func (err *ActionRequiredError) Error() string {
+	return fmt.Sprintf("action-required: %s", err.Reason)
+}
 
 type ObservedState string
 
