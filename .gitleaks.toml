@@ -1,0 +1,18 @@
+title = "my-desk-setup secret scanning"
+
+[extend]
+useDefault = true
+
+[[rules]]
+id = "generic-api-key"
+
+  [rules.allowlist]
+  description = "Verified public Docker Ubuntu apt signing-key SHA-256"
+  condition = "AND"
+  regexTarget = "match"
+  paths = [
+    '''^internal/adapters/guest/docker\.go$''',
+  ]
+  regexes = [
+    '''dockerKeySHA\s*=\s*"1500c1f56fa9e26b9b8f42452a553675796ade0807cdce11975eb98170b3a570"''',
+  ]
