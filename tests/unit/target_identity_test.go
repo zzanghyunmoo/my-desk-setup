@@ -2,6 +2,8 @@ package unit_test
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"os"
 	"path/filepath"
@@ -151,9 +153,8 @@ func TestGuestTransportCarriesEnvironmentAndWorkingDirectoryAsArgv(t *testing.T)
 
 func TestObserveLocalRequiresUbuntu2604AndDetectsSystemd(t *testing.T) {
 	release := filepath.Join(t.TempDir(), "os-release")
-	if err := os.WriteFile(release, []byte(
-		"ID=ubuntu\nVERSION_ID=\"26.04\"\n",
-	), 0o600); err != nil {
+	releaseContent := []byte("ID=ubuntu\nVERSION_ID=\"26.04\"\n")
+	if err := os.WriteFile(release, releaseContent, 0o600); err != nil {
 		t.Fatalf("write os-release: %v", err)
 	}
 	id, _ := target.NewID(target.KindLimaGuest, "mds")
@@ -166,10 +167,16 @@ func TestObserveLocalRequiresUbuntu2604AndDetectsSystemd(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ObserveLocal(): %v", err)
 	}
+	imageSum := sha256.Sum256(releaseContent)
 	if facts.OSVersion != "26.04" ||
+		facts.RuntimeVersion != "6.17.0-mds" ||
+		facts.ImageRevision != "sha256:"+hex.EncodeToString(imageSum[:]) ||
 		!facts.SystemdSupported ||
 		!facts.SystemdActive {
-		t.Fatalf("facts = %+v, want Ubuntu 26.04 with active systemd", facts)
+		t.Fatalf(
+			"facts = %+v, want observed Ubuntu image/runtime with active systemd",
+			facts,
+		)
 	}
 
 	if err := os.WriteFile(release, []byte(
@@ -194,6 +201,9 @@ func (targetObservationPort) Run(
 	command transport.Command,
 ) (transport.Result, error) {
 	switch {
+	case command.Executable == "uname" &&
+		slices.Equal(command.Arguments, []string{"-r"}):
+		return transport.Result{Stdout: "6.17.0-mds\n"}, nil
 	case command.Executable == "systemctl" &&
 		slices.Equal(command.Arguments, []string{"--version"}):
 		return transport.Result{Stdout: "systemd 259\n"}, nil

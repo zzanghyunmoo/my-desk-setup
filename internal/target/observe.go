@@ -3,6 +3,8 @@ package target
 import (
 	"bufio"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -41,6 +43,19 @@ func ObserveLocal(
 			)
 		}
 		facts.OSVersion = release["VERSION_ID"]
+		runtimeResult, err := port.Run(ctx, transport.Command{
+			Executable: "uname",
+			Arguments:  []string{"-r"},
+		})
+		if err != nil {
+			return Facts{}, fmt.Errorf("observe Linux runtime version: %w", err)
+		}
+		facts.RuntimeVersion = strings.TrimSpace(runtimeResult.Stdout)
+		if facts.RuntimeVersion == "" {
+			return Facts{}, errors.New("observe Linux runtime version: empty output")
+		}
+		imageSum := sha256.Sum256(content)
+		facts.ImageRevision = "sha256:" + hex.EncodeToString(imageSum[:])
 		if _, err := port.Run(ctx, transport.Command{
 			Executable: "systemctl",
 			Arguments:  []string{"--version"},
@@ -69,8 +84,11 @@ func ObserveLocal(
 		}
 		facts.OSVersion = strings.TrimSpace(result.Stdout)
 	case "windows":
-		// The stable Windows build remains part of the host target identity.
-		// A later native API probe may enrich OSVersion without invoking a shell.
+		version, err := observeWindowsVersion()
+		if err != nil {
+			return Facts{}, fmt.Errorf("observe Windows version: %w", err)
+		}
+		facts.OSVersion = version
 	default:
 		return Facts{}, fmt.Errorf("cannot observe unsupported OS %q", facts.OS)
 	}

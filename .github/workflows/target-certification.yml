@@ -1,0 +1,135 @@
+name: Target certification
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/target-certification.yml"
+      - "cmd/mds-evidence/**"
+      - "internal/evidence/**"
+      - "scripts/certify-target.sh"
+      - "scripts/verify-target-evidence.sh"
+      - "tests/target-evidence/**"
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/target-certification.yml"
+      - "cmd/mds-evidence/**"
+      - "internal/evidence/**"
+      - "scripts/certify-target.sh"
+      - "scripts/verify-target-evidence.sh"
+      - "tests/target-evidence/**"
+  workflow_dispatch:
+    inputs:
+      mds_path:
+        description: Absolute path to the production mds binary on the target
+        required: true
+        type: string
+      target_id:
+        description: Explicit target ID, for example lima-guest:mds
+        required: true
+        type: string
+      expected_cli_revision:
+        description: Exact reviewed CLI revision from the release
+        required: true
+        type: string
+      expected_catalog_revision:
+        description: Exact reviewed catalog revision from the release
+        required: true
+        type: string
+      expected_plan_digest:
+        description: Exact reviewed owner-profile plan digest for this target
+        required: true
+        type: string
+      evidence_output:
+        description: New target-local evidence directory
+        required: true
+        default: target-evidence
+        type: string
+      runner_label:
+        description: Target-specific self-hosted runner label
+        required: true
+        default: mds-target
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: target-certification-${{ github.ref }}-${{ inputs.target_id || 'contract' }}
+  cancel-in-progress: false
+
+jobs:
+  fixture-contract:
+    name: Fixture contract (implemented only)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Verify evidence contract and tamper fixtures
+        run: go test ./internal/evidence ./cmd/mds-evidence
+      - name: Record non-target status
+        run: |
+          {
+            echo "## Target certification"
+            echo
+            echo "Hosted fixture status: \`implemented\`."
+            echo "No actual target was certified and this job must not be read as \`verified\`."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  actual-target:
+    name: Actual target
+    if: github.event_name == 'workflow_dispatch'
+    runs-on:
+      - self-hosted
+      - ${{ inputs.runner_label }}
+    environment: target-certification
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Capture actual target evidence
+        id: certify
+        continue-on-error: true
+        shell: bash
+        env:
+          MDS_PATH: ${{ inputs.mds_path }}
+          TARGET_ID: ${{ inputs.target_id }}
+          EVIDENCE_OUTPUT: ${{ inputs.evidence_output }}
+        run: |
+          scripts/certify-target.sh \
+            --mds "$MDS_PATH" \
+            --target "$TARGET_ID" \
+            --output "$EVIDENCE_OUTPUT" \
+            --profile owner
+      - name: Verify against reviewed release and plan
+        if: always()
+        shell: bash
+        env:
+          EVIDENCE_OUTPUT: ${{ inputs.evidence_output }}
+          EXPECTED_CLI_REVISION: ${{ inputs.expected_cli_revision }}
+          EXPECTED_CATALOG_REVISION: ${{ inputs.expected_catalog_revision }}
+          EXPECTED_PLAN_DIGEST: ${{ inputs.expected_plan_digest }}
+          TARGET_ID: ${{ inputs.target_id }}
+        run: |
+          scripts/verify-target-evidence.sh \
+            --bundle "$EVIDENCE_OUTPUT" \
+            --expected-cli-revision "$EXPECTED_CLI_REVISION" \
+            --expected-catalog-revision "$EXPECTED_CATALOG_REVISION" \
+            --expected-plan-digest "$EXPECTED_PLAN_DIGEST" \
+            --expected-target "$TARGET_ID" \
+            --require-verified
+      - name: Preserve honest blocked or verified evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: target-evidence-${{ github.run_id }}
+          path: ${{ inputs.evidence_output }}
+          if-no-files-found: warn
+          retention-days: 30
