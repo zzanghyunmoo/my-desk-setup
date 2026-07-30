@@ -295,7 +295,7 @@ func (runtime GuestRuntime) installPinnedWSLImage(ctx context.Context) (resultEr
 	}
 	image, exists := runtime.Spec.WSLImages[architecture]
 	if !exists {
-		return fmt.Errorf("Ubuntu WSL image is not pinned for %q", architecture)
+		return fmt.Errorf("ubuntu WSL image is not pinned for %q", architecture)
 	}
 	if err := validateGuestBootstrapArtifact(GuestBootstrapArtifact{
 		URL: image.URL, SHA256: image.SHA256,
