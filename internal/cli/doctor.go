@@ -23,13 +23,21 @@ func newDoctorCommand(streams Streams, system Runtime) *cobra.Command {
 	command := &cobra.Command{
 		Use:   "doctor",
 		Short: "Diagnose current-target readiness without authentication",
-		Args:  cobra.NoArgs,
+		Args:  noPositionalArgs,
 		RunE: func(command *cobra.Command, _ []string) error {
 			if err := validateOutputFormat(format); err != nil {
 				return err
 			}
+			if selection.interactive && format == "json" {
+				return invalidInput(fmt.Errorf(
+					"--interactive cannot share stdout with --format json",
+				))
+			}
 			environment, err := loadEnvironment(catalogPath)
 			if err != nil {
+				if catalogPath != "" {
+					return invalidInput(err)
+				}
 				return err
 			}
 			var interactive []string
@@ -49,7 +57,7 @@ func newDoctorCommand(streams Streams, system Runtime) *cobra.Command {
 			}
 			request, err := selection.selection(interactive)
 			if err != nil {
-				return err
+				return invalidInput(err)
 			}
 			facts, err := resolveTarget(command.Context(), targetID, system, true)
 			if err != nil {
@@ -63,7 +71,7 @@ func newDoctorCommand(streams Streams, system Runtime) *cobra.Command {
 			facts.CatalogRevision = revision
 			plan, err := planning.Build(environment, facts, request)
 			if err != nil {
-				return err
+				return invalidInput(err)
 			}
 			home, err := runtimeHome(system)
 			if err != nil {
@@ -90,7 +98,9 @@ func newDoctorCommand(streams Streams, system Runtime) *cobra.Command {
 				return fmt.Errorf("unsupported format %q; use human or json", format)
 			}
 			if !report.Ready {
-				return errors.New("doctor found unresolved component readiness")
+				return actionRequired(
+					errors.New("doctor found unresolved component readiness"),
+				)
 			}
 			return nil
 		},

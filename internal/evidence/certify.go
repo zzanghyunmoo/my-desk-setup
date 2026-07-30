@@ -2,9 +2,12 @@ package evidence
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -33,6 +36,18 @@ var (
 func Certify(ctx context.Context, request CertifyRequest) (Manifest, error) {
 	if err := validateCertifyRequest(request); err != nil {
 		return Manifest{}, err
+	}
+	binarySHA256, err := hashRegularFile(request.MDSPath)
+	if err != nil {
+		return Manifest{}, err
+	}
+	if request.ExpectedBinarySHA256 != "" &&
+		binarySHA256 != request.ExpectedBinarySHA256 {
+		return Manifest{}, fmt.Errorf(
+			"mds binary checksum mismatch: got=%s expected=%s",
+			binarySHA256,
+			request.ExpectedBinarySHA256,
+		)
 	}
 	cli, err := readCLIIdentity(ctx, request.MDSPath)
 	if err != nil {
@@ -93,6 +108,15 @@ func Certify(ctx context.Context, request CertifyRequest) (Manifest, error) {
 	if err := scanEvidenceMaterial(DoctorFile, doctorOutput); err != nil {
 		return Manifest{}, err
 	}
+	finalBinarySHA256, err := hashRegularFile(request.MDSPath)
+	if err != nil {
+		return Manifest{}, err
+	}
+	if finalBinarySHA256 != binarySHA256 {
+		return Manifest{}, errors.New(
+			"mds binary changed while actual target evidence was being captured",
+		)
+	}
 
 	status := StatusVerified
 	if len(plan.Blockers) > 0 ||
@@ -109,6 +133,7 @@ func Certify(ctx context.Context, request CertifyRequest) (Manifest, error) {
 		Status:         status,
 		CapturedAtUnix: json.Number(strconv.FormatInt(now.Unix(), 10)),
 		Target:         targetIdentity, CLI: cli,
+		BinarySHA256:    binarySHA256,
 		CatalogRevision: plan.CatalogRevision, PlanDigest: plan.Digest,
 		Components: components,
 	}
@@ -120,6 +145,7 @@ func Certify(ctx context.Context, request CertifyRequest) (Manifest, error) {
 		ExpectedCatalogRevision: plan.CatalogRevision,
 		ExpectedPlanDigest:      plan.Digest,
 		ExpectedTargetID:        request.TargetID,
+		ExpectedBinarySHA256:    binarySHA256,
 	}); err != nil {
 		return Manifest{}, fmt.Errorf("verify captured evidence: %w", err)
 	}
@@ -148,6 +174,10 @@ func validateCertifyRequest(request CertifyRequest) error {
 	} else if reparse {
 		return errors.New("mds binary must not be a reparse point")
 	}
+	if request.ExpectedBinarySHA256 != "" &&
+		!sha256Pattern.MatchString(request.ExpectedBinarySHA256) {
+		return errors.New("expected mds binary SHA-256 must be 64 lowercase hex characters")
+	}
 	if _, err := target.ParseID(request.TargetID); err != nil {
 		return fmt.Errorf("invalid certification target: %w", err)
 	}
@@ -160,6 +190,23 @@ func validateCertifyRequest(request CertifyRequest) error {
 		return fmt.Errorf("inspect evidence output directory: %w", err)
 	}
 	return nil
+}
+
+func hashRegularFile(path string) (digest string, returnErr error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return "", fmt.Errorf("open mds binary for hashing: %w", err)
+	}
+	defer func() {
+		if err := file.Close(); returnErr == nil && err != nil {
+			returnErr = fmt.Errorf("close mds binary after hashing: %w", err)
+		}
+	}()
+	hash := sha256.New()
+	if _, err := io.Copy(hash, file); err != nil {
+		return "", fmt.Errorf("hash mds binary: %w", err)
+	}
+	return hex.EncodeToString(hash.Sum(nil)), nil
 }
 
 func selectionArguments(request CertifyRequest) ([]string, error) {

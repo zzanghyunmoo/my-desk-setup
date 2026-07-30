@@ -51,37 +51,57 @@ func writeLock(root string, lock catalog.VersionLock) error {
 		return fmt.Errorf("create version lock temporary file: %w", err)
 	}
 	temporaryPath := temporary.Name()
-	cleanup := func() {
-		_ = temporary.Close()
-		_ = os.Remove(temporaryPath)
+	temporaryOpen := true
+	cleanup := func() error {
+		var cleanupErrors []error
+		if temporaryOpen {
+			temporaryOpen = false
+			if err := temporary.Close(); err != nil {
+				cleanupErrors = append(
+					cleanupErrors,
+					fmt.Errorf("close version lock temporary file during cleanup: %w", err),
+				)
+			}
+		}
+		if err := os.Remove(temporaryPath); err != nil &&
+			!errors.Is(err, os.ErrNotExist) {
+			cleanupErrors = append(
+				cleanupErrors,
+				fmt.Errorf("remove version lock temporary file: %w", err),
+			)
+		}
+		return errors.Join(cleanupErrors...)
+	}
+	failWithCleanup := func(operationErr error) error {
+		return errors.Join(operationErr, cleanup())
 	}
 	if err := temporary.Chmod(info.Mode().Perm()); err != nil {
-		cleanup()
-		return fmt.Errorf("chmod version lock temporary file: %w", err)
+		return failWithCleanup(
+			fmt.Errorf("chmod version lock temporary file: %w", err),
+		)
 	}
 	if _, err := temporary.Write(encoded); err != nil {
-		cleanup()
-		return fmt.Errorf("write version lock temporary file: %w", err)
+		return failWithCleanup(
+			fmt.Errorf("write version lock temporary file: %w", err),
+		)
 	}
 	if err := temporary.Sync(); err != nil {
-		cleanup()
-		return fmt.Errorf("sync version lock temporary file: %w", err)
+		return failWithCleanup(
+			fmt.Errorf("sync version lock temporary file: %w", err),
+		)
 	}
+	temporaryOpen = false
 	if err := temporary.Close(); err != nil {
-		_ = os.Remove(temporaryPath)
-		return fmt.Errorf("close version lock temporary file: %w", err)
+		return errors.Join(
+			fmt.Errorf("close version lock temporary file: %w", err),
+			cleanup(),
+		)
 	}
-	if err := os.Rename(temporaryPath, path); err != nil {
-		_ = os.Remove(temporaryPath)
-		return fmt.Errorf("publish version lock: %w", err)
-	}
-	directoryHandle, err := os.Open(directory)
-	if err != nil {
-		return fmt.Errorf("open version lock directory: %w", err)
-	}
-	defer directoryHandle.Close()
-	if err := directoryHandle.Sync(); err != nil {
-		return fmt.Errorf("sync version lock directory: %w", err)
+	if err := replaceFileDurably(temporaryPath, path); err != nil {
+		return errors.Join(
+			fmt.Errorf("publish version lock: %w", err),
+			cleanup(),
+		)
 	}
 	return nil
 }

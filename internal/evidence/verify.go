@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -24,6 +25,7 @@ import (
 const maxEvidenceFileSize = 4 << 20
 
 var (
+	sha256Pattern    = regexp.MustCompile(`^[0-9a-f]{64}$`)
 	checksummedFiles = []string{
 		DoctorFile,
 		ManifestFile,
@@ -101,6 +103,11 @@ func Verify(root string, options VerifyOptions) (Manifest, error) {
 			expectedStatus,
 		)
 	}
+	if options.RequirePublicationAcceptable {
+		if err := validatePublicationAcceptable(manifest, plan, snapshot); err != nil {
+			return Manifest{}, err
+		}
+	}
 	return manifest, nil
 }
 
@@ -123,6 +130,11 @@ func validateManifest(manifest Manifest, options VerifyOptions) error {
 		return fmt.Errorf(
 			"actual target evidence cannot claim status %q",
 			manifest.Status,
+		)
+	}
+	if !sha256Pattern.MatchString(manifest.BinarySHA256) {
+		return errors.New(
+			"evidence binary_sha256 must be 64 lowercase hex characters",
 		)
 	}
 	capturedAt, err := strconv.ParseInt(string(manifest.CapturedAtUnix), 10, 64)
@@ -171,6 +183,68 @@ func validateManifest(manifest Manifest, options VerifyOptions) error {
 			"wrong target evidence: evidence=%q expected=%q",
 			manifest.Target.ID,
 			options.ExpectedTargetID,
+		)
+	}
+	if options.ExpectedBinarySHA256 != "" &&
+		manifest.BinarySHA256 != options.ExpectedBinarySHA256 {
+		return fmt.Errorf(
+			"wrong release binary: evidence=%q expected=%q",
+			manifest.BinarySHA256,
+			options.ExpectedBinarySHA256,
+		)
+	}
+	return nil
+}
+
+func validatePublicationAcceptable(
+	manifest Manifest,
+	plan planning.Plan,
+	snapshot DoctorSnapshot,
+) error {
+	if manifest.Status == StatusVerified {
+		return nil
+	}
+	if manifest.Status != StatusBlocked {
+		return fmt.Errorf(
+			"evidence status %q is not publication acceptable",
+			manifest.Status,
+		)
+	}
+	if !targetIdentityComplete(plan.Target) {
+		return errors.New(
+			"blocked evidence with incomplete target identity is not publication acceptable",
+		)
+	}
+	if len(plan.Actions) != len(snapshot.Checks) {
+		return errors.New(
+			"blocked evidence does not cover every requested component",
+		)
+	}
+	actionRequired := 0
+	checks := make(map[string]ComponentCheck, len(snapshot.Checks))
+	for _, check := range snapshot.Checks {
+		checks[check.ActionID] = check
+	}
+	for _, action := range plan.Actions {
+		check := checks[action.ID]
+		if check.Status == "ready" {
+			continue
+		}
+		if action.Status != planning.ActionActionRequired ||
+			check.Status != "action-required" ||
+			check.ReasonCode != "action-required" {
+			return fmt.Errorf(
+				"component %q outcome %q/%q is not publication acceptable",
+				action.ComponentID,
+				action.Status,
+				check.Status,
+			)
+		}
+		actionRequired++
+	}
+	if actionRequired == 0 {
+		return errors.New(
+			"blocked evidence has no honest action-required outcome",
 		)
 	}
 	return nil
@@ -606,7 +680,7 @@ func writeBundle(
 	manifest Manifest,
 	plan planning.Plan,
 	snapshot DoctorSnapshot,
-) error {
+) (returnErr error) {
 	parent := filepath.Dir(outputDir)
 	if err := os.MkdirAll(parent, 0o700); err != nil {
 		return fmt.Errorf("create evidence parent: %w", err)
@@ -615,7 +689,14 @@ func writeBundle(
 	if err != nil {
 		return fmt.Errorf("create evidence staging directory: %w", err)
 	}
-	defer os.RemoveAll(staging)
+	defer func() {
+		if err := os.RemoveAll(staging); returnErr == nil && err != nil {
+			returnErr = fmt.Errorf(
+				"remove evidence staging directory: %w",
+				err,
+			)
+		}
+	}()
 	if err := os.Chmod(staging, 0o700); err != nil {
 		return fmt.Errorf("protect evidence staging directory: %w", err)
 	}

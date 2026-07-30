@@ -72,7 +72,7 @@ selection은 같은 ordered action과 digest를 만든다. `apply`는 다른 tar
 | --- | --- | --- |
 | `plan` | read-only | `mds.plan/v1`, action과 digest |
 | `apply` | exact digest 뒤 mutation | target-local `mds.receipt/v1` |
-| `doctor` | read-only, no-auth observation | `mds.doctor/v1` |
+| `doctor` | read-only, no-auth observation and functional verification | `mds.doctor/v1` |
 | `update` preview | read-only | `mds.update/v1`, old/new lock diff와 digest |
 | `update --plan-digest` | exact update mutation | lock write와 target receipt |
 
@@ -86,7 +86,8 @@ selection은 같은 ordered action과 digest를 만든다. `apply`는 다른 tar
 기본 state root는 Unix 계열에서
 `${XDG_STATE_HOME:-$HOME/.local/state}/my-desk-setup`, Windows에서
 `%LOCALAPPDATA%\my-desk-setup\state`다. target ID별 directory에는 single-writer
-lock, append-only journal과 digest별 receipt가 있다.
+lock, append-only journal과 digest별 receipt가 있다. writer lock은 owner-only
+stable file의 OS advisory lease이며 process 종료 시 OS가 자동 해제한다.
 
 - journal은 action 시작, 성공, verification과 실패 지점을 기록한다.
 - receipt는 requested, installed, verified version과 component outcome을
@@ -95,6 +96,8 @@ lock, append-only journal과 digest별 receipt가 있다.
   재실행하지 않고 no-op verification으로 수렴한다.
 - 실패한 node의 downstream만 `blocked`가 되고 독립 node는 계속된다.
 - state는 원하는 상태의 원본이 아니다. 재개 전 actual state를 다시 관찰한다.
+- update는 catalog-scoped lease를 먼저, target lease를 다음으로 획득하고 두 lease를
+  catalog lock 게시와 target reconcile이 모두 끝날 때까지 유지한다.
 
 ## Safety invariants
 
@@ -120,7 +123,9 @@ lock, append-only journal과 digest별 receipt가 있다.
 
 Release는 OS/architecture별 archive, `checksums.txt`,
 `release-manifest.json`과 두 host bootstrap을 하나의 identity로 묶는다.
-manifest와 checksum이 검증된 production archive만 certification에 사용한다.
+manifest는 source commit과 catalog revision뿐 아니라 archive 안의 실제
+`mds` binary SHA-256도 기록한다. manifest와 archive 내부 binary checksum이
+모두 검증된 production archive만 certification에 사용한다.
 
 Evidence 상태는 다음 의미로만 사용한다.
 
@@ -138,6 +143,27 @@ fixture, fake adapter, hosted CI 또는 다른 target 결과로 실제 target을
 `verified`로 승격하지 않는다. evidence verifier가 bundle 구조와 digest를
 검증했다는 사실도 내부 target outcome이 `blocked`인 것을 `verified`로 바꾸지
 않는다.
+
+tag publication 앞의 promotion gate는 exact tag commit으로 실행한 GitHub
+Actions actual-target artifact를 찾아 다음 네 표준 target을 정확히 하나씩
+요구한다.
+
+- `macos-host:local`
+- `windows-host:local`
+- `wsl-guest:Ubuntu-26.04`
+- `lima-guest:mds`
+
+각 bundle은 CLI commit, catalog revision, plan digest, target ID와 실제
+실행한 on-disk binary SHA-256을 release manifest에 다시 결합해 검증한다.
+증거가 없거나 오래됐거나 중복됐거나 identity가 다르면 publication은
+fail closed다. `verified`는 그대로 통과한다. `blocked`는 status를 바꾸지
+않으며, target identity가 완전하고 ready가 아닌 모든 outcome이 사용자의
+정직한 `action-required`인 경우에만 publication-acceptable이다. planned
+`unready`/`conflict`, `unsupported` 또는 불완전 target은 승격을 차단한다.
+
+promotion 결과는 deterministic `mds.release-promotion/v1` 보고서로 만들고
+publish 직전에 release manifest와 다시 대조한 뒤
+`release-promotion.json`이라는 영구 GitHub Release asset으로 함께 게시한다.
 
 현재 Windows host, WSL Ubuntu와 Lima Ubuntu의 실제 evidence는 없다. 이
 dependency가 해소되기 전에는 네 target 전체가 verified라고 주장할 수 없다.

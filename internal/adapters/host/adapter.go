@@ -8,6 +8,7 @@ import (
 	"github.com/zzanghyunmoo/my-desk-setup/internal/catalog"
 	"github.com/zzanghyunmoo/my-desk-setup/internal/guest"
 	"github.com/zzanghyunmoo/my-desk-setup/internal/transport"
+	"github.com/zzanghyunmoo/my-desk-setup/internal/version"
 )
 
 func New(
@@ -31,9 +32,14 @@ func New(
 	if err != nil {
 		return nil, err
 	}
+	catalogRevision, err := catalog.Revision(environment)
+	if err != nil {
+		return nil, err
+	}
 	runtime := GuestRuntime{
-		Architecture: architecture,
-		Port:         port, Delegate: packagesAdapter, Spec: spec,
+		Architecture: architecture, Port: port,
+		Delegate: packagesAdapter, Spec: spec,
+		CLIRevision: version.String(), CatalogRevision: catalogRevision,
 	}
 	byID := map[string]adapters.Component{
 		"lima": runtime,

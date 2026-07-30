@@ -18,7 +18,7 @@ var homebrewCasks = map[string]bool{
 
 func HomebrewInstall(action planning.Action) (transport.Command, error) {
 	if action.Package == "" {
-		return transport.Command{}, fmt.Errorf("Homebrew package is required for %s", action.ID)
+		return transport.Command{}, fmt.Errorf("homebrew package is required for %s", action.ID)
 	}
 	arguments := []string{"install"}
 	if homebrewCasks[action.ComponentID] {

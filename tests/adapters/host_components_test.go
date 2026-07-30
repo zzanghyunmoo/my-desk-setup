@@ -2,6 +2,7 @@ package adapters_test
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -13,6 +14,12 @@ import (
 	"github.com/zzanghyunmoo/my-desk-setup/internal/planning"
 	"github.com/zzanghyunmoo/my-desk-setup/internal/target"
 	"github.com/zzanghyunmoo/my-desk-setup/internal/transport"
+	"github.com/zzanghyunmoo/my-desk-setup/internal/version"
+)
+
+const (
+	hostRuntimeCLIRevision     = "1.2.3 (commit=reviewed, date=2026-07-30T00:00:00Z)"
+	hostRuntimeCatalogRevision = "sha256:reviewed-catalog"
 )
 
 func TestHostAllContainsNoGuestToolchainOrAuthCommand(t *testing.T) {
@@ -52,6 +59,11 @@ func TestLimaRuntimeCreatesPinnedUbuntuGuest(t *testing.T) {
 				command.Arguments[0] == "list" {
 				return transport.Result{Stdout: ""}
 			}
+			if isHostRuntimeMDSCommand(command) {
+				return transport.Result{Stdout: hostRuntimePlanIdentity(
+					"lima-guest:mds",
+				)}
+			}
 			return transport.Result{}
 		},
 	}
@@ -60,6 +72,8 @@ func TestLimaRuntimeCreatesPinnedUbuntuGuest(t *testing.T) {
 		Delegate: readyComponent{
 			observation: adapters.Observation{State: adapters.StateReady},
 		},
+		CLIRevision:     hostRuntimeCLIRevision,
+		CatalogRevision: hostRuntimeCatalogRevision,
 		Spec: guest.Spec{
 			WSLDistribution: "Ubuntu-26.04",
 			Images: map[string]guest.ImageSpec{
@@ -96,6 +110,11 @@ func TestWSLRuntimeInstallsCanonicalGuestWithoutAuth(t *testing.T) {
 				command.Arguments[0] == "--list" {
 				return transport.Result{Stdout: ""}
 			}
+			if isHostRuntimeMDSCommand(command) {
+				return transport.Result{Stdout: hostRuntimePlanIdentity(
+					"wsl-guest:Ubuntu-26.04",
+				)}
+			}
 			return transport.Result{}
 		},
 	}
@@ -104,7 +123,9 @@ func TestWSLRuntimeInstallsCanonicalGuestWithoutAuth(t *testing.T) {
 		Delegate: readyComponent{
 			observation: adapters.Observation{State: adapters.StateAbsent},
 		},
-		Spec: guest.Spec{WSLDistribution: "Ubuntu-26.04"},
+		Spec:            guest.Spec{WSLDistribution: "Ubuntu-26.04"},
+		CLIRevision:     hostRuntimeCLIRevision,
+		CatalogRevision: hostRuntimeCatalogRevision,
 	}
 	if err := runtime.Apply(context.Background(), planning.Action{
 		ID: "windows-host:local/wsl", ComponentID: "wsl",
@@ -126,6 +147,104 @@ func TestWSLRuntimeInstallsCanonicalGuestWithoutAuth(t *testing.T) {
 			t.Fatalf("WSL lifecycle contains forbidden auth surface %q:\n%s", forbidden, joined)
 		}
 	}
+}
+
+func TestProductionHostAdapterRequiresMatchingGuestRuntimeRevision(t *testing.T) {
+	environment, err := catalog.LoadFS(catalogdata.FS)
+	if err != nil {
+		t.Fatalf("LoadFS(): %v", err)
+	}
+	catalogRevision, err := catalog.Revision(environment)
+	if err != nil {
+		t.Fatalf("Revision(): %v", err)
+	}
+	port := &recordingPort{
+		result: func(command transport.Command) transport.Result {
+			switch {
+			case command.Executable == "limactl" &&
+				len(command.Arguments) > 0 &&
+				command.Arguments[0] == "list":
+				return transport.Result{
+					Stdout: `{"name":"mds","status":"Running","arch":"aarch64","limaVersion":"2.1.1"}`,
+				}
+			case isHostRuntimeMDSCommand(command):
+				return transport.Result{Stdout: hostRuntimePlanIdentityWithRevisions(
+					"lima-guest:mds",
+					version.String(),
+					catalogRevision,
+				)}
+			default:
+				return transport.Result{Stdout: "limactl version 2.1.1\n"}
+			}
+		},
+	}
+	component, err := hostadapter.New(
+		environment,
+		port,
+		t.TempDir(),
+		"darwin",
+		"arm64",
+		false,
+	)
+	if err != nil {
+		t.Fatalf("New(): %v", err)
+	}
+	observation, err := component.Observe(context.Background(), planning.Action{
+		ID:          "macos-host:local/lima",
+		ComponentID: "lima",
+		Installer:   "brew",
+		Version:     "manager-owned",
+		Verification: [][]string{
+			{"limactl", "--version"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Observe(): %v", err)
+	}
+	if observation.State != adapters.StateReady {
+		t.Fatalf("observation = %+v, want matching production handoff ready", observation)
+	}
+	if !isHostRuntimeMDSCommand(port.commands[len(port.commands)-1]) {
+		t.Fatalf("production adapter did not execute guest-local mds: %+v", port.commands)
+	}
+}
+
+func isHostRuntimeMDSCommand(command transport.Command) bool {
+	for index := 0; index+1 < len(command.Arguments); index++ {
+		if command.Arguments[index] == "mds" &&
+			command.Arguments[index+1] == "plan" {
+			return true
+		}
+	}
+	return false
+}
+
+func hostRuntimePlanIdentity(targetID string) string {
+	return hostRuntimePlanIdentityWithRevisions(
+		targetID,
+		hostRuntimeCLIRevision,
+		hostRuntimeCatalogRevision,
+	)
+}
+
+func hostRuntimePlanIdentityWithRevisions(
+	targetID,
+	cliRevision,
+	catalogRevision string,
+) string {
+	id, _ := target.ParseID(targetID)
+	encoded, _ := json.Marshal(struct {
+		CatalogRevision string       `json:"catalog_revision"`
+		Target          target.Facts `json:"target"`
+	}{
+		CatalogRevision: catalogRevision,
+		Target: target.Facts{
+			ID:              id,
+			CLIRevision:     cliRevision,
+			CatalogRevision: catalogRevision,
+		},
+	})
+	return string(encoded)
 }
 
 func TestWindowsDesktopUsesWinGetInventoryWithoutLaunchingApp(t *testing.T) {

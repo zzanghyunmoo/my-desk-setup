@@ -12,6 +12,7 @@ import (
 	"reflect"
 	"strings"
 
+	exactartifact "github.com/zzanghyunmoo/my-desk-setup/internal/artifact"
 	"github.com/zzanghyunmoo/my-desk-setup/internal/catalog"
 	"github.com/zzanghyunmoo/my-desk-setup/internal/planning"
 	"github.com/zzanghyunmoo/my-desk-setup/internal/target"
@@ -32,7 +33,8 @@ func Build(
 	old := environment.Lock.Versions[component.VersionPolicy.LockKey]
 	replacement := catalog.LockEntry{
 		Version: candidate.Version, Source: candidate.Source,
-		Provenance: candidate.Provenance, Artifacts: candidate.Artifacts,
+		Provenance: candidate.Provenance, NPM: candidate.NPM,
+		Artifacts: candidate.Artifacts,
 	}
 	if reflect.DeepEqual(old, replacement) {
 		return Plan{}, catalog.Environment{}, errors.New("candidate does not change the committed lock")
@@ -98,6 +100,17 @@ func validateCandidate(candidate Candidate) error {
 	}
 	if err := requireHTTPSURL(candidate.Provenance); err != nil {
 		return fmt.Errorf("candidate provenance: %w", err)
+	}
+	if candidate.NPM != nil {
+		if err := requireHTTPSURL(candidate.NPM.Tarball); err != nil {
+			return fmt.Errorf("candidate npm tarball: %w", err)
+		}
+		if _, err := exactartifact.DecodeSHA512SRI(candidate.NPM.Integrity); err != nil {
+			return fmt.Errorf("candidate npm SRI: %w", err)
+		}
+		if err := exactartifact.ValidateSHA256(candidate.NPM.SHA256); err != nil {
+			return fmt.Errorf("candidate npm digest: %w", err)
+		}
 	}
 	for platform, artifact := range candidate.Artifacts {
 		if err := requireHTTPSURL(artifact.URL); err != nil {

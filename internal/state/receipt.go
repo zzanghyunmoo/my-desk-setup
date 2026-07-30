@@ -9,6 +9,8 @@ import (
 	"time"
 )
 
+const ReceiptSchema = "mds.receipt/v1"
+
 type Receipt struct {
 	SchemaVersion   string          `json:"schema_version"`
 	PlanDigest      string          `json:"plan_digest"`
@@ -34,11 +36,22 @@ func WriteReceipt(directory string, receipt Receipt) (string, error) {
 	if err := ensureDirectory(directory); err != nil {
 		return "", err
 	}
-	path := filepath.Join(directory, ReceiptFilename(receipt.PlanDigest))
+	completePath := filepath.Join(directory, ReceiptFilename(receipt.PlanDigest))
+	partialPath := filepath.Join(
+		directory,
+		PartialReceiptFilename(receipt.PlanDigest),
+	)
+	path := partialPath
+	if receipt.Complete {
+		path = completePath
+		if err := ensureRegularOrMissing(partialPath); err != nil {
+			return "", err
+		}
+	}
 	if err := ensureRegularOrMissing(path); err != nil {
 		return "", err
 	}
-	receipt.SchemaVersion = "mds.receipt/v1"
+	receipt.SchemaVersion = ReceiptSchema
 	encoded, err := json.MarshalIndent(receipt, "", "  ")
 	if err != nil {
 		return "", fmt.Errorf("encode receipt: %w", err)
@@ -73,6 +86,12 @@ func WriteReceipt(directory string, receipt Receipt) (string, error) {
 	if err := os.Rename(temporaryPath, path); err != nil {
 		_ = os.Remove(temporaryPath)
 		return "", fmt.Errorf("publish receipt: %w", err)
+	}
+	if receipt.Complete {
+		if err := os.Remove(partialPath); err != nil &&
+			!errors.Is(err, os.ErrNotExist) {
+			return "", fmt.Errorf("clear partial receipt: %w", err)
+		}
 	}
 	return path, nil
 }

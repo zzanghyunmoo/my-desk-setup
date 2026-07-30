@@ -49,15 +49,15 @@ func TestAPTUsesNoninteractiveSudoArgv(t *testing.T) {
 	}
 }
 
-func TestBunUsesExactPackageVersion(t *testing.T) {
+func TestBunUsesVerifiedLocalArtifact(t *testing.T) {
 	command, err := packages.BunInstall(planning.Action{
 		ID: "lima-guest:mds/codex", Package: "@openai/codex", Version: "0.144.6",
-	}, map[string]string{"BUN_INSTALL": "/tmp/bun"})
+	}, "/tmp/reviewed-codex.tgz", map[string]string{"BUN_INSTALL": "/tmp/bun"})
 	if err != nil {
 		t.Fatalf("BunInstall(): %v", err)
 	}
 	if got, want := command.Arguments, []string{
-		"add", "--global", "@openai/codex@0.144.6",
+		"add", "--global", "/tmp/reviewed-codex.tgz",
 	}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("arguments = %v, want %v", got, want)
 	}
@@ -65,9 +65,21 @@ func TestBunUsesExactPackageVersion(t *testing.T) {
 
 func TestPackageAdapterPublishesStableGuestLauncher(t *testing.T) {
 	home := t.TempDir()
+	tarball := []byte("reviewed notion CLI tarball")
+	tarballSum := sha256.Sum256(tarball)
+	server := httptest.NewTLSServer(http.HandlerFunc(func(
+		writer http.ResponseWriter,
+		_ *http.Request,
+	) {
+		_, _ = writer.Write(tarball)
+	}))
+	defer server.Close()
 	adapter := packages.Adapter{
 		Home: home,
 		Port: &recordingPort{},
+		Vendor: packages.Vendor{
+			Client: server.Client(),
+		},
 		Environment: catalog.Environment{
 			Catalog: catalog.Catalog{Components: []catalog.Component{
 				{
@@ -78,7 +90,14 @@ func TestPackageAdapterPublishesStableGuestLauncher(t *testing.T) {
 				},
 			}},
 			Lock: catalog.VersionLock{Versions: map[string]catalog.LockEntry{
-				"notion-cli": {Version: "0.21.5"},
+				"notion-cli": {
+					Version: "0.21.5",
+					NPM: &catalog.NPMArtifact{
+						Tarball:   server.URL + "/ntn-0.21.5.tgz",
+						Integrity: bunFixtureSRI(tarball),
+						SHA256:    hex.EncodeToString(tarballSum[:]),
+					},
+				},
 			}},
 		},
 	}
@@ -109,6 +128,27 @@ func TestPackageAdapterPublishesStableGuestLauncher(t *testing.T) {
 	if err := adapter.Apply(context.Background(), action); err == nil ||
 		!strings.Contains(err.Error(), "user-owned") {
 		t.Fatalf("Apply(user-owned) error = %v", err)
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatalf("remove user-owned launcher fixture: %v", err)
+	}
+	target := filepath.Join(home, "user-owned-target")
+	if err := os.WriteFile(target, content, 0o700); err != nil {
+		t.Fatalf("write symlink target: %v", err)
+	}
+	if err := os.Symlink(target, path); err != nil {
+		t.Fatalf("create launcher symlink: %v", err)
+	}
+	if err := adapter.Apply(context.Background(), action); err == nil ||
+		!strings.Contains(err.Error(), "not a regular file") {
+		t.Fatalf("Apply(symlink) error = %v", err)
+	}
+	info, err := os.Lstat(path)
+	if err != nil {
+		t.Fatalf("lstat launcher symlink: %v", err)
+	}
+	if info.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("launcher mode = %v, want preserved symlink", info.Mode())
 	}
 }
 

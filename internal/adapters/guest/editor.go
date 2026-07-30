@@ -87,7 +87,7 @@ func (editor Editor) Observe(
 func (editor Editor) Apply(
 	ctx context.Context,
 	action planning.Action,
-) error {
+) (returnErr error) {
 	if editor.Home == "" || editor.Port == nil || editor.Now == nil {
 		return errors.New("editor adapter requires home, port, and clock")
 	}
@@ -122,7 +122,14 @@ func (editor Editor) Apply(
 	if err != nil {
 		return fmt.Errorf("create Neovim config temporary directory: %w", err)
 	}
-	defer os.RemoveAll(temporary)
+	defer func() {
+		if err := os.RemoveAll(temporary); err != nil {
+			returnErr = errors.Join(
+				returnErr,
+				fmt.Errorf("remove Neovim config temporary directory: %w", err),
+			)
+		}
+	}()
 
 	commands := []transport.Command{
 		{Executable: "git", Arguments: []string{"init", temporary}},
@@ -229,7 +236,7 @@ func (editor Editor) Verify(
 		return err
 	}
 	if observation.State != adapters.StateReady {
-		return fmt.Errorf("Neovim config is not ready: %s", observation.Detail)
+		return fmt.Errorf("neovim config is not ready: %s", observation.Detail)
 	}
 	if editor.Delegate == nil {
 		return errors.New("editor verification delegate is required")

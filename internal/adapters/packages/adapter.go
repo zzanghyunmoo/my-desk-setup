@@ -53,7 +53,7 @@ func (adapter Adapter) Observe(
 	}
 	output := strings.TrimSpace(result.Stdout + "\n" + result.Stderr)
 	if action.Version != "manager-owned" && action.Version != "manual" &&
-		!strings.Contains(output, action.Version) {
+		!containsExactVersion(output, action.Version) {
 		if adapter.AllowReplace {
 			return adapters.Observation{
 				State: adapters.StateAbsent,
@@ -66,7 +66,7 @@ func (adapter Adapter) Observe(
 		return adapters.Observation{
 			State: adapters.StateConflict,
 			Detail: fmt.Sprintf(
-				"installed version output %q does not contain requested %s",
+				"installed version output %q does not contain requested exact version %s",
 				output,
 				action.Version,
 			),
@@ -104,35 +104,52 @@ func (adapter Adapter) Apply(
 	}
 	switch action.Installer {
 	case "brew":
-		command, err := HomebrewInstall(action)
-		if err != nil {
-			return err
+		command, buildErr := HomebrewInstall(action)
+		if buildErr != nil {
+			return buildErr
 		}
 		err = adapter.run(ctx, command)
 	case "winget":
-		command, err := WinGetInstall(action)
-		if err != nil {
-			return err
+		command, buildErr := WinGetInstall(action)
+		if buildErr != nil {
+			return buildErr
 		}
 		err = adapter.run(ctx, command)
 	case "apt":
-		commands, err := APTInstall(action)
-		if err != nil {
-			return err
+		commands, buildErr := APTInstall(action)
+		if buildErr != nil {
+			return buildErr
 		}
 		err = adapter.runAll(ctx, commands)
 	case "mise":
-		commands, err := MiseInstall(action, adapter.environment())
-		if err != nil {
-			return err
+		commands, buildErr := MiseInstall(action, adapter.environment())
+		if buildErr != nil {
+			return buildErr
 		}
 		err = adapter.runAll(ctx, commands)
 	case "bun":
-		command, err := BunInstall(action, adapter.environment())
-		if err != nil {
-			return err
+		if lock.NPM == nil {
+			return fmt.Errorf(
+				"component %s has no reviewed npm tarball",
+				action.ComponentID,
+			)
 		}
-		err = adapter.run(ctx, command)
+		localArtifact, cleanup, downloadErr := adapter.Vendor.downloadNPMTarball(
+			ctx,
+			*lock.NPM,
+		)
+		if downloadErr != nil {
+			return downloadErr
+		}
+		command, buildErr := BunInstall(
+			action,
+			localArtifact,
+			adapter.environment(),
+		)
+		if buildErr != nil {
+			return errors.Join(buildErr, cleanup())
+		}
+		err = errors.Join(adapter.run(ctx, command), cleanup())
 	case "vendor":
 		adapter.Vendor.Home = adapter.Home
 		err = adapter.Vendor.Install(ctx, component, lock)
@@ -226,4 +243,46 @@ func (adapter Adapter) environment() map[string]string {
 func firstLine(value string) string {
 	line, _, _ := strings.Cut(value, "\n")
 	return strings.TrimSpace(line)
+}
+
+func containsExactVersion(output, version string) bool {
+	if version == "" {
+		return false
+	}
+	for searchFrom := 0; searchFrom <= len(output)-len(version); {
+		relativeStart := strings.Index(output[searchFrom:], version)
+		if relativeStart < 0 {
+			return false
+		}
+		start := searchFrom + relativeStart
+		end := start + len(version)
+		if versionTokenStart(output, start) &&
+			(end == len(output) || !isVersionTokenByte(output[end])) {
+			return true
+		}
+		searchFrom = start + 1
+	}
+	return false
+}
+
+func versionTokenStart(output string, start int) bool {
+	if start == 0 || !isVersionTokenByte(output[start-1]) {
+		return true
+	}
+	for _, prefix := range []string{"v", "go"} {
+		prefixStart := start - len(prefix)
+		if prefixStart >= 0 &&
+			output[prefixStart:start] == prefix &&
+			(prefixStart == 0 || !isVersionTokenByte(output[prefixStart-1])) {
+			return true
+		}
+	}
+	return false
+}
+
+func isVersionTokenByte(value byte) bool {
+	return value >= '0' && value <= '9' ||
+		value >= 'a' && value <= 'z' ||
+		value >= 'A' && value <= 'Z' ||
+		strings.ContainsRune(".+-_", rune(value))
 }

@@ -33,22 +33,24 @@ func newUpdateCommand(streams Streams, system Runtime) *cobra.Command {
 	command := &cobra.Command{
 		Use:   "update",
 		Short: "Preview or apply an exact reviewed version-lock update",
-		Args:  cobra.NoArgs,
+		Args:  noPositionalArgs,
 		RunE: func(command *cobra.Command, _ []string) error {
 			if err := validateOutputFormat(format); err != nil {
 				return err
 			}
 			if catalogPath == "" {
-				return errors.New("--catalog is required because embedded catalog data is read-only")
+				return invalidInput(errors.New(
+					"--catalog is required because embedded catalog data is read-only",
+				))
 			}
 			if (candidatePath == "") == (componentID == "") {
-				return errors.New(
+				return invalidInput(errors.New(
 					"choose exactly one of --candidate or --component",
-				)
+				))
 			}
 			environment, err := loadEnvironment(catalogPath)
 			if err != nil {
-				return err
+				return invalidInput(err)
 			}
 			facts, err := resolveTarget(command.Context(), targetID, system, true)
 			if err != nil {
@@ -68,7 +70,10 @@ func newUpdateCommand(streams Streams, system Runtime) *cobra.Command {
 				)
 			}
 			if err != nil {
-				return err
+				if candidatePath != "" {
+					return invalidInput(err)
+				}
+				return unreachable(err)
 			}
 			beforeRevision, err := catalog.Revision(environment)
 			if err != nil {
@@ -78,7 +83,7 @@ func newUpdateCommand(streams Streams, system Runtime) *cobra.Command {
 			facts.CatalogRevision = beforeRevision
 			plan, updated, err := updateflow.Build(environment, facts, candidate)
 			if err != nil {
-				return err
+				return invalidInput(err)
 			}
 			if expectedDigest == "" {
 				switch format {
@@ -89,6 +94,9 @@ func newUpdateCommand(streams Streams, system Runtime) *cobra.Command {
 				default:
 					return fmt.Errorf("unsupported format %q; use human or json", format)
 				}
+			}
+			if err := updateflow.Verify(plan, expectedDigest); err != nil {
+				return stalePlan(err)
 			}
 			home, err := runtimeHome(system)
 			if err != nil {
@@ -122,7 +130,7 @@ func newUpdateCommand(streams Streams, system Runtime) *cobra.Command {
 					}
 					observed, err := system.ObserveTarget(ctx, planned)
 					if err != nil {
-						return target.Facts{}, err
+						return target.Facts{}, unreachable(err)
 					}
 					observed.CLIRevision = version.String()
 					observed.CatalogRevision = plan.AfterCatalogRevision
@@ -154,7 +162,9 @@ func newUpdateCommand(streams Streams, system Runtime) *cobra.Command {
 				return fmt.Errorf("unsupported format %q; use human or json", format)
 			}
 			if !result.Receipt.Complete {
-				return errors.New("update completed with unresolved component outcomes")
+				return actionRequired(
+					errors.New("update completed with unresolved component outcomes"),
+				)
 			}
 			return nil
 		},
@@ -170,7 +180,9 @@ func newUpdateCommand(streams Streams, system Runtime) *cobra.Command {
 	return command
 }
 
-func readCandidate(path string) (updateflow.Candidate, error) {
+func readCandidate(
+	path string,
+) (candidate updateflow.Candidate, resultErr error) {
 	info, err := os.Lstat(path)
 	if err != nil {
 		return updateflow.Candidate{}, fmt.Errorf("inspect update candidate: %w", err)
@@ -184,7 +196,15 @@ func readCandidate(path string) (updateflow.Candidate, error) {
 	if err != nil {
 		return updateflow.Candidate{}, fmt.Errorf("open update candidate: %w", err)
 	}
-	defer file.Close()
+	defer func() {
+		if err := file.Close(); err != nil {
+			candidate = updateflow.Candidate{}
+			resultErr = errors.Join(
+				resultErr,
+				fmt.Errorf("close update candidate: %w", err),
+			)
+		}
+	}()
 	content, err := io.ReadAll(io.LimitReader(file, maxCandidateSize+1))
 	if err != nil {
 		return updateflow.Candidate{}, fmt.Errorf("read update candidate: %w", err)

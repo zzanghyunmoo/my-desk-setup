@@ -54,6 +54,14 @@ func Run(
 			check.InstalledVersion = observation.InstalledVersion
 			switch observation.State {
 			case adapters.StateReady:
+				if err := adapter.Verify(ctx, action); err != nil {
+					check.Status = "unready"
+					check.ReasonCode = "functional-verification-failed"
+					check.Reason = err.Error()
+					check.RecoveryHint = "fix the functional probe and rerun doctor"
+					report.Ready = false
+					break
+				}
 				check.Status = "ready"
 				check.ReasonCode = "ready"
 				check.VerifiedVersion = observation.InstalledVersion

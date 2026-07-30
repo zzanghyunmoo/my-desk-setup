@@ -20,6 +20,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/zzanghyunmoo/my-desk-setup/internal/catalog"
 )
 
 const (
@@ -49,6 +51,7 @@ type Artifact struct {
 	Architecture  string `json:"architecture"`
 	ArchiveFormat string `json:"archive_format"`
 	Binary        string `json:"binary"`
+	BinarySHA256  string `json:"binary_sha256"`
 	SHA256        string `json:"sha256"`
 	Size          int64  `json:"size"`
 }
@@ -61,12 +64,13 @@ type Bootstrap struct {
 }
 
 type Manifest struct {
-	SchemaVersion string      `json:"schema_version"`
-	Version       string      `json:"version"`
-	Commit        string      `json:"commit"`
-	Date          string      `json:"date"`
-	Artifacts     []Artifact  `json:"artifacts"`
-	Bootstraps    []Bootstrap `json:"bootstraps"`
+	SchemaVersion   string      `json:"schema_version"`
+	Version         string      `json:"version"`
+	Commit          string      `json:"commit"`
+	Date            string      `json:"date"`
+	CatalogRevision string      `json:"catalog_revision"`
+	Artifacts       []Artifact  `json:"artifacts"`
+	Bootstraps      []Bootstrap `json:"bootstraps"`
 }
 
 type target struct {
@@ -133,14 +137,23 @@ func Build(ctx context.Context, options Options) (returnErr error) {
 			returnErr = fmt.Errorf("remove binary staging directory: %w", err)
 		}
 	}()
+	environment, err := catalog.Load(catalog.CatalogRoot(sourceRoot))
+	if err != nil {
+		return fmt.Errorf("load release catalog: %w", err)
+	}
+	catalogRevision, err := catalog.Revision(environment)
+	if err != nil {
+		return fmt.Errorf("compute release catalog revision: %w", err)
+	}
 
 	manifest := Manifest{
-		SchemaVersion: SchemaVersion,
-		Version:       options.Version,
-		Commit:        options.Commit,
-		Date:          options.Date.UTC().Format(time.RFC3339),
-		Artifacts:     make([]Artifact, 0, len(releaseTargets)),
-		Bootstraps:    make([]Bootstrap, 0, len(releaseBootstraps)),
+		SchemaVersion:   SchemaVersion,
+		Version:         options.Version,
+		Commit:          options.Commit,
+		Date:            options.Date.UTC().Format(time.RFC3339),
+		CatalogRevision: catalogRevision,
+		Artifacts:       make([]Artifact, 0, len(releaseTargets)),
+		Bootstraps:      make([]Bootstrap, 0, len(releaseBootstraps)),
 	}
 	for _, releaseTarget := range releaseTargets {
 		binaryPath := filepath.Join(
@@ -163,6 +176,10 @@ func Build(ctx context.Context, options Options) (returnErr error) {
 		if err != nil {
 			return fmt.Errorf("archive %s: %w", name, err)
 		}
+		binaryDigest, _, err := fileIdentity(binaryPath)
+		if err != nil {
+			return err
+		}
 		digest, size, err := fileIdentity(archivePath)
 		if err != nil {
 			return err
@@ -173,6 +190,7 @@ func Build(ctx context.Context, options Options) (returnErr error) {
 			Architecture:  releaseTarget.architecture,
 			ArchiveFormat: releaseTarget.format,
 			Binary:        releaseTarget.binary,
+			BinarySHA256:  binaryDigest,
 			SHA256:        digest,
 			Size:          size,
 		})
@@ -368,7 +386,11 @@ func writeTarArchive(path, binaryPath, binaryName string) (returnErr error) {
 	if err != nil {
 		return fmt.Errorf("open binary: %w", err)
 	}
-	defer binary.Close()
+	defer func() {
+		if err := binary.Close(); returnErr == nil && err != nil {
+			returnErr = fmt.Errorf("close binary: %w", err)
+		}
+	}()
 	info, err := binary.Stat()
 	if err != nil {
 		return fmt.Errorf("inspect binary: %w", err)
@@ -386,8 +408,8 @@ func writeTarArchive(path, binaryPath, binaryName string) (returnErr error) {
 	if err != nil {
 		return fmt.Errorf("create gzip writer: %w", err)
 	}
-	compressed.Header.ModTime = time.Unix(0, 0).UTC()
-	compressed.Header.OS = 255
+	compressed.ModTime = time.Unix(0, 0).UTC()
+	compressed.OS = 255
 	writer := tar.NewWriter(compressed)
 	header := &tar.Header{
 		Name:       binaryName,
@@ -419,7 +441,11 @@ func writeZipArchive(path, binaryPath, binaryName string) (returnErr error) {
 	if err != nil {
 		return fmt.Errorf("open binary: %w", err)
 	}
-	defer binary.Close()
+	defer func() {
+		if err := binary.Close(); returnErr == nil && err != nil {
+			returnErr = fmt.Errorf("close binary: %w", err)
+		}
+	}()
 	output, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
 	if err != nil {
 		return fmt.Errorf("create archive: %w", err)
@@ -461,7 +487,11 @@ func copyRegularFile(source, destination string) (returnErr error) {
 	if err != nil {
 		return fmt.Errorf("open source: %w", err)
 	}
-	defer input.Close()
+	defer func() {
+		if err := input.Close(); returnErr == nil && err != nil {
+			returnErr = fmt.Errorf("close source: %w", err)
+		}
+	}()
 	output, err := os.OpenFile(destination, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
 	if err != nil {
 		return fmt.Errorf("create destination: %w", err)
@@ -516,13 +546,16 @@ func writeChecksums(root string, manifest Manifest) error {
 	return nil
 }
 
-func readManifest(path string) (Manifest, error) {
-	var manifest Manifest
+func readManifest(path string) (manifest Manifest, returnErr error) {
 	file, err := os.Open(path)
 	if err != nil {
 		return manifest, fmt.Errorf("open release manifest: %w", err)
 	}
-	defer file.Close()
+	defer func() {
+		if err := file.Close(); returnErr == nil && err != nil {
+			returnErr = fmt.Errorf("close release manifest: %w", err)
+		}
+	}()
 	decoder := json.NewDecoder(file)
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&manifest); err != nil {
@@ -547,6 +580,16 @@ func validateManifest(manifest Manifest) error {
 	}
 	if !commitPattern.MatchString(manifest.Commit) {
 		return fmt.Errorf("invalid manifest commit %q", manifest.Commit)
+	}
+	if !strings.HasPrefix(manifest.CatalogRevision, "sha256:") ||
+		!checksumPattern.MatchString(strings.TrimPrefix(
+			manifest.CatalogRevision,
+			"sha256:",
+		)) {
+		return fmt.Errorf(
+			"invalid manifest catalog revision %q",
+			manifest.CatalogRevision,
+		)
 	}
 	date, err := time.Parse(time.RFC3339, manifest.Date)
 	if err != nil || date.UTC().Format(time.RFC3339) != manifest.Date {
@@ -574,7 +617,9 @@ func validateManifest(manifest Manifest) error {
 				releaseTarget.architecture,
 			)
 		}
-		if !checksumPattern.MatchString(artifact.SHA256) || artifact.Size <= 0 {
+		if !checksumPattern.MatchString(artifact.SHA256) ||
+			!checksumPattern.MatchString(artifact.BinarySHA256) ||
+			artifact.Size <= 0 {
 			return fmt.Errorf("manifest artifact %q has invalid file identity", artifact.Name)
 		}
 	}
@@ -687,14 +732,24 @@ func verifyFileIdentity(
 	return nil
 }
 
-func fileIdentity(path string) (string, int64, error) {
+func fileIdentity(
+	path string,
+) (digest string, size int64, returnErr error) {
 	file, err := os.Open(path)
 	if err != nil {
 		return "", 0, fmt.Errorf("open %s: %w", filepath.Base(path), err)
 	}
-	defer file.Close()
+	defer func() {
+		if err := file.Close(); returnErr == nil && err != nil {
+			returnErr = fmt.Errorf(
+				"close %s after hashing: %w",
+				filepath.Base(path),
+				err,
+			)
+		}
+	}()
 	hash := sha256.New()
-	size, err := io.Copy(hash, file)
+	size, err = io.Copy(hash, file)
 	if err != nil {
 		return "", 0, fmt.Errorf("hash %s: %w", filepath.Base(path), err)
 	}
@@ -704,27 +759,40 @@ func fileIdentity(path string) (string, int64, error) {
 func verifyArchive(path string, artifact Artifact) error {
 	switch artifact.ArchiveFormat {
 	case "tar.gz":
-		return verifyTarArchive(path, artifact.Binary)
+		return verifyTarArchive(path, artifact.Binary, artifact.BinarySHA256)
 	case "zip":
-		return verifyZipArchive(path, artifact.Binary)
+		return verifyZipArchive(path, artifact.Binary, artifact.BinarySHA256)
 	default:
 		return fmt.Errorf("unsupported archive format %q", artifact.ArchiveFormat)
 	}
 }
 
-func verifyTarArchive(path, binaryName string) error {
+func verifyTarArchive(
+	path,
+	binaryName,
+	binarySHA256 string,
+) (returnErr error) {
 	file, err := os.Open(path)
 	if err != nil {
 		return fmt.Errorf("open archive: %w", err)
 	}
-	defer file.Close()
+	defer func() {
+		if err := file.Close(); returnErr == nil && err != nil {
+			returnErr = fmt.Errorf("close archive: %w", err)
+		}
+	}()
 	compressed, err := gzip.NewReader(file)
 	if err != nil {
 		return fmt.Errorf("open gzip stream: %w", err)
 	}
-	defer compressed.Close()
+	defer func() {
+		if err := compressed.Close(); returnErr == nil && err != nil {
+			returnErr = fmt.Errorf("close gzip stream: %w", err)
+		}
+	}()
 	reader := tar.NewReader(compressed)
 	var entries int
+	var binaryDigest string
 	for {
 		header, err := reader.Next()
 		if errors.Is(err, io.EOF) {
@@ -743,19 +811,43 @@ func verifyTarArchive(path, binaryName string) error {
 		if header.Typeflag != tar.TypeReg || header.Size <= 0 {
 			return errors.New("archive binary must be a non-empty regular file")
 		}
+		hash := sha256.New()
+		size, err := io.Copy(hash, reader)
+		if err != nil {
+			return fmt.Errorf("hash archive binary: %w", err)
+		}
+		if size != header.Size {
+			return errors.New("archive binary size does not match tar header")
+		}
+		binaryDigest = hex.EncodeToString(hash.Sum(nil))
 	}
 	if entries != 1 {
 		return errors.New("archive must contain exactly one entry")
 	}
+	if binaryDigest != binarySHA256 {
+		return fmt.Errorf(
+			"binary checksum mismatch: expected %s, got %s",
+			binarySHA256,
+			binaryDigest,
+		)
+	}
 	return nil
 }
 
-func verifyZipArchive(path, binaryName string) error {
+func verifyZipArchive(
+	path,
+	binaryName,
+	binarySHA256 string,
+) (returnErr error) {
 	reader, err := zip.OpenReader(path)
 	if err != nil {
 		return fmt.Errorf("open zip archive: %w", err)
 	}
-	defer reader.Close()
+	defer func() {
+		if err := reader.Close(); returnErr == nil && err != nil {
+			returnErr = fmt.Errorf("close zip archive: %w", err)
+		}
+	}()
 	if len(reader.File) != 1 {
 		return errors.New("archive must contain exactly one entry")
 	}
@@ -765,6 +857,30 @@ func verifyZipArchive(path, binaryName string) error {
 	}
 	if !entry.Mode().IsRegular() || entry.UncompressedSize64 == 0 {
 		return errors.New("archive binary must be a non-empty regular file")
+	}
+	part, err := entry.Open()
+	if err != nil {
+		return fmt.Errorf("open archive binary: %w", err)
+	}
+	defer func() {
+		if err := part.Close(); returnErr == nil && err != nil {
+			returnErr = fmt.Errorf("close archive binary: %w", err)
+		}
+	}()
+	hash := sha256.New()
+	size, err := io.Copy(hash, part)
+	if err != nil {
+		return fmt.Errorf("hash archive binary: %w", err)
+	}
+	if uint64(size) != entry.UncompressedSize64 {
+		return errors.New("archive binary size does not match zip header")
+	}
+	if digest := hex.EncodeToString(hash.Sum(nil)); digest != binarySHA256 {
+		return fmt.Errorf(
+			"binary checksum mismatch: expected %s, got %s",
+			binarySHA256,
+			digest,
+		)
 	}
 	return nil
 }

@@ -131,7 +131,11 @@ func TestActionRequiredIsRecordedWithoutMislabelingFailure(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open journal: %v", err)
 	}
-	defer file.Close()
+	t.Cleanup(func() {
+		if err := file.Close(); err != nil {
+			t.Errorf("close journal: %v", err)
+		}
+	})
 	var phases []string
 	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {
@@ -234,7 +238,11 @@ func TestApplyEnforcesSingleWriterPerTarget(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Acquire(first): %v", err)
 	}
-	defer lock.Release()
+	t.Cleanup(func() {
+		if err := lock.Release(); err != nil {
+			t.Errorf("Release(first): %v", err)
+		}
+	})
 
 	adapter := newFakeAdapter()
 	_, err = testRunner(adapter).Apply(

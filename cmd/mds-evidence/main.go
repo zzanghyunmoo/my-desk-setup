@@ -70,6 +70,12 @@ func newCertifyCommand(stdout io.Writer) *cobra.Command {
 	flags.StringVar(&request.MDSPath, "mds", "", "absolute production mds binary path")
 	flags.StringVar(&request.TargetID, "target", "", "explicit actual target ID")
 	flags.StringVar(&request.OutputDir, "output", "", "new evidence bundle directory")
+	flags.StringVar(
+		&request.ExpectedBinarySHA256,
+		"expected-binary-sha256",
+		"",
+		"SHA-256 of the exact release mds binary being certified",
+	)
 	flags.BoolVar(&request.All, "all", false, "certify every target-eligible component")
 	flags.StringVar(&request.Profile, "profile", "", "certify a named profile")
 	flags.StringSliceVar(
@@ -88,20 +94,28 @@ func newVerifyCommand(stdout io.Writer) *cobra.Command {
 	var bundle string
 	var options evidence.VerifyOptions
 	var requireVerified bool
+	var requirePublicationAcceptable bool
 	command := &cobra.Command{
 		Use:   "verify",
 		Short: "Strictly verify an actual target evidence bundle",
 		Args:  cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
-			if requireVerified &&
+			if requireVerified && requirePublicationAcceptable {
+				return errors.New(
+					"choose only one of --require-verified or --require-publication-acceptable",
+				)
+			}
+			if (requireVerified || requirePublicationAcceptable) &&
 				(options.ExpectedCLIRevision == "" ||
 					options.ExpectedCatalogRevision == "" ||
 					options.ExpectedPlanDigest == "" ||
-					options.ExpectedTargetID == "") {
+					options.ExpectedTargetID == "" ||
+					options.ExpectedBinarySHA256 == "") {
 				return errors.New(
-					"--require-verified also requires expected CLI, catalog, plan digest, and target",
+					"strict publication verification requires expected CLI, catalog, plan digest, target, and binary SHA-256",
 				)
 			}
+			options.RequirePublicationAcceptable = requirePublicationAcceptable
 			if options.MaxAge > 0 {
 				options.Now = time.Now().UTC()
 			}
@@ -147,6 +161,12 @@ func newVerifyCommand(stdout io.Writer) *cobra.Command {
 		"",
 		"actual target ID expected by the publication lane",
 	)
+	flags.StringVar(
+		&options.ExpectedBinarySHA256,
+		"expected-binary-sha256",
+		"",
+		"exact release binary SHA-256 expected by the publication lane",
+	)
 	flags.DurationVar(
 		&options.MaxAge,
 		"max-age",
@@ -158,6 +178,12 @@ func newVerifyCommand(stdout io.Writer) *cobra.Command {
 		"require-verified",
 		false,
 		"fail unless recomputed actual target status is verified",
+	)
+	flags.BoolVar(
+		&requirePublicationAcceptable,
+		"require-publication-acceptable",
+		false,
+		"accept verified evidence or blocked evidence whose only remaining outcomes are honest manual actions",
 	)
 	_ = command.MarkFlagRequired("bundle")
 	return command

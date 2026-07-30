@@ -20,8 +20,9 @@ import (
 )
 
 const (
-	dockerKeyURL = "https://download.docker.com/linux/ubuntu/gpg"
-	dockerKeySHA = "1500c1f56fa9e26b9b8f42452a553675796ade0807cdce11975eb98170b3a570"
+	dockerGuestLocalEndpoint = "unix:///var/run/docker.sock"
+	dockerKeyURL             = "https://download.docker.com/linux/ubuntu/gpg"
+	dockerKeySHA             = "1500c1f56fa9e26b9b8f42452a553675796ade0807cdce11975eb98170b3a570"
 )
 
 type Docker struct {
@@ -43,8 +44,10 @@ func (docker Docker) Observe(
 	if getenv == nil {
 		getenv = os.Getenv
 	}
+	// Reject contradictory ambient state even though daemon-facing commands
+	// also carry the higher-precedence --host flag below.
 	if endpoint := strings.TrimSpace(getenv("DOCKER_HOST")); endpoint != "" &&
-		endpoint != "unix:///var/run/docker.sock" {
+		endpoint != dockerGuestLocalEndpoint {
 		return adapters.Observation{
 			State:  adapters.StateConflict,
 			Detail: "DOCKER_HOST points outside the guest-local Docker socket",
@@ -53,13 +56,13 @@ func (docker Docker) Observe(
 	if docker.Delegate == nil {
 		return adapters.Observation{}, errors.New("Docker delegate is required")
 	}
-	return docker.Delegate.Observe(ctx, action)
+	return docker.Delegate.Observe(ctx, guestLocalDockerAction(action))
 }
 
 func (docker Docker) Apply(
 	ctx context.Context,
 	action planning.Action,
-) error {
+) (resultErr error) {
 	if docker.Port == nil {
 		return errors.New("Docker transport port is required")
 	}
@@ -77,7 +80,14 @@ func (docker Docker) Apply(
 	if err != nil {
 		return fmt.Errorf("create Docker repository temporary directory: %w", err)
 	}
-	defer os.RemoveAll(temporaryDirectory)
+	defer func() {
+		if err := os.RemoveAll(temporaryDirectory); err != nil {
+			resultErr = errors.Join(
+				resultErr,
+				fmt.Errorf("remove Docker repository temporary directory: %w", err),
+			)
+		}
+	}()
 	keyPath := filepath.Join(temporaryDirectory, "docker.asc")
 	listPath := filepath.Join(temporaryDirectory, "docker.list")
 	client := docker.Client
@@ -100,7 +110,14 @@ func (docker Docker) Apply(
 	if err != nil {
 		return fmt.Errorf("download Docker repository key: %w", err)
 	}
-	defer response.Body.Close()
+	defer func() {
+		if err := response.Body.Close(); err != nil {
+			resultErr = errors.Join(
+				resultErr,
+				fmt.Errorf("close Docker repository key response body: %w", err),
+			)
+		}
+	}()
 	if response.StatusCode != http.StatusOK {
 		return fmt.Errorf("download Docker repository key: HTTP %s", response.Status)
 	}
@@ -202,18 +219,36 @@ func (docker Docker) Verify(
 	if docker.Port == nil {
 		return errors.New("Docker transport port is required")
 	}
-	if err := docker.Delegate.Verify(ctx, action); err != nil {
+	if err := docker.Delegate.Verify(ctx, guestLocalDockerAction(action)); err != nil {
 		return err
 	}
-	// The delegate already executes the catalog's docker version and
-	// hello-world checks. Compose is an additional contract of this adapter.
+	// The delegate already executes the catalog's Docker client/daemon checks.
+	// Compose is an additional read-only contract of this adapter.
 	if _, err := docker.Port.Run(ctx, transport.Command{
 		Executable: "docker",
-		Arguments:  []string{"compose", "version"},
+		Arguments: []string{
+			"--host", dockerGuestLocalEndpoint, "compose", "version",
+		},
 	}); err != nil {
 		return fmt.Errorf("verify guest-local Docker Compose: %w", err)
 	}
 	return nil
+}
+
+func guestLocalDockerAction(action planning.Action) planning.Action {
+	local := action
+	local.Verification = make([][]string, len(action.Verification))
+	for index, command := range action.Verification {
+		local.Verification[index] = slices.Clone(command)
+		if len(command) == 0 || command[0] != "docker" {
+			continue
+		}
+		local.Verification[index] = append(
+			[]string{"docker", "--host", dockerGuestLocalEndpoint},
+			command[1:]...,
+		)
+	}
+	return local
 }
 
 func dockerArchitecture(architecture string) (string, error) {

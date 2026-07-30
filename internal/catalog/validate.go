@@ -223,6 +223,32 @@ func validateVersionPolicy(
 				fmt.Sprintf("lock key %q requires version, source, and provenance", key),
 			}
 		}
+		bunPackage, usesBun, packageProblem := componentBunPackage(component)
+		if packageProblem != "" {
+			return []string{packageProblem}
+		}
+		switch {
+		case usesBun && entry.NPM == nil:
+			return []string{
+				fmt.Sprintf(
+					"lock key %q requires exact npm tarball, SRI, and SHA-256",
+					key,
+				),
+			}
+		case usesBun:
+			if err := validateNPMArtifact(*entry.NPM, bunPackage, entry.Version); err != nil {
+				return []string{
+					fmt.Sprintf("lock key %q %v", key, err),
+				}
+			}
+		case entry.NPM != nil:
+			return []string{
+				fmt.Sprintf(
+					"lock key %q cannot declare npm tarball without a Bun installer",
+					key,
+				),
+			}
+		}
 		for platform, artifact := range entry.Artifacts {
 			if artifact.URL == "" || len(artifact.SHA256) != 64 ||
 				(artifact.Format != "binary" &&
@@ -250,6 +276,29 @@ func validateVersionPolicy(
 		}
 	}
 	return nil
+}
+
+func componentBunPackage(component Component) (string, bool, string) {
+	var packageName string
+	for _, target := range TargetKinds {
+		support := component.Targets[target]
+		if support.Status != StatusSupported || support.Installer != "bun" {
+			continue
+		}
+		if packageName == "" {
+			packageName = support.Package
+			continue
+		}
+		if support.Package != packageName {
+			return "", true, fmt.Sprintf(
+				"component %q uses inconsistent Bun packages %q and %q",
+				component.ID,
+				packageName,
+				support.Package,
+			)
+		}
+	}
+	return packageName, packageName != "", ""
 }
 
 func installerAllowed(target TargetKind, installer string) bool {

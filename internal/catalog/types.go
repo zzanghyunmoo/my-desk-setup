@@ -73,7 +73,14 @@ type LockEntry struct {
 	Version    string              `yaml:"version" json:"version"`
 	Source     string              `yaml:"source" json:"source"`
 	Provenance string              `yaml:"provenance" json:"provenance"`
+	NPM        *NPMArtifact        `yaml:"npm,omitempty" json:"npm,omitempty"`
 	Artifacts  map[string]Artifact `yaml:"artifacts,omitempty" json:"artifacts,omitempty"`
+}
+
+type NPMArtifact struct {
+	Tarball   string `yaml:"tarball" json:"tarball"`
+	Integrity string `yaml:"integrity" json:"integrity"`
+	SHA256    string `yaml:"sha256" json:"sha256"`
 }
 
 type Artifact struct {

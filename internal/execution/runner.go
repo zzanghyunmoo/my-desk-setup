@@ -29,6 +29,35 @@ func (runner Runner) Apply(
 	expectedDigest,
 	stateRoot string,
 ) (state.Receipt, error) {
+	return runner.apply(ctx, plan, expectedDigest, stateRoot, nil)
+}
+
+func (runner Runner) ApplyWithTargetLease(
+	ctx context.Context,
+	plan planning.Plan,
+	expectedDigest,
+	stateRoot string,
+	targetLease *state.Lock,
+) (state.Receipt, error) {
+	if targetLease == nil {
+		return state.Receipt{}, errors.New("target writer lease is required")
+	}
+	return runner.apply(
+		ctx,
+		plan,
+		expectedDigest,
+		stateRoot,
+		targetLease,
+	)
+}
+
+func (runner Runner) apply(
+	ctx context.Context,
+	plan planning.Plan,
+	expectedDigest,
+	stateRoot string,
+	targetLease *state.Lock,
+) (result state.Receipt, resultErr error) {
 	if err := VerifyPlan(plan, expectedDigest); err != nil {
 		return state.Receipt{}, err
 	}
@@ -68,11 +97,28 @@ func (runner Runner) Apply(
 	if err := paths.Ensure(); err != nil {
 		return state.Receipt{}, err
 	}
-	lock, err := state.Acquire(paths.Lock)
-	if err != nil {
-		return state.Receipt{}, err
+	if targetLease != nil {
+		if !targetLease.Holds(paths.Lock) {
+			return state.Receipt{}, fmt.Errorf(
+				"target writer lease does not hold %s",
+				paths.Lock,
+			)
+		}
+	} else {
+		targetLease, err = state.Acquire(paths.Lock)
+		if err != nil {
+			return state.Receipt{}, err
+		}
+		defer func() {
+			if err := targetLease.Release(); err != nil {
+				result = state.Receipt{}
+				resultErr = errors.Join(
+					resultErr,
+					fmt.Errorf("release target writer lease: %w", err),
+				)
+			}
+		}()
 	}
-	defer lock.Release()
 
 	startedAt := runner.Now().UTC()
 	journal := state.NewJournal(paths.Journal)
@@ -205,7 +251,8 @@ func (runner Runner) Apply(
 	}
 
 	receipt := state.Receipt{
-		PlanDigest: plan.Digest, CatalogRevision: plan.CatalogRevision,
+		SchemaVersion: state.ReceiptSchema,
+		PlanDigest:    plan.Digest, CatalogRevision: plan.CatalogRevision,
 		TargetID: plan.Target.ID.String(), Complete: complete(outcomes),
 		StartedAt: startedAt, FinishedAt: runner.Now().UTC(), Outcomes: outcomes,
 	}

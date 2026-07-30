@@ -21,17 +21,27 @@ Use the self-hosted `Actual target` lane in
 scripts/certify-target.sh \
   --mds /absolute/path/to/mds \
   --target lima-guest:mds \
-  --output target-evidence \
-  --profile owner
+  --output target-evidence/run-manual-001 \
+  --expected-binary-sha256 '<release-binary-sha256>' \
+  --all
 
 scripts/verify-target-evidence.sh \
-  --bundle target-evidence \
+  --bundle target-evidence/run-manual-001 \
   --expected-cli-revision '0.1.0 (commit=<commit>, date=<date>)' \
   --expected-catalog-revision 'sha256:<catalog>' \
-  --expected-plan-digest 'sha256:<plan>' \
+  --expected-plan-digest 'sha256:<target-eligible-all-plan>' \
   --expected-target lima-guest:mds \
-  --require-verified
+  --expected-binary-sha256 '<release-binary-sha256>' \
+  --max-age 45m \
+  --require-publication-acceptable
 ```
+
+The workflow appends the GitHub run ID and attempt to its target-local output
+parent. Artifact names bind target kind, expected commit, run ID, and attempt.
+Capture may return non-zero for an honestly blocked manual action, but strict
+verification must still pass. Missing, stale, duplicate, unsupported, planned
+unready/conflict, wrong-target, and wrong-binary evidence remain failures while
+artifact upload preserves the attempted result for diagnosis.
 
 Authentication remains user-owned. Neither command accepts auth/login/token
 arguments, and the verifier rejects credential-shaped content, auth commands,

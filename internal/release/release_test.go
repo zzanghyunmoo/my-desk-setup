@@ -84,7 +84,8 @@ func TestBuildProducesDeterministicStrictRelease(t *testing.T) {
 	if firstManifest.SchemaVersion != SchemaVersion ||
 		firstManifest.Version != options.Version ||
 		firstManifest.Commit != options.Commit ||
-		firstManifest.Date != options.Date.Format(time.RFC3339) {
+		firstManifest.Date != options.Date.Format(time.RFC3339) ||
+		!strings.HasPrefix(firstManifest.CatalogRevision, "sha256:") {
 		t.Fatalf("manifest identity = %#v", firstManifest)
 	}
 	if got, want := len(firstManifest.Artifacts), 6; got != want {
@@ -101,6 +102,21 @@ func TestBuildProducesDeterministicStrictRelease(t *testing.T) {
 		t,
 		filepath.Join(first, fmt.Sprintf("mds_0.1.0_%s_%s.tar.gz", runtime.GOOS, runtime.GOARCH)),
 	)
+	nativeDigest, _ := testFileIdentity(t, nativeBinary)
+	var nativeArtifact Artifact
+	for _, artifact := range firstManifest.Artifacts {
+		if artifact.OS == runtime.GOOS &&
+			artifact.Architecture == runtime.GOARCH {
+			nativeArtifact = artifact
+		}
+	}
+	if nativeArtifact.BinarySHA256 != nativeDigest {
+		t.Fatalf(
+			"native binary digest = %s, manifest = %s",
+			nativeDigest,
+			nativeArtifact.BinarySHA256,
+		)
+	}
 	output, runErr := runVersion(nativeBinary)
 	if runErr != nil {
 		t.Fatalf("run released binary --version: %v\n%s", runErr, output)
@@ -109,6 +125,20 @@ func TestBuildProducesDeterministicStrictRelease(t *testing.T) {
 		if !strings.Contains(output, value) {
 			t.Fatalf("released --version = %q, want %q", output, value)
 		}
+	}
+}
+
+func TestVerifyRejectsArchiveBinarySubstitution(t *testing.T) {
+	dist := buildFixtureRelease(t)
+	archive := filepath.Join(dist, "mds_0.1.0_darwin_amd64.tar.gz")
+	writeTarGz(t, archive, []tar.Header{{
+		Name: "mds", Mode: 0o755, Size: 3, Typeflag: tar.TypeReg,
+	}})
+	refreshArtifactIdentity(t, dist, filepath.Base(archive))
+
+	if _, err := Verify(dist); err == nil ||
+		!strings.Contains(err.Error(), "binary checksum") {
+		t.Fatalf("Verify(binary substitution) error = %v", err)
 	}
 }
 
@@ -281,12 +311,20 @@ func extractArchiveBinary(t *testing.T, path string) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer file.Close()
+	defer func() {
+		if err := file.Close(); err != nil {
+			t.Errorf("close archive fixture: %v", err)
+		}
+	}()
 	compressed, err := gzip.NewReader(file)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer compressed.Close()
+	defer func() {
+		if err := compressed.Close(); err != nil {
+			t.Errorf("close compressed fixture: %v", err)
+		}
+	}()
 	reader := tar.NewReader(compressed)
 	header, err := reader.Next()
 	if err != nil {
@@ -298,7 +336,7 @@ func extractArchiveBinary(t *testing.T, path string) string {
 		t.Fatal(err)
 	}
 	if _, err := io.Copy(target, reader); err != nil {
-		target.Close()
+		_ = target.Close()
 		t.Fatal(err)
 	}
 	if err := target.Close(); err != nil {
@@ -428,7 +466,11 @@ func testFileIdentity(t *testing.T, path string) (string, int64) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer file.Close()
+	defer func() {
+		if err := file.Close(); err != nil {
+			t.Errorf("close identity fixture: %v", err)
+		}
+	}()
 	hash := sha256.New()
 	size, err := io.Copy(hash, file)
 	if err != nil {

@@ -16,6 +16,7 @@ type Candidate struct {
 	Version     string                      `json:"version"`
 	Source      string                      `json:"source"`
 	Provenance  string                      `json:"provenance"`
+	NPM         *catalog.NPMArtifact        `json:"npm,omitempty"`
 	Artifacts   map[string]catalog.Artifact `json:"artifacts,omitempty"`
 }
 

@@ -32,6 +32,7 @@ type Manifest struct {
 	CapturedAtUnix  json.Number      `json:"captured_at_unix"`
 	Target          TargetIdentity   `json:"target"`
 	CLI             CLIIdentity      `json:"cli"`
+	BinarySHA256    string           `json:"binary_sha256"`
 	CatalogRevision string           `json:"catalog_revision"`
 	PlanDigest      string           `json:"plan_digest"`
 	Components      []ComponentCheck `json:"components"`
@@ -78,14 +79,19 @@ type CertifyRequest struct {
 	All        bool
 	Profile    string
 	Components []string
-	Now        func() time.Time
+	// ExpectedBinarySHA256 binds capture to a release artifact before the
+	// target executes the binary.
+	ExpectedBinarySHA256 string
+	Now                  func() time.Time
 }
 
 type VerifyOptions struct {
-	ExpectedCLIRevision     string
-	ExpectedCatalogRevision string
-	ExpectedPlanDigest      string
-	ExpectedTargetID        string
-	Now                     time.Time
-	MaxAge                  time.Duration
+	ExpectedCLIRevision          string
+	ExpectedCatalogRevision      string
+	ExpectedPlanDigest           string
+	ExpectedTargetID             string
+	ExpectedBinarySHA256         string
+	RequirePublicationAcceptable bool
+	Now                          time.Time
+	MaxAge                       time.Duration
 }

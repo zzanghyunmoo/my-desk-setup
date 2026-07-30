@@ -31,6 +31,26 @@
             "type": "string",
             "format": "uri"
           },
+          "npm": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["tarball", "integrity", "sha256"],
+            "properties": {
+              "tarball": {
+                "type": "string",
+                "format": "uri",
+                "pattern": "^https://registry\\.npmjs\\.org/.+\\.tgz$"
+              },
+              "integrity": {
+                "type": "string",
+                "pattern": "^sha512-[A-Za-z0-9+/]{86}==$"
+              },
+              "sha256": {
+                "type": "string",
+                "pattern": "^[a-f0-9]{64}$"
+              }
+            }
+          },
           "artifacts": {
             "type": "object",
             "propertyNames": {

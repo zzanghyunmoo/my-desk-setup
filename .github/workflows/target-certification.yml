@@ -29,6 +29,10 @@ on:
         description: Explicit target ID, for example lima-guest:mds
         required: true
         type: string
+      expected_commit:
+        description: Exact release commit checked out for certification
+        required: true
+        type: string
       expected_cli_revision:
         description: Exact reviewed CLI revision from the release
         required: true
@@ -38,11 +42,15 @@ on:
         required: true
         type: string
       expected_plan_digest:
-        description: Exact reviewed owner-profile plan digest for this target
+        description: Exact reviewed target-eligible all-plan digest for this target
+        required: true
+        type: string
+      expected_binary_sha256:
+        description: SHA-256 of the exact release mds binary on this target
         required: true
         type: string
       evidence_output:
-        description: New target-local evidence directory
+        description: Target-local parent directory for run-unique evidence
         required: true
         default: target-evidence
         type: string
@@ -87,35 +95,62 @@ jobs:
       - self-hosted
       - ${{ inputs.runner_label }}
     environment: target-certification
+    env:
+      EVIDENCE_OUTPUT: ${{ format('{0}/run-{1}-attempt-{2}', inputs.evidence_output, github.run_id, github.run_attempt) }}
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.expected_commit }}
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
           cache: true
+      - name: Validate immutable certification identity
+        id: certification-identity
+        shell: bash
+        env:
+          EXPECTED_COMMIT: ${{ inputs.expected_commit }}
+          TARGET_ID: ${{ inputs.target_id }}
+        run: |
+          if [[ ! "$EXPECTED_COMMIT" =~ ^[0-9a-f]{40}$|^[0-9a-f]{64}$ ]]; then
+            echo "expected_commit must be a full lowercase commit SHA" >&2
+            exit 2
+          fi
+          test "$(git rev-parse HEAD)" = "$EXPECTED_COMMIT"
+          case "$TARGET_ID" in
+            macos-host:local) target_kind=macos-host ;;
+            windows-host:local) target_kind=windows-host ;;
+            wsl-guest:Ubuntu-26.04) target_kind=wsl-guest ;;
+            lima-guest:mds) target_kind=lima-guest ;;
+            *)
+              echo "unsupported promotion target ID: $TARGET_ID" >&2
+              exit 2
+              ;;
+          esac
+          echo "target_kind=$target_kind" >> "$GITHUB_OUTPUT"
       - name: Capture actual target evidence
-        id: certify
         continue-on-error: true
         shell: bash
         env:
           MDS_PATH: ${{ inputs.mds_path }}
           TARGET_ID: ${{ inputs.target_id }}
-          EVIDENCE_OUTPUT: ${{ inputs.evidence_output }}
+          EXPECTED_BINARY_SHA256: ${{ inputs.expected_binary_sha256 }}
         run: |
           scripts/certify-target.sh \
             --mds "$MDS_PATH" \
             --target "$TARGET_ID" \
             --output "$EVIDENCE_OUTPUT" \
-            --profile owner
+            --expected-binary-sha256 "$EXPECTED_BINARY_SHA256" \
+            --all
       - name: Verify against reviewed release and plan
         if: always()
         shell: bash
         env:
-          EVIDENCE_OUTPUT: ${{ inputs.evidence_output }}
           EXPECTED_CLI_REVISION: ${{ inputs.expected_cli_revision }}
           EXPECTED_CATALOG_REVISION: ${{ inputs.expected_catalog_revision }}
           EXPECTED_PLAN_DIGEST: ${{ inputs.expected_plan_digest }}
+          EXPECTED_BINARY_SHA256: ${{ inputs.expected_binary_sha256 }}
           TARGET_ID: ${{ inputs.target_id }}
         run: |
           scripts/verify-target-evidence.sh \
@@ -124,12 +159,14 @@ jobs:
             --expected-catalog-revision "$EXPECTED_CATALOG_REVISION" \
             --expected-plan-digest "$EXPECTED_PLAN_DIGEST" \
             --expected-target "$TARGET_ID" \
-            --require-verified
-      - name: Preserve honest blocked or verified evidence
+            --expected-binary-sha256 "$EXPECTED_BINARY_SHA256" \
+            --max-age 45m \
+            --require-publication-acceptable
+      - name: Preserve honest certification output
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: target-evidence-${{ github.run_id }}
-          path: ${{ inputs.evidence_output }}
+          name: target-evidence-${{ steps.certification-identity.outputs.target_kind }}-${{ inputs.expected_commit }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ env.EVIDENCE_OUTPUT }}
           if-no-files-found: warn
           retention-days: 30

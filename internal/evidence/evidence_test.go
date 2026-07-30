@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -14,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/zzanghyunmoo/my-desk-setup/internal/adapters"
 	"github.com/zzanghyunmoo/my-desk-setup/internal/doctor"
 	"github.com/zzanghyunmoo/my-desk-setup/internal/planning"
 	"github.com/zzanghyunmoo/my-desk-setup/internal/target"
@@ -43,6 +45,52 @@ func TestCertifyAndVerifyReadyActualTarget(t *testing.T) {
 	}
 	if manifest.CLI.Commit != fixtureCommit || manifest.CLI.Version != "0.1.0" {
 		t.Fatalf("CLI identity = %+v", manifest.CLI)
+	}
+}
+
+func TestCertifyBlocksFunctionalVerificationFailure(t *testing.T) {
+	adapter := &evidenceDoctorAdapter{
+		verifyError: errors.New("runtime functional probe failed"),
+	}
+	bundle := certifyFixtureWithReport(
+		t,
+		true,
+		func(plan planning.Plan, _ doctor.Report) doctor.Report {
+			report, err := doctor.Run(context.Background(), plan, adapter)
+			if err != nil {
+				t.Fatalf("doctor.Run(): %v", err)
+			}
+			return report
+		},
+	)
+
+	manifest, err := Verify(bundle, VerifyOptions{
+		ExpectedCLIRevision:     fixtureCLIRevision,
+		ExpectedCatalogRevision: fixtureCatalogRevision,
+	})
+	if err != nil {
+		t.Fatalf("Verify(): %v", err)
+	}
+	if manifest.Status != StatusBlocked {
+		t.Fatalf("status = %q, want %q", manifest.Status, StatusBlocked)
+	}
+	var snapshot DoctorSnapshot
+	readJSON(t, filepath.Join(bundle, DoctorFile), &snapshot)
+	if snapshot.Ready || len(snapshot.Checks) != 1 {
+		t.Fatalf("doctor snapshot = %+v, want one unready check", snapshot)
+	}
+	check := snapshot.Checks[0]
+	if check.Status != "unready" ||
+		check.ReasonCode != "functional-verification-failed" ||
+		check.VerifiedVersion != "" {
+		t.Fatalf("doctor check = %+v, want unverified functional failure", check)
+	}
+	if adapter.applyCalls != 0 || adapter.verifyCalls != 1 {
+		t.Fatalf(
+			"doctor adapter calls: apply=%d verify=%d, want apply=0 verify=1",
+			adapter.applyCalls,
+			adapter.verifyCalls,
+		)
 	}
 }
 
@@ -304,6 +352,20 @@ func TestTargetIdentityCompletenessKeepsPartialTargetsBlocked(t *testing.T) {
 }
 
 func certifyFixture(t *testing.T, ready bool) string {
+	return certifyFixtureWithReport(
+		t,
+		ready,
+		func(_ planning.Plan, report doctor.Report) doctor.Report {
+			return report
+		},
+	)
+}
+
+func certifyFixtureWithReport(
+	t *testing.T,
+	ready bool,
+	transform func(planning.Plan, doctor.Report) doctor.Report,
+) string {
 	t.Helper()
 	if runtime.GOOS == "windows" {
 		t.Skip("the focused fake binary fixture uses a POSIX executable")
@@ -358,6 +420,7 @@ func certifyFixture(t *testing.T, ready bool) string {
 		report.Checks[0].InstalledVersion = ""
 		report.Checks[0].VerifiedVersion = ""
 	}
+	report = transform(plan, report)
 
 	planPath := filepath.Join(root, "fixture-plan.json")
 	doctorPath := filepath.Join(root, "fixture-doctor.json")
@@ -400,13 +463,44 @@ esac
 		t.Fatalf("Certify(): %v", err)
 	}
 	expectedStatus := StatusVerified
-	if !ready {
+	if !report.Ready {
 		expectedStatus = StatusBlocked
 	}
 	if manifest.Status != expectedStatus {
 		t.Fatalf("Certify() status = %q, want %q", manifest.Status, expectedStatus)
 	}
 	return bundle
+}
+
+type evidenceDoctorAdapter struct {
+	applyCalls  int
+	verifyCalls int
+	verifyError error
+}
+
+func (adapter *evidenceDoctorAdapter) Observe(
+	_ context.Context,
+	action planning.Action,
+) (adapters.Observation, error) {
+	return adapters.Observation{
+		State: adapters.StateReady, InstalledVersion: action.Version,
+	}, nil
+}
+
+func (adapter *evidenceDoctorAdapter) Apply(
+	context.Context,
+	planning.Action,
+) error {
+	adapter.applyCalls++
+	return nil
+}
+
+func (adapter *evidenceDoctorAdapter) Verify(
+	context.Context,
+	planning.Action,
+) error {
+	adapter.verifyCalls++
+	return adapter.verifyError
 }
 
 func rewriteManifest(t *testing.T, root string, mutate func(*Manifest)) {

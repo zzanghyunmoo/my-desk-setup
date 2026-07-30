@@ -95,18 +95,27 @@ root pointer가 child feature head, merge commit 또는 복구할 old commit 중
 - Windows:
   `%LOCALAPPDATA%\my-desk-setup\state`
 
-target ID마다 별도 hashed directory를 사용한다.
+target ID마다 별도 hashed directory를 사용하고, catalog 경로별 lease는 state
+root에 둔다.
 
 ```text
-<state-root>/<target-id-and-hash>/
-├── writer.lock
-├── journal.jsonl
-└── receipts/
-    └── sha256-<plan-digest>.json
+<state-root>/
+├── catalog-<catalog-path-hash>.writer.lock
+└── <target-id-and-hash>/
+    ├── writer.lock
+    ├── journal.jsonl
+    └── receipts/
+        ├── sha256-<plan-digest>.json
+        └── sha256-<plan-digest>.partial.json
 ```
 
 directory는 owner-only, file은 regular non-symlink여야 한다. `--state-root`에
 filesystem root, symlink 또는 공유 writable directory를 사용하지 않는다.
+writer lock file은 성공 뒤에도 남지만 advisory lease는 process 종료와 함께
+자동 해제된다. 파일 존재 자체를 active writer로 해석하거나 수동 삭제하지 않는다.
+digest별 `.json`은 마지막 complete receipt이고 `.partial.json`은 현재 incomplete
+재시도 결과다. incomplete 결과는 complete receipt를 대체하지 않으며, 같은 digest가
+나중에 complete로 끝난 뒤에만 대응하는 partial receipt를 삭제한다.
 
 ## Apply 중단과 재개
 
@@ -179,7 +188,8 @@ commit이나 rollback은 사용자가 소유하며 `mds`가 자동으로 history
 ## Evidence recovery
 
 target evidence bundle은 source commit, CLI revision, catalog revision,
-plan digest와 target fingerprint를 함께 보존한다. exact file set은
+plan digest, target fingerprint와 실제 실행한 on-disk binary SHA-256을 함께
+보존한다. exact file set은
 `manifest.json`, `plan.json`, bounded `doctor.json`, `checksums.txt`다.
 fixture와 actual directory를 섞거나 blocked evidence를 verified directory로
 복사하지 않는다.
@@ -188,7 +198,10 @@ evidence를 다시 수집할 때는 production artifact checksum부터 재검증
 target에서 전체 certification을 새로 실행한다. verifier 통과는 bundle
 무결성을 뜻하며 target outcome이 `blocked`인 경우까지 성공으로 바꾸지 않는다.
 
-publication gate에서는 expected identity를 명시하고 verified 상태도 요구한다.
+publication gate에서는 expected identity와 binary checksum을 모두 명시한다.
+`blocked`는 `verified`로 정규화하지 않는다. 다만 완전한 표준 target에서 남은
+모든 outcome이 정직한 `action-required`인 경우에만 manual exception으로
+publication-acceptable이다.
 
 ```sh
 scripts/verify-target-evidence.sh \
@@ -197,5 +210,13 @@ scripts/verify-target-evidence.sh \
   --expected-catalog-revision 'sha256:<expected-catalog-revision>' \
   --expected-plan-digest 'sha256:<expected-plan-digest>' \
   --expected-target '<target-id>' \
-  --require-verified
+  --expected-binary-sha256 '<release-binary-sha256>' \
+  --max-age 24h \
+  --require-publication-acceptable
 ```
+
+tag promotion은 `macos-host:local`, `windows-host:local`,
+`wsl-guest:Ubuntu-26.04`, `lima-guest:mds` bundle을 각각 정확히 하나 요구한다.
+누락, 중복, stale, commit/catalog/plan/target/binary mismatch가 있으면 새 release
+publication을 중단한다. 성공한 `release-promotion.json`은 GitHub Release의 영구
+asset이므로 임시 Actions artifact가 만료된 뒤에도 gate 결과를 확인할 수 있다.

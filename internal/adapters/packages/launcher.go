@@ -3,11 +3,11 @@ package packages
 import (
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 
 	"github.com/zzanghyunmoo/my-desk-setup/internal/adapters"
+	"github.com/zzanghyunmoo/my-desk-setup/internal/adapters/managedfile"
 	"github.com/zzanghyunmoo/my-desk-setup/internal/catalog"
 	"github.com/zzanghyunmoo/my-desk-setup/internal/planning"
 )
@@ -70,27 +70,17 @@ func (adapter Adapter) launcherSpecs(
 
 func observeLaunchers(specs []launcherSpec) adapters.Observation {
 	for _, spec := range specs {
-		info, err := os.Lstat(spec.path)
-		if errors.Is(err, os.ErrNotExist) {
+		inspection := managedfile.Inspect(spec.path, spec.content)
+		switch inspection.State {
+		case managedfile.StateMissing:
 			return adapters.Observation{State: adapters.StateAbsent}
-		}
-		if err != nil {
+		case managedfile.StateConflict:
 			return adapters.Observation{
-				State:  adapters.StateConflict,
-				Detail: "inspect managed launcher: " + err.Error(),
-			}
-		}
-		if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
-			return adapters.Observation{
-				State:  adapters.StateConflict,
-				Detail: "managed launcher destination is not a regular file",
-			}
-		}
-		content, err := os.ReadFile(spec.path)
-		if err != nil || string(content) != spec.content {
-			return adapters.Observation{
-				State:  adapters.StateConflict,
-				Detail: "existing launcher is user-owned; it will not be overwritten",
+				State: adapters.StateConflict,
+				Detail: managedLauncherConflictDetail(
+					inspection.Conflict,
+					inspection.Err,
+				),
 			}
 		}
 	}
@@ -99,48 +89,29 @@ func observeLaunchers(specs []launcherSpec) adapters.Observation {
 
 func publishLaunchers(specs []launcherSpec) error {
 	for _, spec := range specs {
-		observation := observeLaunchers([]launcherSpec{spec})
-		switch observation.State {
-		case adapters.StateReady:
-			continue
-		case adapters.StateConflict:
-			return errors.New(observation.Detail)
-		}
-		if err := ensureSafeDirectory(filepath.Dir(spec.path)); err != nil {
-			return err
-		}
-		temporary, err := os.CreateTemp(filepath.Dir(spec.path), ".mds-launcher-*")
-		if err != nil {
-			return fmt.Errorf("create launcher temporary file: %w", err)
-		}
-		temporaryPath := temporary.Name()
-		cleanup := func() {
-			_ = temporary.Close()
-			_ = os.Remove(temporaryPath)
-		}
-		if err := temporary.Chmod(0o700); err != nil {
-			cleanup()
-			return fmt.Errorf("chmod launcher: %w", err)
-		}
-		if _, err := temporary.WriteString(spec.content); err != nil {
-			cleanup()
-			return fmt.Errorf("write launcher: %w", err)
-		}
-		if err := temporary.Sync(); err != nil {
-			cleanup()
-			return fmt.Errorf("sync launcher: %w", err)
-		}
-		if err := temporary.Close(); err != nil {
-			_ = os.Remove(temporaryPath)
-			return fmt.Errorf("close launcher: %w", err)
-		}
-		if err := os.Link(temporaryPath, spec.path); err != nil {
-			_ = os.Remove(temporaryPath)
+		if err := managedfile.Publish(spec.path, spec.content); err != nil {
+			var conflict *managedfile.ConflictError
+			if errors.As(err, &conflict) {
+				return errors.New(
+					managedLauncherConflictDetail(conflict.Kind, conflict.Err),
+				)
+			}
 			return fmt.Errorf("publish launcher without overwrite: %w", err)
-		}
-		if err := os.Remove(temporaryPath); err != nil {
-			return fmt.Errorf("remove launcher temporary file: %w", err)
 		}
 	}
 	return nil
+}
+
+func managedLauncherConflictDetail(
+	conflict managedfile.ConflictKind,
+	err error,
+) string {
+	switch conflict {
+	case managedfile.ConflictInspect:
+		return "inspect managed launcher: " + err.Error()
+	case managedfile.ConflictNonRegular:
+		return "managed launcher destination is not a regular file"
+	default:
+		return "existing launcher is user-owned; it will not be overwritten"
+	}
 }

@@ -34,16 +34,24 @@ func newApplyCommand(streams Streams, system Runtime) *cobra.Command {
 	command := &cobra.Command{
 		Use:   "apply",
 		Short: "Apply one reviewed plan to the current target",
-		Args:  cobra.NoArgs,
+		Args:  noPositionalArgs,
 		RunE: func(command *cobra.Command, _ []string) error {
 			if err := validateOutputFormat(format); err != nil {
 				return err
 			}
+			if selection.interactive && format == "json" {
+				return invalidInput(fmt.Errorf(
+					"--interactive cannot share stdout with --format json",
+				))
+			}
 			if expectedDigest == "" {
-				return errors.New("--plan-digest is required")
+				return invalidInput(errors.New("--plan-digest is required"))
 			}
 			environment, err := loadEnvironment(catalogPath)
 			if err != nil {
+				if catalogPath != "" {
+					return invalidInput(err)
+				}
 				return err
 			}
 			var interactive []string
@@ -63,7 +71,7 @@ func newApplyCommand(streams Streams, system Runtime) *cobra.Command {
 			}
 			request, err := selection.selection(interactive)
 			if err != nil {
-				return err
+				return invalidInput(err)
 			}
 			facts, err := resolveTarget(command.Context(), targetID, system, true)
 			if err != nil {
@@ -77,7 +85,10 @@ func newApplyCommand(streams Streams, system Runtime) *cobra.Command {
 			facts.CatalogRevision = revision
 			plan, err := planning.Build(environment, facts, request)
 			if err != nil {
-				return err
+				return invalidInput(err)
+			}
+			if err := execution.VerifyPlan(plan, expectedDigest); err != nil {
+				return stalePlan(err)
 			}
 			home, err := runtimeHome(system)
 			if err != nil {
@@ -105,7 +116,7 @@ func newApplyCommand(streams Streams, system Runtime) *cobra.Command {
 					}
 					observed, err := system.ObserveTarget(ctx, planned)
 					if err != nil {
-						return target.Facts{}, err
+						return target.Facts{}, unreachable(err)
 					}
 					observed.CLIRevision = version.String()
 					observed.CatalogRevision = revision
@@ -135,7 +146,9 @@ func newApplyCommand(streams Streams, system Runtime) *cobra.Command {
 				return fmt.Errorf("unsupported format %q; use human or json", format)
 			}
 			if !receipt.Complete {
-				return errors.New("apply completed with unresolved component outcomes")
+				return actionRequired(
+					errors.New("apply completed with unresolved component outcomes"),
+				)
 			}
 			return nil
 		},

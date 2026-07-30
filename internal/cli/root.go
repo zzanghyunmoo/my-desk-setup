@@ -59,13 +59,20 @@ func NewRoot(streams Streams, system Runtime) *cobra.Command {
 		SilenceErrors: true,
 		Version:       version.String(),
 	}
+	root.SetFlagErrorFunc(rejectFlagError)
 	root.SetIn(streams.Input)
 	root.SetOut(streams.Output)
 	root.SetErr(streams.Error)
-	root.AddCommand(newPlanCommand(streams, system))
-	root.AddCommand(newApplyCommand(streams, system))
-	root.AddCommand(newDoctorCommand(streams, system))
-	root.AddCommand(newUpdateCommand(streams, system))
+	commands := []*cobra.Command{
+		newPlanCommand(streams, system),
+		newApplyCommand(streams, system),
+		newDoctorCommand(streams, system),
+		newUpdateCommand(streams, system),
+	}
+	for _, command := range commands {
+		command.SetFlagErrorFunc(rejectFlagError)
+		root.AddCommand(command)
+	}
 	return root
 }
 
@@ -73,10 +80,16 @@ func Run(args []string, streams Streams, system Runtime) int {
 	root := NewRoot(streams, system)
 	root.SetArgs(args)
 	if err := root.Execute(); err != nil {
+		if _, _, findErr := root.Find(args); findErr != nil {
+			err = invalidInput(err)
+		}
+		if requestedJSON(args) {
+			return writeCommandError(streams.Error, err)
+		}
 		_, _ = fmt.Fprintln(streams.Error, err)
-		return 1
+		return classifyError(err).class.exitCode
 	}
-	return 0
+	return ExitSuccess
 }
 
 func newPlanCommand(streams Streams, system Runtime) *cobra.Command {
@@ -88,13 +101,21 @@ func newPlanCommand(streams Streams, system Runtime) *cobra.Command {
 	command := &cobra.Command{
 		Use:   "plan",
 		Short: "Create a read-only deterministic installation plan",
-		Args:  cobra.NoArgs,
+		Args:  noPositionalArgs,
 		RunE: func(command *cobra.Command, _ []string) error {
 			if err := validateOutputFormat(format); err != nil {
 				return err
 			}
+			if selection.interactive && format == "json" {
+				return invalidInput(fmt.Errorf(
+					"--interactive cannot share stdout with --format json",
+				))
+			}
 			environment, err := loadEnvironment(catalogPath)
 			if err != nil {
+				if catalogPath != "" {
+					return invalidInput(err)
+				}
 				return err
 			}
 			var interactive []string
@@ -114,7 +135,7 @@ func newPlanCommand(streams Streams, system Runtime) *cobra.Command {
 			}
 			request, err := selection.selection(interactive)
 			if err != nil {
-				return err
+				return invalidInput(err)
 			}
 			facts, err := resolveTarget(command.Context(), targetID, system, false)
 			if err != nil {
@@ -128,7 +149,7 @@ func newPlanCommand(streams Streams, system Runtime) *cobra.Command {
 			facts.CatalogRevision = revision
 			plan, err := planning.Build(environment, facts, request)
 			if err != nil {
-				return err
+				return invalidInput(err)
 			}
 			switch format {
 			case "human":
@@ -156,7 +177,10 @@ func validateOutputFormat(format string) error {
 	case "human", "json":
 		return nil
 	default:
-		return fmt.Errorf("unsupported format %q; use human or json", format)
+		return invalidInput(fmt.Errorf(
+			"unsupported format %q; use human or json",
+			format,
+		))
 	}
 }
 
@@ -198,7 +222,7 @@ func resolveTarget(
 		}
 	}
 	if err != nil {
-		return target.Facts{}, err
+		return target.Facts{}, invalidInput(err)
 	}
 	local, localErr := target.DiscoverLocal(
 		system.GOOS,
@@ -207,13 +231,17 @@ func resolveTarget(
 	)
 	isCurrent := localErr == nil && local.ID == facts.ID
 	if requireCurrent && !isCurrent {
-		return target.Facts{}, fmt.Errorf(
+		return target.Facts{}, actionRequired(fmt.Errorf(
 			"apply target %s is not the current local target; run the same mds revision inside that guest",
 			facts.ID.String(),
-		)
+		))
 	}
 	if isCurrent && system.ObserveTarget != nil {
-		return system.ObserveTarget(ctx, facts)
+		observed, observeErr := system.ObserveTarget(ctx, facts)
+		if observeErr != nil {
+			return target.Facts{}, unreachable(observeErr)
+		}
+		return observed, nil
 	}
 	return facts, nil
 }

@@ -2,6 +2,10 @@ package integration_test
 
 import (
 	"context"
+	"crypto/sha256"
+	"crypto/sha512"
+	"encoding/base64"
+	"encoding/hex"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -29,11 +33,7 @@ func TestExactUpdateMovesLockAndTargetTogether(t *testing.T) {
 	plan, _, err := updateflow.Build(
 		environment,
 		facts,
-		updateflow.Candidate{
-			ComponentID: "typescript", Version: "6.0.3",
-			Source:     "npm registry",
-			Provenance: "https://www.npmjs.com/package/typescript/v/6.0.3",
-		},
+		integrationNPMCandidate("6.0.3"),
 	)
 	if err != nil {
 		t.Fatalf("Build(): %v", err)
@@ -78,11 +78,7 @@ func TestStaleUpdateDigestMutatesNeitherLockNorState(t *testing.T) {
 	plan, _, err := updateflow.Build(
 		environment,
 		facts,
-		updateflow.Candidate{
-			ComponentID: "typescript", Version: "6.0.3",
-			Source:     "npm registry",
-			Provenance: "https://www.npmjs.com/package/typescript/v/6.0.3",
-		},
+		integrationNPMCandidate("6.0.3"),
 	)
 	if err != nil {
 		t.Fatalf("Build(): %v", err)
@@ -126,11 +122,7 @@ func TestUpdateRejectsSymlinkedLockDirectory(t *testing.T) {
 	plan, _, err := updateflow.Build(
 		environment,
 		facts,
-		updateflow.Candidate{
-			ComponentID: "typescript", Version: "6.0.3",
-			Source:     "npm registry",
-			Provenance: "https://www.npmjs.com/package/typescript/v/6.0.3",
-		},
+		integrationNPMCandidate("6.0.3"),
 	)
 	if err != nil {
 		t.Fatalf("Build(): %v", err)
@@ -167,6 +159,25 @@ func TestUpdateRejectsSymlinkedLockDirectory(t *testing.T) {
 	}
 	if string(after) != string(lockContent) {
 		t.Fatal("outside lock changed through symlinked catalog directory")
+	}
+}
+
+func integrationNPMCandidate(version string) updateflow.Candidate {
+	content := []byte("reviewed typescript " + version)
+	sha256Sum := sha256.Sum256(content)
+	sha512Sum := sha512.Sum512(content)
+	return updateflow.Candidate{
+		ComponentID: "typescript",
+		Version:     version,
+		Source:      "npm registry",
+		Provenance:  "https://www.npmjs.com/package/typescript/v/" + version,
+		NPM: &catalog.NPMArtifact{
+			Tarball: "https://registry.npmjs.org/typescript/-/typescript-" +
+				version + ".tgz",
+			Integrity: "sha512-" +
+				base64.StdEncoding.EncodeToString(sha512Sum[:]),
+			SHA256: hex.EncodeToString(sha256Sum[:]),
+		},
 	}
 }
 

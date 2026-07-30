@@ -19,16 +19,9 @@ type Paths struct {
 }
 
 func NewPaths(root, targetID string) (Paths, error) {
-	if root == "" {
-		return Paths{}, errors.New("state root is required")
-	}
-	absolute, err := filepath.Abs(root)
+	absolute, err := absoluteStateRoot(root)
 	if err != nil {
-		return Paths{}, fmt.Errorf("resolve state root: %w", err)
-	}
-	absolute = filepath.Clean(absolute)
-	if absolute == filepath.VolumeName(absolute)+string(filepath.Separator) {
-		return Paths{}, errors.New("filesystem root cannot be used as state root")
+		return Paths{}, err
 	}
 	if strings.TrimSpace(targetID) == "" {
 		return Paths{}, errors.New("target ID is required")
@@ -43,8 +36,31 @@ func NewPaths(root, targetID string) (Paths, error) {
 	}, nil
 }
 
+func CatalogLockPath(stateRoot, catalogRoot string) (string, error) {
+	absoluteState, err := absoluteStateRoot(stateRoot)
+	if err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(catalogRoot) == "" {
+		return "", errors.New("catalog root is required")
+	}
+	absoluteCatalog, err := filepath.Abs(catalogRoot)
+	if err != nil {
+		return "", fmt.Errorf("resolve catalog root: %w", err)
+	}
+	absoluteCatalog = filepath.Clean(absoluteCatalog)
+	sum := sha256.Sum256([]byte(absoluteCatalog))
+	return filepath.Join(
+		absoluteState,
+		"catalog-"+hex.EncodeToString(sum[:])+".writer.lock",
+	), nil
+}
+
 func (paths Paths) Ensure() error {
-	for _, path := range []string{paths.Root, paths.TargetRoot, paths.Receipts} {
+	if err := paths.EnsureRoot(); err != nil {
+		return err
+	}
+	for _, path := range []string{paths.TargetRoot, paths.Receipts} {
 		if err := ensureDirectory(path); err != nil {
 			return err
 		}
@@ -55,6 +71,25 @@ func (paths Paths) Ensure() error {
 		}
 	}
 	return nil
+}
+
+func (paths Paths) EnsureRoot() error {
+	return ensureDirectory(paths.Root)
+}
+
+func absoluteStateRoot(root string) (string, error) {
+	if root == "" {
+		return "", errors.New("state root is required")
+	}
+	absolute, err := filepath.Abs(root)
+	if err != nil {
+		return "", fmt.Errorf("resolve state root: %w", err)
+	}
+	absolute = filepath.Clean(absolute)
+	if absolute == filepath.VolumeName(absolute)+string(filepath.Separator) {
+		return "", errors.New("filesystem root cannot be used as state root")
+	}
+	return absolute, nil
 }
 
 func ensureDirectory(path string) error {
@@ -107,4 +142,8 @@ func targetDirectory(targetID string) string {
 
 func ReceiptFilename(digest string) string {
 	return strings.ReplaceAll(digest, ":", "-") + ".json"
+}
+
+func PartialReceiptFilename(digest string) string {
+	return strings.ReplaceAll(digest, ":", "-") + ".partial.json"
 }

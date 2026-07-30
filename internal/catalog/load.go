@@ -81,12 +81,23 @@ func LoadFS(filesystem fs.FS) (Environment, error) {
 	return environment, nil
 }
 
-func decodeStrictFS(filesystem fs.FS, path string, target any) error {
+func decodeStrictFS(
+	filesystem fs.FS,
+	path string,
+	target any,
+) (resultErr error) {
 	file, err := filesystem.Open(path)
 	if err != nil {
 		return fmt.Errorf("open %s: %w", path, err)
 	}
-	defer file.Close()
+	defer func() {
+		if err := file.Close(); err != nil {
+			resultErr = errors.Join(
+				resultErr,
+				fmt.Errorf("close %s: %w", path, err),
+			)
+		}
+	}()
 
 	decoder := yaml.NewDecoder(file)
 	decoder.KnownFields(true)

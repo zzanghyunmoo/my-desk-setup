@@ -2,6 +2,7 @@ package state
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"time"
@@ -24,7 +25,7 @@ func NewJournal(path string) Journal {
 	return Journal{path: path}
 }
 
-func (journal Journal) Append(event JournalEvent) error {
+func (journal Journal) Append(event JournalEvent) (resultErr error) {
 	if err := ensureRegularOrMissing(journal.path); err != nil {
 		return err
 	}
@@ -41,7 +42,14 @@ func (journal Journal) Append(event JournalEvent) error {
 	if err != nil {
 		return fmt.Errorf("open journal: %w", err)
 	}
-	defer file.Close()
+	defer func() {
+		if err := file.Close(); err != nil {
+			resultErr = errors.Join(
+				resultErr,
+				fmt.Errorf("close journal: %w", err),
+			)
+		}
+	}()
 	if _, err := file.Write(append(encoded, '\n')); err != nil {
 		return fmt.Errorf("append journal: %w", err)
 	}

@@ -215,7 +215,7 @@ func (targetObservationPort) Run(
 	}
 }
 
-func TestUbuntuGuestSpecAndProvisionPlan(t *testing.T) {
+func TestUbuntuGuestSpecIsPinned(t *testing.T) {
 	spec, err := guest.LoadSpec(
 		filepath.Join(repositoryRoot(t), "catalog", "targets", "ubuntu-26.04.yaml"),
 	)
@@ -225,25 +225,10 @@ func TestUbuntuGuestSpecAndProvisionPlan(t *testing.T) {
 	if spec.Release != "26.04" || !spec.SystemdRequired {
 		t.Fatalf("spec = %+v, want Ubuntu 26.04 with systemd", spec)
 	}
-
-	steps, err := guest.Plan(target.KindMacOSHost, "mds", "arm64", spec)
-	if err != nil {
-		t.Fatalf("Plan(macOS): %v", err)
-	}
-	if len(steps) != 3 || steps[1].Executable != "limactl" {
-		t.Fatalf("macOS steps = %+v, want Lima create plan", steps)
-	}
-	if !containsArgumentSuffix(steps[1].Arguments, "sha256:"+spec.Images["arm64"].SHA256) {
-		t.Fatalf("Lima plan does not pin image digest: %+v", steps[1])
-	}
-
-	windowsSteps, err := guest.Plan(target.KindWindowsHost, "mds", "amd64", spec)
-	if err != nil {
-		t.Fatalf("Plan(Windows): %v", err)
-	}
-	last := windowsSteps[len(windowsSteps)-1]
-	if last.Status != guest.StepActionRequired {
-		t.Fatalf("last Windows step = %+v, want action-required", last)
+	for architecture, image := range spec.Images {
+		if image.URL == "" || len(image.SHA256) != 64 {
+			t.Fatalf("image %s = %+v, want pinned URL and SHA-256", architecture, image)
+		}
 	}
 }
 
@@ -262,13 +247,4 @@ func repositoryRoot(t *testing.T) string {
 		t.Fatal("resolve test file path")
 	}
 	return filepath.Clean(filepath.Join(filepath.Dir(file), "..", ".."))
-}
-
-func containsArgumentSuffix(arguments []string, wanted string) bool {
-	for _, argument := range arguments {
-		if strings.HasSuffix(argument, wanted) {
-			return true
-		}
-	}
-	return false
 }

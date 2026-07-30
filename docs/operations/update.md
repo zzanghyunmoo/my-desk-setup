@@ -27,7 +27,10 @@ mds update \
 ```
 
 `--component` discovery는 현재 지원하는 provider에서 exact candidate를
-조회한다. rate limit, DNS failure, unsupported provider와 no-change candidate는
+조회한다. npm provider는 metadata의 package/version에 대응하는 canonical
+`registry.npmjs.org` tarball URL만 허용하고, tarball을 bounded download해
+metadata SRI를 검증한 뒤 exact SHA-256을 계산한다. rate limit, DNS failure,
+metadata/content substitution, unsupported provider와 no-change candidate는
 lock/state를 바꾸지 않고 실패한다.
 
 ## Reviewed candidate
@@ -39,7 +42,12 @@ lock/state를 바꾸지 않고 실패한다.
   "component_id": "typescript",
   "version": "6.0.3",
   "source": "npm registry",
-  "provenance": "https://www.npmjs.com/package/typescript/v/6.0.3"
+  "provenance": "https://www.npmjs.com/package/typescript/v/6.0.3",
+  "npm": {
+    "tarball": "https://registry.npmjs.org/typescript/-/typescript-6.0.3.tgz",
+    "integrity": "sha512-y2TvuxSZPDyQakkFRPZHKFm+KKVqIisdg9/CZwm9ftvKXLP8NRWj38/ODjNbr43SsoXqNuAisEf1GdCxqWcdBw==",
+    "sha256": "33cd0ee1beaa8c9e9d15a9da836c62ddea4c34a42d7c2d349dbc80d94165d22a"
+  }
 }
 ```
 
@@ -47,6 +55,10 @@ reviewed vendor release는 platform별 artifact URL, SHA-256, format과 executab
 정보도 포함한다. provenance와 artifact URL은 absolute HTTPS여야 하고 SHA-256은
 64자리 hexadecimal이어야 한다. unknown field와 1 MiB를 넘는 candidate file은
 거부한다.
+
+`source`와 `provenance`는 candidate에서 lock으로 그대로 보존된다. `npm`의
+tarball, SRI, SHA-256도 new lock entry와 update digest에 포함되므로 review 뒤
+어느 하나가 바뀌면 기존 digest는 stale이다.
 
 ```sh
 mds update \
@@ -91,6 +103,11 @@ stale digest를 강제로 우회하지 않는다.
 적용 결과는 `mds.update-result/v1`으로 update digest, 새 catalog revision과
 target receipt를 제공한다. Git commit은 자동으로 만들지 않는다.
 
+update는 state root의 catalog-scoped writer lease를 먼저 획득하고 target writer
+lease를 다음에 획득한다. 두 lease 아래에서 catalog와 target preimage를 다시
+검증한 뒤 lock file 게시와 target reconcile을 수행하므로, 경쟁에서 진 update는
+catalog lock이나 target을 변경하지 않는다.
+
 ```sh
 git diff -- catalog/locks/versions.lock.yaml
 mds doctor --component typescript --format json
@@ -113,6 +130,11 @@ mds apply \
 
 normal apply가 lock file을 쓰거나 upstream metadata를 조회하면 invariant
 위반이다.
+
+normal apply와 update apply는 committed/reviewed lock의 exact npm tarball을
+bounded download하고 SRI와 SHA-256을 모두 검증한다. 검증이 끝난 local `.tgz`
+경로만 `bun add --global`에 전달하며 `package@version`을 registry에서 다시
+resolve하지 않는다. 검증 실패 시 Bun은 실행되지 않는다.
 
 ## 실패와 재개
 

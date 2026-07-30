@@ -11,7 +11,7 @@ import (
 	"github.com/zzanghyunmoo/my-desk-setup/internal/target"
 )
 
-func TestDoctorIsObservationOnlyAndDoesNotInspectAuth(t *testing.T) {
+func TestDoctorIsReadOnlyAndDoesNotInspectAuth(t *testing.T) {
 	id, _ := target.NewID(target.KindLimaGuest, "mds")
 	plan := planning.Plan{
 		SchemaVersion:   planning.PlanSchema,
@@ -32,6 +32,11 @@ func TestDoctorIsObservationOnlyAndDoesNotInspectAuth(t *testing.T) {
 				Status: planning.ActionUnsupported, Version: "manual",
 				Reason: "Xcode is only available on macOS.",
 			},
+			{
+				ID: "lima-guest:mds/manual", ComponentID: "manual",
+				Status: planning.ActionActionRequired, Version: "manual",
+				Reason: "Complete the target-local manual step.",
+			},
 		},
 	}
 	adapter := &doctorAdapter{
@@ -45,7 +50,7 @@ func TestDoctorIsObservationOnlyAndDoesNotInspectAuth(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run(): %v", err)
 	}
-	if report.Ready || len(report.Checks) != 2 {
+	if report.Ready || len(report.Checks) != 3 {
 		t.Fatalf("report = %+v, want mixed readiness", report)
 	}
 	if report.Checks[0].Status != "ready" ||
@@ -55,27 +60,88 @@ func TestDoctorIsObservationOnlyAndDoesNotInspectAuth(t *testing.T) {
 	if report.Checks[1].Status != "unsupported" {
 		t.Fatalf("unsupported check = %+v", report.Checks[1])
 	}
-	if adapter.applyCalls != 0 || adapter.verifyCalls != 0 {
+	if report.Checks[2].Status != "action-required" {
+		t.Fatalf("action-required check = %+v", report.Checks[2])
+	}
+	if adapter.applyCalls != 0 || adapter.verifyCalls != 1 {
 		t.Fatalf(
-			"doctor mutated or ran functional verification: apply=%d verify=%d",
+			"doctor call counts: apply=%d verify=%d, want apply=0 verify=1",
 			adapter.applyCalls,
 			adapter.verifyCalls,
 		)
 	}
-	for _, action := range adapter.observed {
+	for _, action := range append(adapter.observed, adapter.verified...) {
 		for _, argv := range action.Verification {
 			for _, argument := range argv {
 				if argument == "auth" || argument == "login" {
-					t.Fatalf("doctor observed authentication command: %v", argv)
+					t.Fatalf("doctor received authentication command: %v", argv)
 				}
 			}
 		}
 	}
 }
 
+func TestDoctorRejectsReadyObservationWhenFunctionalVerificationFails(t *testing.T) {
+	id, _ := target.NewID(target.KindLimaGuest, "mds")
+	plan := planning.Plan{
+		SchemaVersion:   planning.PlanSchema,
+		CatalogRevision: "sha256:catalog",
+		Target: target.Facts{
+			ID: id, OS: "linux", OSVersion: "26.04", Architecture: "arm64",
+		},
+		Actions: []planning.Action{
+			{
+				ID: "lima-guest:mds/docker-engine", ComponentID: "docker-engine",
+				Status: planning.ActionPlanned, Version: "manager-owned",
+				Verification: [][]string{
+					{"docker", "version"},
+					{"docker", "info", "--format", "{{.ServerVersion}}"},
+				},
+			},
+		},
+	}
+	adapter := &doctorAdapter{
+		observations: map[string]adapters.Observation{
+			"docker-engine": {
+				State: adapters.StateReady, InstalledVersion: "28.3.3",
+			},
+		},
+		verifyErrors: map[string]error{
+			"docker-engine": errors.New("docker daemon is unavailable"),
+		},
+	}
+
+	report, err := doctor.Run(context.Background(), plan, adapter)
+	if err != nil {
+		t.Fatalf("Run(): %v", err)
+	}
+	if report.Ready || len(report.Checks) != 1 {
+		t.Fatalf("report = %+v, want one unready check", report)
+	}
+	check := report.Checks[0]
+	if check.Status != "unready" ||
+		check.ReasonCode != "functional-verification-failed" ||
+		check.VerifiedVersion != "" {
+		t.Fatalf("check = %+v, want unverified functional failure", check)
+	}
+	if check.InstalledVersion != "28.3.3" ||
+		check.Reason != "docker daemon is unavailable" {
+		t.Fatalf("check = %+v, want observed version and functional error", check)
+	}
+	if adapter.applyCalls != 0 || adapter.verifyCalls != 1 {
+		t.Fatalf(
+			"doctor call counts: apply=%d verify=%d, want apply=0 verify=1",
+			adapter.applyCalls,
+			adapter.verifyCalls,
+		)
+	}
+}
+
 type doctorAdapter struct {
 	observations map[string]adapters.Observation
 	observed     []planning.Action
+	verified     []planning.Action
+	verifyErrors map[string]error
 	applyCalls   int
 	verifyCalls  int
 }
@@ -97,7 +163,11 @@ func (adapter *doctorAdapter) Apply(context.Context, planning.Action) error {
 	return nil
 }
 
-func (adapter *doctorAdapter) Verify(context.Context, planning.Action) error {
+func (adapter *doctorAdapter) Verify(
+	_ context.Context,
+	action planning.Action,
+) error {
 	adapter.verifyCalls++
-	return nil
+	adapter.verified = append(adapter.verified, action)
+	return adapter.verifyErrors[action.ComponentID]
 }

@@ -15,6 +15,8 @@ catalog/
 
 YAML은 unknown field, duplicate ID/capability, missing dependency, cycle,
 target-ineligible dependency, invalid installer와 missing lock을 fail closed한다.
+Bun-managed pinned lock은 package/version에 대응하는 official npm canonical
+tarball URL, canonical SHA-512 SRI와 lowercase SHA-256을 모두 요구한다.
 component와 capability는 단일 owner를 가진다. catalog와 lock의 canonical JSON
 SHA-256이 plan의 catalog revision에 포함된다.
 
@@ -89,6 +91,10 @@ Windows의 Linear Desktop과 KakaoTalk은 검증된 unattended package ID가 없
 normal `plan`과 `apply`는 upstream latest metadata를 조회하거나 lock을 올리지
 않는다. pinned version 이동은 reviewable candidate, old/new lock diff와 exact
 update digest를 사용하는 `mds update`로만 수행한다.
+
+Bun package는 lock의 tarball을 bounded download한 뒤 SRI와 SHA-256을 모두
+검증하고 local `.tgz`로 설치한다. `package@version` registry re-resolution은
+normal/update apply 어느 쪽에서도 사용하지 않는다.
 
 AI agent launcher는 upstream auto-update를 끄는 managed 환경을 제공하지만
 로그인이나 token은 다루지 않는다. 사용자는 설치 뒤 각 agent에서 직접

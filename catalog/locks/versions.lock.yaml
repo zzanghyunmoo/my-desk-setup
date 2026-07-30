@@ -54,10 +54,18 @@ versions:
     version: 2.1.212
     source: npm registry
     provenance: https://www.npmjs.com/package/@anthropic-ai/claude-code
+    npm:
+      tarball: https://registry.npmjs.org/@anthropic-ai/claude-code/-/claude-code-2.1.212.tgz
+      integrity: sha512-MEasj1oaoARRKEWU7eHJ6DWC2TC8ogml9QUDihbmxYI2Ij5Ol1leW90DIj8/a0xX3lfHZOwT3gJr0JxVKa8Sxw==
+      sha256: 2162841dd793d21671eccb7fe76fe9c3da6816adf447ba3890a4871b7e5f4e69
   codex:
     version: 0.144.6
     source: GitHub release
     provenance: https://github.com/openai/codex/releases
+    npm:
+      tarball: https://registry.npmjs.org/@openai/codex/-/codex-0.144.6.tgz
+      integrity: sha512-wk+2CWiBNXiJLBoN2D08N9RceWkSBnlgk5g2K1a4CXrP/C0gdlHyRUG7RFzm9y41DCK/7tvCct233JVxyFmznw==
+      sha256: 779eab25aa8473583b3d1d6f9316a0ab8d0643fdfd0bfef80ce76cc8cf85e401
   flutter:
     version: 3.44.4
     source: Flutter stable archive
@@ -120,14 +128,26 @@ versions:
     version: 0.21.5
     source: npm registry
     provenance: https://www.npmjs.com/package/ntn/v/0.21.5
+    npm:
+      tarball: https://registry.npmjs.org/ntn/-/ntn-0.21.5.tgz
+      integrity: sha512-GxSo9x8nuarbx1haWL5Ue1hl+3i5iF+BtGwVJhf8bx8SRat6OkwD8Jf+MEB42sqk7PoePDpGQPh8mih0sSFwTw==
+      sha256: 884d6518ed7a457925e2980b6386055a49f9dc09cb960428db35b3fd377f5025
   opencode:
     version: 1.17.7
     source: GitHub release
     provenance: https://github.com/anomalyco/opencode/releases
+    npm:
+      tarball: https://registry.npmjs.org/opencode-ai/-/opencode-ai-1.17.7.tgz
+      integrity: sha512-5oMjuqlVL78JhvXshwp2NCXCI+CHr24wWi7/5aI0CZoHnI44qTqssWOBUW59dPTpRGSOQmXTDTOOsPVYW38JPg==
+      sha256: 1642eca13464b2616a786c5a860edfc7daf1c40dc9cfb880d27a37a5d1c04e1a
   linear-cli:
     version: 2.3.0
     source: npm registry
     provenance: https://www.npmjs.com/package/@schpet/linear-cli/v/2.3.0
+    npm:
+      tarball: https://registry.npmjs.org/@schpet/linear-cli/-/linear-cli-2.3.0.tgz
+      integrity: sha512-HzmiYMxOVTxo1HfmDB9BSMtXhBFBhglL9ZwYIZofOi5xWSbfbGyGXgeLop/bvpWRwLxMgG+JxvGJ+Y1Un0lPDw==
+      sha256: e813a3b92a84c2f1a8625b4c96891eccf08162d80b30f1dd4e9d32868649b602
   python:
     version: 3.14.6
     source: Python release page
@@ -136,6 +156,10 @@ versions:
     version: 6.0.2
     source: npm registry
     provenance: https://www.npmjs.com/package/typescript
+    npm:
+      tarball: https://registry.npmjs.org/typescript/-/typescript-6.0.2.tgz
+      integrity: sha512-bGdAIrZ0wiGDo5l8c++HWtbaNCWTS4UTv7RaTH/ThVIgjkveJt83m74bBHMJkuCbslY8ixgLBVZJIOiQlQTjfQ==
+      sha256: 0ae5c188a2f5db22df72fe5e74dcbc122afb52031a86dbac33e78a86db39c65e
   uv:
     version: 0.11.7
     source: GitHub changelog

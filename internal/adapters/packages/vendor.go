@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	exactartifact "github.com/zzanghyunmoo/my-desk-setup/internal/artifact"
 	"github.com/zzanghyunmoo/my-desk-setup/internal/catalog"
 )
 
@@ -28,11 +29,91 @@ type Vendor struct {
 	Arch     string
 }
 
+func (vendor Vendor) downloadNPMTarball(
+	ctx context.Context,
+	artifact catalog.NPMArtifact,
+) (string, func() error, error) {
+	client := vendor.Client
+	if client == nil {
+		client = &http.Client{Timeout: 5 * time.Minute}
+	}
+	request, err := http.NewRequestWithContext(
+		ctx,
+		http.MethodGet,
+		artifact.Tarball,
+		nil,
+	)
+	if err != nil {
+		return "", nil, fmt.Errorf("create npm tarball request: %w", err)
+	}
+	if request.URL.Scheme != "https" || request.URL.Host == "" {
+		return "", nil, errors.New("npm tarball requires an absolute HTTPS URL")
+	}
+	response, err := client.Do(request)
+	if err != nil {
+		return "", nil, fmt.Errorf("download npm tarball: %w", err)
+	}
+	defer func() {
+		_ = response.Body.Close()
+	}()
+	if response.StatusCode != http.StatusOK {
+		return "", nil, fmt.Errorf(
+			"download npm tarball: HTTP %s",
+			response.Status,
+		)
+	}
+	if response.Request == nil ||
+		response.Request.URL.String() != artifact.Tarball {
+		return "", nil, errors.New(
+			"npm tarball redirected away from the reviewed canonical URL",
+		)
+	}
+	temporaryDirectory, err := os.MkdirTemp("", "mds-npm-*")
+	if err != nil {
+		return "", nil, fmt.Errorf("create npm temporary directory: %w", err)
+	}
+	cleanup := func() error {
+		if err := os.RemoveAll(temporaryDirectory); err != nil {
+			return fmt.Errorf("remove npm temporary directory: %w", err)
+		}
+		return nil
+	}
+	path := filepath.Join(temporaryDirectory, "package.tgz")
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return "", nil, errors.Join(
+			fmt.Errorf("create npm tarball: %w", err),
+			cleanup(),
+		)
+	}
+	_, verifyErr := exactartifact.CopyAndVerify(
+		response.Body,
+		file,
+		artifact.SHA256,
+		artifact.Integrity,
+		exactartifact.MaxDownloadBytes,
+	)
+	if verifyErr == nil {
+		verifyErr = file.Sync()
+	}
+	closeErr := file.Close()
+	if verifyErr != nil {
+		verifyErr = fmt.Errorf("verify npm tarball: %w", verifyErr)
+	}
+	if closeErr != nil {
+		closeErr = fmt.Errorf("close npm tarball: %w", closeErr)
+	}
+	if writeErr := errors.Join(verifyErr, closeErr); writeErr != nil {
+		return "", nil, errors.Join(writeErr, cleanup())
+	}
+	return path, cleanup, nil
+}
+
 func (vendor Vendor) Install(
 	ctx context.Context,
 	component catalog.Component,
 	lock catalog.LockEntry,
-) error {
+) (returnErr error) {
 	key := vendor.Platform + "-" + vendor.Arch
 	artifact, exists := lock.Artifacts[key]
 	if !exists {
@@ -54,7 +135,9 @@ func (vendor Vendor) Install(
 	if err != nil {
 		return fmt.Errorf("download %s: %w", artifact.URL, err)
 	}
-	defer response.Body.Close()
+	defer func() {
+		_ = response.Body.Close()
+	}()
 	if response.StatusCode != http.StatusOK {
 		return fmt.Errorf("download %s: HTTP %s", artifact.URL, response.Status)
 	}
@@ -62,7 +145,14 @@ func (vendor Vendor) Install(
 	if err != nil {
 		return fmt.Errorf("create artifact temporary directory: %w", err)
 	}
-	defer os.RemoveAll(temporaryDirectory)
+	defer func() {
+		if err := os.RemoveAll(temporaryDirectory); err != nil {
+			returnErr = errors.Join(
+				returnErr,
+				fmt.Errorf("remove artifact temporary directory: %w", err),
+			)
+		}
+	}()
 	downloadPath := filepath.Join(temporaryDirectory, "artifact")
 	if err := DownloadAndVerify(
 		response.Body,
@@ -109,12 +199,16 @@ func extractTarGzExecutable(
 	if err != nil {
 		return "", fmt.Errorf("open artifact tar.gz: %w", err)
 	}
-	defer archive.Close()
+	defer func() {
+		_ = archive.Close()
+	}()
 	compressed, err := gzip.NewReader(archive)
 	if err != nil {
 		return "", fmt.Errorf("open artifact gzip stream: %w", err)
 	}
-	defer compressed.Close()
+	defer func() {
+		_ = compressed.Close()
+	}()
 	reader := tar.NewReader(io.LimitReader(compressed, maxArtifactSize+1))
 	for {
 		header, err := reader.Next()
@@ -127,7 +221,7 @@ func extractTarGzExecutable(
 		if filepath.ToSlash(header.Name) != filepath.ToSlash(executable) {
 			continue
 		}
-		if header.Typeflag != tar.TypeReg && header.Typeflag != tar.TypeRegA {
+		if header.Typeflag != tar.TypeReg {
 			return "", fmt.Errorf("artifact executable %s is not regular", executable)
 		}
 		path := filepath.Join(destination, "executable")
@@ -138,10 +232,13 @@ func extractTarGzExecutable(
 		written, copyErr := io.Copy(file, io.LimitReader(reader, maxArtifactSize+1))
 		closeErr := file.Close()
 		if copyErr != nil {
-			return "", fmt.Errorf("extract executable: %w", copyErr)
+			copyErr = fmt.Errorf("extract executable: %w", copyErr)
 		}
 		if closeErr != nil {
-			return "", fmt.Errorf("close extracted executable: %w", closeErr)
+			closeErr = fmt.Errorf("close extracted executable: %w", closeErr)
+		}
+		if writeErr := errors.Join(copyErr, closeErr); writeErr != nil {
+			return "", writeErr
 		}
 		if written > maxArtifactSize {
 			return "", fmt.Errorf("extracted executable exceeds %d bytes", maxArtifactSize)
@@ -160,10 +257,13 @@ func DownloadAndVerify(reader io.Reader, path, expected string) error {
 	written, copyErr := io.Copy(io.MultiWriter(file, hash), io.LimitReader(reader, maxArtifactSize+1))
 	closeErr := file.Close()
 	if copyErr != nil {
-		return fmt.Errorf("download artifact: %w", copyErr)
+		copyErr = fmt.Errorf("download artifact: %w", copyErr)
 	}
 	if closeErr != nil {
-		return fmt.Errorf("close artifact: %w", closeErr)
+		closeErr = fmt.Errorf("close artifact: %w", closeErr)
+	}
+	if writeErr := errors.Join(copyErr, closeErr); writeErr != nil {
+		return writeErr
 	}
 	if written > maxArtifactSize {
 		return fmt.Errorf("artifact exceeds %d bytes", maxArtifactSize)
@@ -184,7 +284,9 @@ func extractZipExecutable(
 	if err != nil {
 		return "", fmt.Errorf("open artifact zip: %w", err)
 	}
-	defer archive.Close()
+	defer func() {
+		_ = archive.Close()
+	}()
 	for _, entry := range archive.File {
 		if filepath.ToSlash(entry.Name) != filepath.ToSlash(executable) {
 			continue
@@ -196,19 +298,29 @@ func extractZipExecutable(
 		if err != nil {
 			return "", fmt.Errorf("open artifact executable: %w", err)
 		}
-		defer reader.Close()
 		path := filepath.Join(destination, "executable")
 		file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o700)
 		if err != nil {
-			return "", fmt.Errorf("create extracted executable: %w", err)
+			return "", errors.Join(
+				fmt.Errorf("create extracted executable: %w", err),
+				wrapError("close artifact executable", reader.Close()),
+			)
 		}
 		written, copyErr := io.Copy(file, io.LimitReader(reader, maxArtifactSize+1))
 		closeErr := file.Close()
+		readerCloseErr := reader.Close()
 		if copyErr != nil {
-			return "", fmt.Errorf("extract executable: %w", copyErr)
+			copyErr = fmt.Errorf("extract executable: %w", copyErr)
 		}
 		if closeErr != nil {
-			return "", fmt.Errorf("close extracted executable: %w", closeErr)
+			closeErr = fmt.Errorf("close extracted executable: %w", closeErr)
+		}
+		if writeErr := errors.Join(
+			copyErr,
+			closeErr,
+			wrapError("close artifact executable", readerCloseErr),
+		); writeErr != nil {
+			return "", writeErr
 		}
 		if written > maxArtifactSize {
 			return "", fmt.Errorf("extracted executable exceeds %d bytes", maxArtifactSize)
@@ -230,37 +342,73 @@ func installExecutable(source, destination string) error {
 	if err != nil {
 		return fmt.Errorf("open source executable: %w", err)
 	}
-	defer sourceFile.Close()
+	defer func() {
+		_ = sourceFile.Close()
+	}()
 	temporary, err := os.CreateTemp(directory, ".mds-executable-*")
 	if err != nil {
 		return fmt.Errorf("create executable temporary file: %w", err)
 	}
 	temporaryPath := temporary.Name()
-	cleanup := func() {
-		_ = temporary.Close()
-		_ = os.Remove(temporaryPath)
+	temporaryOpen := true
+	cleanup := func() error {
+		var cleanupErrors []error
+		if temporaryOpen {
+			temporaryOpen = false
+			if err := temporary.Close(); err != nil {
+				cleanupErrors = append(
+					cleanupErrors,
+					fmt.Errorf(
+						"close executable temporary file during cleanup: %w",
+						err,
+					),
+				)
+			}
+		}
+		if err := os.Remove(temporaryPath); err != nil &&
+			!errors.Is(err, os.ErrNotExist) {
+			cleanupErrors = append(
+				cleanupErrors,
+				fmt.Errorf("remove executable temporary file: %w", err),
+			)
+		}
+		return errors.Join(cleanupErrors...)
+	}
+	failWithCleanup := func(operationErr error) error {
+		return errors.Join(operationErr, cleanup())
 	}
 	if err := temporary.Chmod(0o700); err != nil {
-		cleanup()
-		return fmt.Errorf("chmod executable temporary file: %w", err)
+		return failWithCleanup(
+			fmt.Errorf("chmod executable temporary file: %w", err),
+		)
 	}
 	if _, err := io.Copy(temporary, sourceFile); err != nil {
-		cleanup()
-		return fmt.Errorf("copy executable: %w", err)
+		return failWithCleanup(fmt.Errorf("copy executable: %w", err))
 	}
 	if err := temporary.Sync(); err != nil {
-		cleanup()
-		return fmt.Errorf("sync executable: %w", err)
+		return failWithCleanup(fmt.Errorf("sync executable: %w", err))
 	}
+	temporaryOpen = false
 	if err := temporary.Close(); err != nil {
-		_ = os.Remove(temporaryPath)
-		return fmt.Errorf("close executable temporary file: %w", err)
+		return errors.Join(
+			fmt.Errorf("close executable temporary file: %w", err),
+			cleanup(),
+		)
 	}
 	if err := os.Rename(temporaryPath, destination); err != nil {
-		_ = os.Remove(temporaryPath)
-		return fmt.Errorf("publish executable: %w", err)
+		return errors.Join(
+			fmt.Errorf("publish executable: %w", err),
+			cleanup(),
+		)
 	}
 	return nil
+}
+
+func wrapError(message string, err error) error {
+	if err == nil {
+		return nil
+	}
+	return fmt.Errorf("%s: %w", message, err)
 }
 
 func ensureSafeDirectory(path string) error {

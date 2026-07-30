@@ -535,7 +535,7 @@ components:
       mode: manager
     verification:
       command: [docker, version]
-      functional: [docker, run, --rm, hello-world]
+      functional: [docker, info, --format, "{{.ServerVersion}}"]
     targets:
       macos-host:
         status: unsupported

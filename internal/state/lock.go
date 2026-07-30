@@ -4,7 +4,12 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"strconv"
+	"path/filepath"
+)
+
+var (
+	ErrLockContended         = errors.New("writer lock is already held")
+	errAdvisoryLockContended = errors.New("advisory lock is contended")
 )
 
 type Lock struct {
@@ -16,41 +21,82 @@ func Acquire(path string) (*Lock, error) {
 	if err := ensureRegularOrMissing(path); err != nil {
 		return nil, err
 	}
-	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
-	if errors.Is(err, os.ErrExist) {
-		return nil, fmt.Errorf("target already has an active writer lock: %s", path)
-	}
+	file, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0o600)
 	if err != nil {
 		return nil, fmt.Errorf("acquire writer lock %s: %w", path, err)
 	}
-	if _, err := file.WriteString(strconv.Itoa(os.Getpid()) + "\n"); err != nil {
-		_ = file.Close()
-		_ = os.Remove(path)
-		return nil, fmt.Errorf("write writer lock %s: %w", path, err)
+	if err := acquireAdvisoryLock(file); err != nil {
+		closeErr := file.Close()
+		if errors.Is(err, errAdvisoryLockContended) {
+			return nil, errors.Join(
+				fmt.Errorf("%w: %s", ErrLockContended, path),
+				wrapCloseError(path, closeErr),
+			)
+		}
+		return nil, errors.Join(
+			fmt.Errorf("acquire OS writer lock %s: %w", path, err),
+			wrapCloseError(path, closeErr),
+		)
 	}
-	if err := file.Sync(); err != nil {
-		_ = file.Close()
-		_ = os.Remove(path)
-		return nil, fmt.Errorf("sync writer lock %s: %w", path, err)
+	if err := file.Chmod(0o600); err != nil {
+		return nil, releaseAfterAcquireFailure(
+			path,
+			file,
+			fmt.Errorf("restrict writer lock %s: %w", path, err),
+		)
+	}
+	if err := file.Truncate(0); err != nil {
+		return nil, releaseAfterAcquireFailure(
+			path,
+			file,
+			fmt.Errorf("clear legacy writer lock owner %s: %w", path, err),
+		)
 	}
 	return &Lock{path: path, file: file}, nil
 }
 
+func (lock *Lock) Holds(path string) bool {
+	return lock != nil &&
+		lock.file != nil &&
+		filepath.Clean(lock.path) == filepath.Clean(path)
+}
+
 func (lock *Lock) Release() error {
-	if lock == nil {
+	if lock == nil || lock.file == nil {
 		return nil
 	}
-	var closeError error
-	if lock.file != nil {
-		closeError = lock.file.Close()
-		lock.file = nil
+	file := lock.file
+	lock.file = nil
+	unlockErr := releaseAdvisoryLock(file)
+	closeErr := file.Close()
+	return errors.Join(
+		wrapUnlockError(lock.path, unlockErr),
+		wrapCloseError(lock.path, closeErr),
+	)
+}
+
+func releaseAfterAcquireFailure(
+	path string,
+	file *os.File,
+	operationErr error,
+) error {
+	return errors.Join(
+		operationErr,
+		wrapUnlockError(path, releaseAdvisoryLock(file)),
+		wrapCloseError(path, file.Close()),
+	)
+}
+
+func wrapUnlockError(path string, err error) error {
+	if err == nil {
+		return nil
 	}
-	removeError := os.Remove(lock.path)
-	if closeError != nil {
-		return fmt.Errorf("close writer lock: %w", closeError)
+	return fmt.Errorf("release OS writer lock %s: %w", path, err)
+}
+
+func wrapCloseError(path string, err error) error {
+	if err == nil {
+		return nil
 	}
-	if removeError != nil && !errors.Is(removeError, os.ErrNotExist) {
-		return fmt.Errorf("remove writer lock: %w", removeError)
-	}
-	return nil
+	return fmt.Errorf("close writer lock %s: %w", path, err)
 }

@@ -21,9 +21,12 @@ release-manifest.json
 ```
 
 `release-manifest.json`은 release version, source commit, release timestamp와 각
-artifact identity를 기록한다. `checksums.txt`는 publish된 파일의 SHA-256을
-제공한다. manifest가 가리키지 않거나 checksum이 맞지 않는 archive를
-bootstrap 또는 target certification에 사용하지 않는다.
+artifact identity를 기록한다. 여기에는 embedded catalog revision과 각 archive
+안의 실제 binary SHA-256도 포함된다. `checksums.txt`는 publish된 archive의
+SHA-256을 제공한다. manifest가 가리키지 않거나 archive 또는 내부 binary
+checksum이 맞지 않는 archive를 bootstrap 또는 target certification에 사용하지
+않는다. 정식 tag release에는 같은 identity에 묶인
+`release-promotion.json`도 영구 asset으로 포함된다.
 
 ### Maintainer build
 
@@ -116,9 +119,19 @@ limactl list
 limactl shell --tty=false mds -- true
 ```
 
-게스트에는 같은 release/commit의 `linux_<arch>` archive를 checksum 검증해
-`~/.local/bin/mds`로 설치한다. binary는 catalog를 embed하므로 별도 moving
-catalog download를 사용하지 않는다.
+GuestRuntime은 생성·시작 후 host에서 guest-owned 경로를 직접 수정하지 않고,
+bounded `limactl shell --tty=false ... -- mds plan --all --format json`
+argv로 guest-local CLI에 handoff한다. guest plan이 host와 정확히 같은 CLI
+revision과 embedded catalog revision을 보고할 때만 Lima runtime을 ready로
+판정한다.
+
+현재 host apply 입력에는 검토된 Linux archive와 checksum이 포함되지 않으므로
+GuestRuntime은 binary를 다운로드·복사·설치했다고 가장하지 않는다. guest-local
+`mds`가 없거나 revision이 다르면 필요한 두 revision을 담은
+`action-required`로 중단한다. 사용자는 같은 release/commit의
+`linux_<arch>` archive를 게시된 checksum으로 검증해 guest 안에 설치한 뒤
+동일한 host apply를 다시 실행한다. binary가 catalog를 embed하므로 별도 moving
+catalog download는 사용하지 않는다.
 
 게스트 shell에서 actual target과 guest selection을 다시 계획하고 적용한다.
 
@@ -179,9 +192,16 @@ Windows feature 활성화, reboot 또는 최초 Linux user 생성이 필요하�
 4. digest가 같아도 action과 target preimage를 다시 검토한다.
 5. 현재 plan의 exact digest로 `apply --component wsl`을 재실행한다.
 
-WSL guest 안에는 같은 release의 `linux_<arch>` binary를 checksum 검증해
-설치한다. guest shell의 `WSL_DISTRO_NAME=Ubuntu-26.04`를 통해 target은
-`wsl-guest:Ubuntu-26.04`로 발견된다. 이후 guest 내부에서 `plan`, `apply`,
+WSL lifecycle도 host에서 guest-owned 경로를 직접 수정하지 않는다. 준비 후
+GuestRuntime은 bounded
+`wsl.exe --distribution Ubuntu-26.04 --exec mds plan ...` argv로 handoff하고,
+host와 같은 CLI 및 embedded catalog revision일 때만 ready로 판정한다.
+검토된 Linux archive/checksum이 host apply 입력에 없으므로 missing/stale
+guest-local `mds`는 자동 전송하지 않고 `action-required`로 보고한다. 사용자가
+같은 release의 `linux_<arch>` binary를 게시된 checksum으로 검증해 설치한 뒤
+host apply를 재실행해야 한다. guest shell의
+`WSL_DISTRO_NAME=Ubuntu-26.04`를 통해 target은
+`wsl-guest:Ubuntu-26.04`로 발견되며, 이후 guest 내부에서 `plan`, `apply`,
 `doctor`를 실행한다.
 
 ## 선택 설치
@@ -225,6 +245,7 @@ scripts/certify-target.sh \
   --mds "$HOME/.local/bin/mds" \
   --target macos-host:local \
   --output ./target-evidence/macos-host \
+  --expected-binary-sha256 '<release-binary-sha256>' \
   --all
 ```
 
@@ -241,14 +262,28 @@ scripts/verify-target-evidence.sh \
   --expected-catalog-revision 'sha256:<expected-catalog-revision>' \
   --expected-plan-digest 'sha256:<reviewed-plan-digest>' \
   --expected-target macos-host:local \
+  --expected-binary-sha256 '<release-binary-sha256>' \
   --max-age 24h \
-  --require-verified
+  --require-publication-acceptable
 ```
 
 `<exact-cli-revision>`은 production `mds --version`의 `mds version ` 뒤에
 나오는 `0.1.0 (commit=<sha>, date=<RFC3339>)` identity다. verifier는 bundle의
 exact file set, checksum, secret-free material, CLI/catalog/plan/target
-identity와 recomputed status를 확인한다.
+identity, on-disk binary SHA-256과 recomputed status를 확인한다.
+
+`--require-publication-acceptable`은 `blocked`를 `verified`로 바꾸지 않는다.
+완전한 표준 target에서 모든 남은 결과가 사용자가 직접 해결해야 하는
+`action-required`일 때만 정직한 manual exception으로 허용한다. planned
+`unready`/`conflict`, `unsupported`, 불완전 target은 거부한다. 모든 component의
+완전한 실제 검증이 필요한 별도 검사에서는 `--require-verified`를 사용한다.
+
+tag workflow는 exact commit의 성공한 target-certification run만 GitHub Actions
+API로 조회한다. artifact 이름은
+`target-evidence-<kind>-<commit>-<run-id>-<attempt>`이며 네 표준 target별로
+정확히 하나여야 한다. 다운로드한 bundle은 Gitleaks 검사를 거친 뒤 release와
+재결합해 promotion한다. promotion report는 publish 단계에서 한 번 더 검증해
+stable `release-promotion.json` asset으로 게시한다.
 
 현재 Windows host, WSL Ubuntu와 Lima Ubuntu의 actual evidence는 없다. 이
 상태에서 해당 target을 verified로 기록하거나 fixture로 대체하지 않는다.
