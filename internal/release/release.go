@@ -81,10 +81,10 @@ type target struct {
 }
 
 var releaseTargets = []target{
-	{os: "darwin", architecture: "amd64", format: "tar.gz", binary: "mds"},
-	{os: "darwin", architecture: "arm64", format: "tar.gz", binary: "mds"},
 	{os: "linux", architecture: "amd64", format: "tar.gz", binary: "mds"},
 	{os: "linux", architecture: "arm64", format: "tar.gz", binary: "mds"},
+	{os: "darwin", architecture: "amd64", format: "tar.gz", binary: "mds"},
+	{os: "darwin", architecture: "arm64", format: "tar.gz", binary: "mds"},
 	{os: "windows", architecture: "amd64", format: "zip", binary: "mds.exe"},
 	{os: "windows", architecture: "arm64", format: "zip", binary: "mds.exe"},
 }
@@ -315,6 +315,18 @@ func buildBinary(
 		"-X", "github.com/zzanghyunmoo/my-desk-setup/internal/version.Commit=" + manifest.Commit,
 		"-X", "github.com/zzanghyunmoo/my-desk-setup/internal/version.Date=" + manifest.Date,
 	}, " ")
+	if releaseTarget.os != "linux" {
+		guestFlags, err := guestArtifactLDFlags(manifest)
+		if err != nil {
+			return fmt.Errorf(
+				"prepare %s/%s guest bootstrap identity: %w",
+				releaseTarget.os,
+				releaseTarget.architecture,
+				err,
+			)
+		}
+		ldflags += " " + strings.Join(guestFlags, " ")
+	}
 	command := exec.CommandContext(
 		ctx,
 		"go", "build",
@@ -342,6 +354,39 @@ func buildBinary(
 		)
 	}
 	return nil
+}
+
+func guestArtifactLDFlags(manifest Manifest) ([]string, error) {
+	artifacts := make(map[string]Artifact, 2)
+	for _, artifact := range manifest.Artifacts {
+		if artifact.OS == "linux" {
+			artifacts[artifact.Architecture] = artifact
+		}
+	}
+	var flags []string
+	for _, architecture := range []string{"amd64", "arm64"} {
+		artifact, exists := artifacts[architecture]
+		if !exists {
+			return nil, fmt.Errorf("missing Linux/%s artifact", architecture)
+		}
+		prefix := "GuestLinuxAMD64"
+		if architecture == "arm64" {
+			prefix = "GuestLinuxARM64"
+		}
+		url := fmt.Sprintf(
+			"https://github.com/zzanghyunmoo/my-desk-setup/releases/download/v%s/%s",
+			manifest.Version,
+			artifact.Name,
+		)
+		flags = append(
+			flags,
+			"-X",
+			"github.com/zzanghyunmoo/my-desk-setup/internal/version."+prefix+"URL="+url,
+			"-X",
+			"github.com/zzanghyunmoo/my-desk-setup/internal/version."+prefix+"SHA256="+artifact.SHA256,
+		)
+	}
+	return flags, nil
 }
 
 func buildEnvironment(base []string, overrides map[string]string) []string {

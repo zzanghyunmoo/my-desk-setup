@@ -2,7 +2,12 @@ package adapters_test
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
+	"errors"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -103,6 +108,15 @@ func TestLimaRuntimeCreatesPinnedUbuntuGuest(t *testing.T) {
 }
 
 func TestWSLRuntimeInstallsCanonicalGuestWithoutAuth(t *testing.T) {
+	image := []byte("reviewed Ubuntu 26.04 WSL image")
+	imageSum := sha256.Sum256(image)
+	server := httptest.NewTLSServer(http.HandlerFunc(func(
+		writer http.ResponseWriter,
+		_ *http.Request,
+	) {
+		_, _ = writer.Write(image)
+	}))
+	defer server.Close()
 	port := &recordingPort{
 		result: func(command transport.Command) transport.Result {
 			if command.Executable == "wsl.exe" &&
@@ -123,7 +137,16 @@ func TestWSLRuntimeInstallsCanonicalGuestWithoutAuth(t *testing.T) {
 		Delegate: readyComponent{
 			observation: adapters.Observation{State: adapters.StateAbsent},
 		},
-		Spec:            guest.Spec{WSLDistribution: "Ubuntu-26.04"},
+		Spec: guest.Spec{
+			WSLDistribution: "Ubuntu-26.04",
+			WSLImages: map[string]guest.ImageSpec{
+				"amd64": {
+					URL:    server.URL + "/ubuntu-26.04.wsl",
+					SHA256: hex.EncodeToString(imageSum[:]),
+				},
+			},
+		},
+		Client:          server.Client(),
 		CLIRevision:     hostRuntimeCLIRevision,
 		CatalogRevision: hostRuntimeCatalogRevision,
 	}
@@ -135,17 +158,71 @@ func TestWSLRuntimeInstallsCanonicalGuestWithoutAuth(t *testing.T) {
 	joined := recordedArgv(port.commands)
 	for _, expected := range []string{
 		"wsl.exe --install --no-distribution",
-		"wsl.exe --install --distribution Ubuntu-26.04 --no-launch",
+		"wsl.exe --install --from-file",
+		"--name Ubuntu-26.04 --no-launch",
 		"wsl.exe --distribution Ubuntu-26.04 --exec true",
 	} {
 		if !strings.Contains(joined, expected) {
 			t.Fatalf("commands do not contain %q:\n%s", expected, joined)
 		}
 	}
+	if strings.Contains(joined, "--install --distribution") {
+		t.Fatalf("WSL lifecycle used moving distribution install:\n%s", joined)
+	}
 	for _, forbidden := range []string{" auth ", " login ", "token"} {
 		if strings.Contains(strings.ToLower(joined), forbidden) {
 			t.Fatalf("WSL lifecycle contains forbidden auth surface %q:\n%s", forbidden, joined)
 		}
+	}
+}
+
+func TestWSLRuntimeRejectsPinnedImageChecksumMismatchBeforeInstall(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(
+		writer http.ResponseWriter,
+		_ *http.Request,
+	) {
+		_, _ = writer.Write([]byte("tampered WSL image"))
+	}))
+	defer server.Close()
+	port := &recordingPort{
+		result: func(command transport.Command) transport.Result {
+			if command.Executable == "wsl.exe" &&
+				len(command.Arguments) >= 2 &&
+				command.Arguments[0] == "--list" {
+				return transport.Result{Stdout: ""}
+			}
+			return transport.Result{}
+		},
+	}
+	runtime := hostadapter.GuestRuntime{
+		Architecture: "amd64",
+		Port:         port,
+		Delegate: readyComponent{
+			observation: adapters.Observation{State: adapters.StateReady},
+		},
+		Spec: guest.Spec{
+			WSLDistribution: "Ubuntu-26.04",
+			WSLImages: map[string]guest.ImageSpec{
+				"amd64": {
+					URL:    server.URL + "/ubuntu-26.04.wsl",
+					SHA256: strings.Repeat("0", 64),
+				},
+			},
+		},
+		Client:          server.Client(),
+		CLIRevision:     hostRuntimeCLIRevision,
+		CatalogRevision: hostRuntimeCatalogRevision,
+	}
+	err := runtime.Apply(context.Background(), planning.Action{
+		ID: "windows-host:local/wsl", ComponentID: "wsl",
+	})
+	var actionRequired *adapters.ActionRequiredError
+	if err == nil || errors.As(err, &actionRequired) ||
+		!strings.Contains(err.Error(), "checksum mismatch") {
+		t.Fatalf("Apply() error = %v, want hard checksum failure", err)
+	}
+	if strings.Contains(recordedArgv(port.commands), "--from-file") {
+		t.Fatalf("WSL install executed after checksum mismatch: %+v", port.commands)
 	}
 }
 

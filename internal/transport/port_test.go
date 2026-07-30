@@ -3,6 +3,7 @@ package transport
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"slices"
 	"strings"
@@ -89,6 +90,7 @@ func TestExecutorDoesNotPassInheritedCredentials(t *testing.T) {
 		context.Background(),
 		os.Args[0],
 		[]string{"-test.run=TestExecutorEnvironmentHelper"},
+		nil,
 		map[string]string{"MDS_EXECUTOR_HELPER": "1"},
 		"",
 		DefaultTimeout,
@@ -107,6 +109,37 @@ func TestExecutorEnvironmentHelper(t *testing.T) {
 		_, _ = fmt.Fprintf(os.Stderr, "inherited credential leaked: %q", value)
 		os.Exit(1)
 	}
+}
+
+func TestExecutorPassesBoundedCommandStdin(t *testing.T) {
+	result, err := (Executor{}).Run(
+		context.Background(),
+		os.Args[0],
+		[]string{"-test.run=TestExecutorStdinHelper"},
+		[]byte("reviewed bootstrap input"),
+		map[string]string{"MDS_STDIN_HELPER": "1"},
+		"",
+		DefaultTimeout,
+		DefaultOutputLimit,
+	)
+	if err != nil {
+		t.Fatalf("Executor.Run(): %v\nstderr: %s", err, result.Stderr)
+	}
+	if result.Stdout != "reviewed bootstrap input" {
+		t.Fatalf("stdout = %q, want passed stdin", result.Stdout)
+	}
+}
+
+func TestExecutorStdinHelper(t *testing.T) {
+	if os.Getenv("MDS_STDIN_HELPER") != "1" {
+		return
+	}
+	data, err := io.ReadAll(os.Stdin)
+	if err != nil {
+		os.Exit(1)
+	}
+	_, _ = os.Stdout.Write(data)
+	os.Exit(0)
 }
 
 func TestLimitedBufferTruncatesWithoutShortWrite(t *testing.T) {

@@ -204,6 +204,11 @@ func (adapter Adapter) run(ctx context.Context, command transport.Command) error
 func (adapter Adapter) runAll(ctx context.Context, commands []transport.Command) error {
 	for _, command := range commands {
 		if err := adapter.run(ctx, command); err != nil {
+			if isSudoPreflight(command) {
+				return &adapters.ActionRequiredError{
+					Reason: "run `sudo -v` inside the guest, then rerun the same mds apply; mds does not collect sudo credentials",
+				}
+			}
 			return err
 		}
 	}

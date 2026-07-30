@@ -8,6 +8,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -34,6 +35,9 @@ func TestAPTUsesNoninteractiveSudoArgv(t *testing.T) {
 	if len(commands) != 2 {
 		t.Fatalf("commands = %d, want preflight and install", len(commands))
 	}
+	if got, want := commands[0].Executable, "/usr/bin/sudo"; got != want {
+		t.Fatalf("sudo preflight executable = %q, want %q", got, want)
+	}
 	if got, want := commands[0].Arguments, []string{"-n", "true"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("sudo preflight = %v, want %v", got, want)
 	}
@@ -45,6 +49,28 @@ func TestAPTUsesNoninteractiveSudoArgv(t *testing.T) {
 	} {
 		if !strings.Contains(joined, expected) {
 			t.Fatalf("APT arguments %q do not contain %q", joined, expected)
+		}
+	}
+}
+
+func TestAPTRequiresUserManagedSudoCredentialRefresh(t *testing.T) {
+	port := &recordingPort{
+		err: func(command transport.Command) error {
+			if command.Executable == "/usr/bin/sudo" &&
+				reflect.DeepEqual(command.Arguments, []string{"-n", "true"}) {
+				return errors.New("sudo: a password is required")
+			}
+			return nil
+		},
+	}
+	err := packages.RequireSudo(context.Background(), port)
+	var actionRequired *adapters.ActionRequiredError
+	if !errors.As(err, &actionRequired) {
+		t.Fatalf("RequireSudo() error = %v, want action-required", err)
+	}
+	for _, expected := range []string{"sudo -v", "does not collect sudo credentials"} {
+		if !strings.Contains(actionRequired.Reason, expected) {
+			t.Fatalf("action-required reason = %q, want %q", actionRequired.Reason, expected)
 		}
 	}
 }

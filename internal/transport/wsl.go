@@ -25,6 +25,7 @@ func (wsl WSL) Run(ctx context.Context, command Command) (Result, error) {
 		ctx,
 		executable,
 		arguments,
+		command.Stdin,
 		nil,
 		"",
 		command.Timeout,

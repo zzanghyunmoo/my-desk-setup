@@ -18,6 +18,7 @@ type Spec struct {
 	SystemdRequired bool                 `yaml:"systemd_required"`
 	WSLDistribution string               `yaml:"wsl_distribution"`
 	Images          map[string]ImageSpec `yaml:"images"`
+	WSLImages       map[string]ImageSpec `yaml:"wsl_images"`
 }
 
 type ImageSpec struct {
@@ -72,6 +73,11 @@ func decodeSpec(reader io.Reader) (Spec, error) {
 	for architecture, image := range spec.Images {
 		if image.URL == "" || len(image.SHA256) != 64 {
 			return Spec{}, fmt.Errorf("guest image %q requires URL and SHA-256", architecture)
+		}
+	}
+	for architecture, image := range spec.WSLImages {
+		if image.URL == "" || len(image.SHA256) != 64 {
+			return Spec{}, fmt.Errorf("WSL image %q requires URL and SHA-256", architecture)
 		}
 	}
 	return spec, nil

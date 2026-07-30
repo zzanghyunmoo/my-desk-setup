@@ -2,18 +2,27 @@ package host
 
 import (
 	"context"
+	_ "embed"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/zzanghyunmoo/my-desk-setup/internal/adapters"
+	"github.com/zzanghyunmoo/my-desk-setup/internal/adapters/packages"
 	"github.com/zzanghyunmoo/my-desk-setup/internal/guest"
 	"github.com/zzanghyunmoo/my-desk-setup/internal/planning"
 	"github.com/zzanghyunmoo/my-desk-setup/internal/target"
 	"github.com/zzanghyunmoo/my-desk-setup/internal/transport"
 )
+
+//go:embed guest-bootstrap.sh
+var guestBootstrapScript []byte
 
 const (
 	defaultGuestName        = "mds"
@@ -21,15 +30,22 @@ const (
 	guestHandoffOutputLimit = 1 << 20
 )
 
+type GuestBootstrapArtifact struct {
+	URL    string
+	SHA256 string
+}
+
 // GuestRuntime owns only host-side WSL/Lima lifecycle. Linux component
 // reconciliation still runs through mds inside the guest.
 type GuestRuntime struct {
-	Architecture    string
-	Port            transport.Port
-	Delegate        adapters.Component
-	Spec            guest.Spec
-	CLIRevision     string
-	CatalogRevision string
+	Architecture       string
+	Port               transport.Port
+	Delegate           adapters.Component
+	Spec               guest.Spec
+	CLIRevision        string
+	CatalogRevision    string
+	BootstrapArtifacts map[string]GuestBootstrapArtifact
+	Client             *http.Client
 }
 
 func (runtime GuestRuntime) Observe(
@@ -124,10 +140,17 @@ func (runtime GuestRuntime) Apply(
 	if err != nil {
 		return err
 	}
+	if err := runtime.verifyGuestHandoff(ctx, action); err == nil {
+		return nil
+	}
+	if err := runtime.bootstrapGuestMDS(ctx, action); err != nil {
+		return err
+	}
 	if err := runtime.verifyGuestHandoff(ctx, action); err != nil {
-		return &adapters.ActionRequiredError{
-			Reason: runtime.guestBootstrapReason(action),
-		}
+		return fmt.Errorf(
+			"guest-local mds identity did not converge after verified bootstrap: %w",
+			err,
+		)
 	}
 	return nil
 }
@@ -244,16 +267,8 @@ func (runtime GuestRuntime) applyWSL(
 		return err
 	}
 	if !hasTarget(distributions, target.KindWSLGuest, runtime.Spec.WSLDistribution) {
-		if _, err := runtime.Port.Run(ctx, transport.Command{
-			Executable: "wsl.exe",
-			Arguments: []string{
-				"--install", "--distribution", runtime.Spec.WSLDistribution,
-				"--no-launch",
-			},
-		}); err != nil {
-			return &adapters.ActionRequiredError{
-				Reason: "finish WSL reboot/installation, then rerun the same apply",
-			}
+		if err := runtime.installPinnedWSLImage(ctx); err != nil {
+			return err
 		}
 	}
 	if _, err := runtime.Port.Run(ctx, transport.Command{
@@ -265,6 +280,85 @@ func (runtime GuestRuntime) applyWSL(
 	}); err != nil {
 		return &adapters.ActionRequiredError{
 			Reason: "launch Ubuntu once to create the Linux user, then rerun the same apply",
+		}
+	}
+	return nil
+}
+
+func (runtime GuestRuntime) installPinnedWSLImage(ctx context.Context) (resultErr error) {
+	architecture := runtime.Architecture
+	switch architecture {
+	case "x86_64":
+		architecture = "amd64"
+	case "aarch64":
+		architecture = "arm64"
+	}
+	image, exists := runtime.Spec.WSLImages[architecture]
+	if !exists {
+		return fmt.Errorf("Ubuntu WSL image is not pinned for %q", architecture)
+	}
+	if err := validateGuestBootstrapArtifact(GuestBootstrapArtifact{
+		URL: image.URL, SHA256: image.SHA256,
+	}); err != nil {
+		return fmt.Errorf("invalid pinned Ubuntu WSL image: %w", err)
+	}
+	temporaryDirectory, err := os.MkdirTemp("", "mds-wsl-image-*")
+	if err != nil {
+		return fmt.Errorf("create WSL image temporary directory: %w", err)
+	}
+	defer func() {
+		if err := os.RemoveAll(temporaryDirectory); err != nil {
+			resultErr = errors.Join(
+				resultErr,
+				fmt.Errorf("remove WSL image temporary directory: %w", err),
+			)
+		}
+	}()
+	imagePath := filepath.Join(temporaryDirectory, "ubuntu-26.04.wsl")
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, image.URL, nil)
+	if err != nil {
+		return fmt.Errorf("create Ubuntu WSL image request: %w", err)
+	}
+	client := runtime.Client
+	if client == nil {
+		client = &http.Client{Timeout: 30 * time.Minute}
+	}
+	response, err := client.Do(request)
+	if err != nil {
+		return fmt.Errorf("download Ubuntu WSL image: %w", err)
+	}
+	defer func() {
+		if err := response.Body.Close(); err != nil {
+			resultErr = errors.Join(
+				resultErr,
+				fmt.Errorf("close Ubuntu WSL image response: %w", err),
+			)
+		}
+	}()
+	if response.StatusCode != http.StatusOK {
+		return fmt.Errorf("download Ubuntu WSL image: HTTP %s", response.Status)
+	}
+	if err := packages.DownloadAndVerify(
+		response.Body,
+		imagePath,
+		image.SHA256,
+	); err != nil {
+		return fmt.Errorf("verify Ubuntu WSL image: %w", err)
+	}
+	if _, err := runtime.Port.Run(ctx, transport.Command{
+		Executable: "wsl.exe",
+		Arguments: []string{
+			"--install",
+			"--from-file", imagePath,
+			"--name", runtime.Spec.WSLDistribution,
+			"--no-launch",
+		},
+	}); err != nil {
+		return &adapters.ActionRequiredError{
+			Reason: fmt.Sprintf(
+				"verified Ubuntu WSL image installation did not complete: %v; finish any WSL reboot/installation prompt, then rerun the same apply",
+				err,
+			),
 		}
 	}
 	return nil
@@ -360,7 +454,10 @@ func (runtime GuestRuntime) guestHandoffCommand(
 		err        error
 	)
 	guestCommand := transport.Command{
-		Executable:  "mds",
+		Executable: "/bin/sh",
+		Arguments: []string{
+			"-c", `exec "$HOME/.local/bin/mds" "$@"`, "mds",
+		},
 		Timeout:     guestHandoffTimeout,
 		OutputLimit: guestHandoffOutputLimit,
 	}
@@ -368,7 +465,10 @@ func (runtime GuestRuntime) guestHandoffCommand(
 	case "lima":
 		guestID, err = target.NewID(target.KindLimaGuest, defaultGuestName)
 		if err == nil {
-			guestCommand.Arguments = guestPlanArguments(guestID)
+			guestCommand.Arguments = append(
+				guestCommand.Arguments,
+				guestPlanArguments(guestID)...,
+			)
 			executable, arguments = transport.LimaArgv(defaultGuestName, guestCommand)
 		}
 	case "wsl":
@@ -377,7 +477,10 @@ func (runtime GuestRuntime) guestHandoffCommand(
 			runtime.Spec.WSLDistribution,
 		)
 		if err == nil {
-			guestCommand.Arguments = guestPlanArguments(guestID)
+			guestCommand.Arguments = append(
+				guestCommand.Arguments,
+				guestPlanArguments(guestID)...,
+			)
 			executable, arguments = transport.WSLArgv(
 				runtime.Spec.WSLDistribution,
 				guestCommand,
@@ -400,6 +503,104 @@ func (runtime GuestRuntime) guestHandoffCommand(
 	}, nil
 }
 
+func (runtime GuestRuntime) bootstrapGuestMDS(
+	ctx context.Context,
+	action planning.Action,
+) error {
+	architecture := runtime.Architecture
+	switch architecture {
+	case "x86_64":
+		architecture = "amd64"
+	case "aarch64":
+		architecture = "arm64"
+	}
+	artifact, exists := runtime.BootstrapArtifacts[architecture]
+	if !exists {
+		return &adapters.ActionRequiredError{
+			Reason: runtime.guestBootstrapReason(action),
+		}
+	}
+	if err := validateGuestBootstrapArtifact(artifact); err != nil {
+		return fmt.Errorf("invalid embedded guest bootstrap artifact: %w", err)
+	}
+	command, err := runtime.guestBootstrapCommand(action, artifact)
+	if err != nil {
+		return err
+	}
+	result, err := runtime.Port.Run(ctx, command)
+	if err == nil {
+		return nil
+	}
+	if result.ExitCode == 73 {
+		detail := strings.TrimSpace(result.Stderr)
+		if detail == "" {
+			detail = "guest-local mds is not owned by mds"
+		}
+		return &adapters.ActionRequiredError{
+			Reason: detail + "; resolve the ownership conflict, then rerun the same mds apply",
+		}
+	}
+	return fmt.Errorf("bootstrap guest-local mds from verified release artifact: %w", err)
+}
+
+func (runtime GuestRuntime) guestBootstrapCommand(
+	action planning.Action,
+	artifact GuestBootstrapArtifact,
+) (transport.Command, error) {
+	guestCommand := transport.Command{
+		Executable: "/bin/sh",
+		Arguments: []string{
+			"-eu", "-s", "--", artifact.URL, artifact.SHA256,
+		},
+		Stdin:       append([]byte(nil), guestBootstrapScript...),
+		Timeout:     2 * time.Minute,
+		OutputLimit: guestHandoffOutputLimit,
+	}
+	var executable string
+	var arguments []string
+	switch action.ComponentID {
+	case "lima":
+		executable, arguments = transport.LimaArgv(defaultGuestName, guestCommand)
+	case "wsl":
+		executable, arguments = transport.WSLArgv(
+			runtime.Spec.WSLDistribution,
+			guestCommand,
+		)
+	default:
+		return transport.Command{}, fmt.Errorf(
+			"unsupported guest runtime component %q",
+			action.ComponentID,
+		)
+	}
+	return transport.Command{
+		Executable:  executable,
+		Arguments:   arguments,
+		Stdin:       guestCommand.Stdin,
+		Timeout:     guestCommand.Timeout,
+		OutputLimit: guestCommand.OutputLimit,
+	}, nil
+}
+
+func validateGuestBootstrapArtifact(artifact GuestBootstrapArtifact) error {
+	parsed, err := url.ParseRequestURI(artifact.URL)
+	if err != nil ||
+		parsed.Scheme != "https" ||
+		parsed.Host == "" ||
+		parsed.User != nil {
+		return errors.New("artifact URL must be an absolute credential-free HTTPS URL")
+	}
+	if len(artifact.SHA256) != 64 {
+		return errors.New("artifact SHA-256 must contain exactly 64 lowercase hex characters")
+	}
+	for _, character := range artifact.SHA256 {
+		if (character < '0' || character > '9') &&
+			(character < 'a' || character > 'f') {
+			return errors.New("artifact SHA-256 must contain exactly 64 lowercase hex characters")
+		}
+	}
+	return nil
+}
+
 func guestPlanArguments(id target.ID) []string {
 	return []string{
 		"plan",
@@ -415,8 +616,9 @@ func (runtime GuestRuntime) guestBootstrapReason(action planning.Action) string 
 		return "guest-local mds bootstrap is required"
 	}
 	return fmt.Sprintf(
-		"guest-local mds bootstrap is required in %s: install a checksum-verified Linux artifact matching CLI revision %q and embedded catalog revision %q, then rerun; no reviewed guest artifact and checksum were provided for automatic transfer",
+		"guest-local mds bootstrap is required in %s, but this host CLI has no reviewed Linux/%s artifact URL and SHA-256; install a release build containing guest bootstrap metadata for CLI revision %q and catalog revision %q, then rerun",
 		guestID.String(),
+		runtime.Architecture,
 		runtime.CLIRevision,
 		runtime.CatalogRevision,
 	)

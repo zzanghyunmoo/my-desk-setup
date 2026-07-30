@@ -75,6 +75,9 @@ func (docker Docker) Apply(
 	if err != nil {
 		return err
 	}
+	if err := packages.RequireSudo(ctx, docker.Port); err != nil {
+		return err
+	}
 
 	temporaryDirectory, err := os.MkdirTemp("", "mds-docker-repository-*")
 	if err != nil {
@@ -133,24 +136,23 @@ func (docker Docker) Apply(
 	}
 
 	commands := []transport.Command{
-		{Executable: "sudo", Arguments: []string{"-n", "true"}},
 		{
-			Executable: "sudo",
+			Executable: "/usr/bin/sudo",
 			Arguments:  []string{"-n", "install", "-d", "-m", "0755", "/etc/apt/keyrings"},
 		},
 		{
-			Executable: "sudo",
+			Executable: "/usr/bin/sudo",
 			Arguments:  []string{"-n", "install", "-m", "0644", keyPath, "/etc/apt/keyrings/docker.asc"},
 		},
 		{
-			Executable: "sudo",
+			Executable: "/usr/bin/sudo",
 			Arguments: []string{
 				"-n", "install", "-m", "0644", listPath,
 				"/etc/apt/sources.list.d/docker.list",
 			},
 		},
 		{
-			Executable: "sudo",
+			Executable: "/usr/bin/sudo",
 			Arguments: []string{
 				"-n", "env", "DEBIAN_FRONTEND=noninteractive",
 				"apt-get", "update",
@@ -163,7 +165,7 @@ func (docker Docker) Apply(
 	}
 	commands = append(commands, installCommands[1])
 	commands = append(commands, transport.Command{
-		Executable: "sudo",
+		Executable: "/usr/bin/sudo",
 		Arguments:  []string{"-n", "systemctl", "enable", "--now", "docker"},
 	})
 	for _, command := range commands {
@@ -196,14 +198,11 @@ func (docker Docker) Apply(
 		return fmt.Errorf("inspect Docker group membership: %w", err)
 	}
 	if !containsWord(groups.Stdout, "docker") {
-		if _, err := docker.Port.Run(ctx, transport.Command{
-			Executable: "sudo",
-			Arguments:  []string{"-n", "usermod", "-aG", "docker", currentUsername},
-		}); err != nil {
-			return fmt.Errorf("add guest user to Docker group: %w", err)
-		}
 		return &adapters.ActionRequiredError{
-			Reason: "Docker was installed; restart the guest shell so docker group membership becomes active",
+			Reason: fmt.Sprintf(
+				"Docker was installed, but docker group membership grants root-equivalent daemon access; review and run `sudo usermod -aG docker %s` yourself, restart the guest shell, then rerun the same mds apply",
+				currentUsername,
+			),
 		}
 	}
 	return nil

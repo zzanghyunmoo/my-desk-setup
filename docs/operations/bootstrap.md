@@ -28,6 +28,10 @@ checksum이 맞지 않는 archive를 bootstrap 또는 target certification에 �
 않는다. 정식 tag release에는 같은 identity에 묶인
 `release-promotion.json`도 영구 asset으로 포함된다.
 
+macOS와 Windows host binary에는 같은 release의 Linux `amd64`/`arm64`
+archive URL과 SHA-256이 함께 embed된다. guest bootstrap은 이 exact identity만
+사용하며 `latest`나 별도 moving catalog를 조회하지 않는다.
+
 ### Maintainer build
 
 source commit과 whole-second RFC3339 release timestamp를 명시한다. output
@@ -119,19 +123,20 @@ limactl list
 limactl shell --tty=false mds -- true
 ```
 
-GuestRuntime은 생성·시작 후 host에서 guest-owned 경로를 직접 수정하지 않고,
-bounded `limactl shell --tty=false ... -- mds plan --all --format json`
-argv로 guest-local CLI에 handoff한다. guest plan이 host와 정확히 같은 CLI
-revision과 embedded catalog revision을 보고할 때만 Lima runtime을 ready로
-판정한다.
+GuestRuntime은 생성·시작 후 host에서 guest-owned 경로를 직접 수정하지 않는다.
+guest-local `mds`가 없거나 revision이 다르면 host binary에 embed된 같은
+release의 Linux archive URL과 SHA-256을 고정 argv와 bounded stdin installer로
+guest에 전달한다. guest 내부 installer가 HTTPS download, SHA-256 검증,
+`~/.local/bin/mds` atomic install과 owner-only marker 기록을 수행한다.
+user-owned binary, symlink 또는 marker 없는 기존 binary는 덮어쓰지 않고
+`action-required`로 중단한다.
 
-현재 host apply 입력에는 검토된 Linux archive와 checksum이 포함되지 않으므로
-GuestRuntime은 binary를 다운로드·복사·설치했다고 가장하지 않는다. guest-local
-`mds`가 없거나 revision이 다르면 필요한 두 revision을 담은
-`action-required`로 중단한다. 사용자는 같은 release/commit의
-`linux_<arch>` archive를 게시된 checksum으로 검증해 guest 안에 설치한 뒤
-동일한 host apply를 다시 실행한다. binary가 catalog를 embed하므로 별도 moving
-catalog download는 사용하지 않는다.
+설치 뒤 GuestRuntime은 bounded
+`limactl shell --tty=false ... -- /bin/sh -c <fixed-handoff> ...`
+argv로 guest-local CLI를 실행한다. guest plan이 host와 정확히 같은 CLI
+revision과 embedded catalog revision을 보고할 때만 Lima runtime을 ready로
+판정한다. release metadata가 없는 development host binary는 자동 download를
+시도하지 않고 정확한 Linux artifact identity가 필요하다고 보고한다.
 
 게스트 shell에서 actual target과 guest selection을 다시 계획하고 적용한다.
 
@@ -146,7 +151,22 @@ mds doctor --all --format json
 
 `LIMA_INSTANCE=mds`가 있는 Lima shell에서 local target은
 `lima-guest:mds`로 발견된다. Docker 단계는 guest의 systemd가 active가
-아니면 mutation 전에 `action-required`다.
+아니면 mutation 전에 `action-required`다. APT나 Docker 설치 전
+`/usr/bin/sudo -n true`가 실패하면 mds는 password를 받지 않고 다음 조치를
+요청한다.
+
+```sh
+sudo -v
+mds plan --all --format json
+mds apply --all \
+  --plan-digest 'sha256:<newly-reviewed-guest-plan-digest>' \
+  --format json
+```
+
+Docker 설치 후 `docker` 그룹 가입은 root-equivalent daemon 권한을 주므로
+mds가 자동 실행하지 않는다. 사용자가 action-required에 표시된
+`sudo usermod -aG docker <guest-user>`를 검토해 직접 실행하고 guest shell을
+재시작한 뒤 다시 계획·적용한다.
 
 ## Windows clean host
 
@@ -183,6 +203,13 @@ WSL만 별도로 계획할 수 있다.
   --format json
 ```
 
+GuestRuntime은 `catalog/targets/ubuntu-26.04.yaml`에 고정된
+architecture별 공식 `.wsl` URL과 SHA-256을 사용한다. host process가 새
+temporary file로 image를 streaming download하고 checksum을 검증한 뒤에만
+`wsl.exe --install --from-file ... --name Ubuntu-26.04 --no-launch`를
+실행한다. 이름만 지정하는 moving `wsl --install --distribution` 경로는
+사용하지 않으며 checksum mismatch는 설치 전에 hard failure다.
+
 Windows feature 활성화, reboot 또는 최초 Linux user 생성이 필요하면
 `action-required`로 종료한다. 자동 reboot나 계정 생성을 시도하지 않는다.
 
@@ -193,13 +220,11 @@ Windows feature 활성화, reboot 또는 최초 Linux user 생성이 필요하�
 5. 현재 plan의 exact digest로 `apply --component wsl`을 재실행한다.
 
 WSL lifecycle도 host에서 guest-owned 경로를 직접 수정하지 않는다. 준비 후
-GuestRuntime은 bounded
-`wsl.exe --distribution Ubuntu-26.04 --exec mds plan ...` argv로 handoff하고,
-host와 같은 CLI 및 embedded catalog revision일 때만 ready로 판정한다.
-검토된 Linux archive/checksum이 host apply 입력에 없으므로 missing/stale
-guest-local `mds`는 자동 전송하지 않고 `action-required`로 보고한다. 사용자가
-같은 release의 `linux_<arch>` binary를 게시된 checksum으로 검증해 설치한 뒤
-host apply를 재실행해야 한다. guest shell의
+missing/stale guest-local `mds`는 Lima와 같은 guest-local checksum verifier로
+자동 수렴시킨다. 이어서 bounded
+`wsl.exe --distribution Ubuntu-26.04 --exec /bin/sh -c <fixed-handoff> ...`
+argv로 handoff하고 host와 같은 CLI 및 embedded catalog revision일 때만
+ready로 판정한다. guest shell의
 `WSL_DISTRO_NAME=Ubuntu-26.04`를 통해 target은
 `wsl-guest:Ubuntu-26.04`로 발견되며, 이후 guest 내부에서 `plan`, `apply`,
 `doctor`를 실행한다.
@@ -284,6 +309,22 @@ API로 조회한다. artifact 이름은
 정확히 하나여야 한다. 다운로드한 bundle은 Gitleaks 검사를 거친 뒤 release와
 재결합해 promotion한다. promotion report는 publish 단계에서 한 번 더 검증해
 stable `release-promotion.json` asset으로 게시한다.
+
+actual-target job은 `target-certification` 보호 environment와 다음 네
+allowlisted label만 사용한다.
+
+- `mds-macos-host`
+- `mds-windows-host`
+- `mds-wsl-guest`
+- `mds-lima-guest`
+
+target ID와 runner label은 workflow 안에서 exact pair로 다시 검증한다.
+self-hosted runner는 target별 전용 OS 계정과 전용 작업 디렉터리에서 실행하고,
+저장된 API key, browser session, SSH agent, cloud credential 또는 repository
+secret을 두지 않는다. workflow의 자동 `GITHUB_TOKEN`은 `contents: read`로만
+제한하고 environment에는 secret을 등록하지 않는다. 보호 environment reviewer는
+requested commit, target, binary checksum과 runner label을 확인한 뒤 실행을
+허용한다. 모든 third-party action은 full commit SHA로 고정한다.
 
 현재 Windows host, WSL Ubuntu와 Lima Ubuntu의 actual evidence는 없다. 이
 상태에서 해당 target을 verified로 기록하거나 fixture로 대체하지 않는다.

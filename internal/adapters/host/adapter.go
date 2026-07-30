@@ -41,6 +41,18 @@ func New(
 		Delegate: packagesAdapter, Spec: spec,
 		CLIRevision: version.String(), CatalogRevision: catalogRevision,
 	}
+	for _, guestArchitecture := range []string{"amd64", "arm64"} {
+		artifact, exists := version.GuestLinuxArtifact(guestArchitecture)
+		if !exists {
+			continue
+		}
+		if runtime.BootstrapArtifacts == nil {
+			runtime.BootstrapArtifacts = make(map[string]GuestBootstrapArtifact)
+		}
+		runtime.BootstrapArtifacts[guestArchitecture] = GuestBootstrapArtifact{
+			URL: artifact.URL, SHA256: artifact.SHA256,
+		}
+	}
 	byID := map[string]adapters.Component{
 		"lima": runtime,
 		"wsl":  runtime,

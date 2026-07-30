@@ -20,6 +20,7 @@ const (
 type Command struct {
 	Executable       string
 	Arguments        []string
+	Stdin            []byte
 	Environment      map[string]string
 	WorkingDirectory string
 	Timeout          time.Duration
@@ -44,6 +45,7 @@ func (Executor) Run(
 	ctx context.Context,
 	executable string,
 	arguments []string,
+	stdin []byte,
 	environment map[string]string,
 	workingDirectory string,
 	timeout time.Duration,
@@ -71,6 +73,9 @@ func (Executor) Run(
 	command := exec.CommandContext(ctx, executable, arguments...)
 	command.Env = commandEnv
 	command.Dir = workingDirectory
+	if len(stdin) > 0 {
+		command.Stdin = bytes.NewReader(stdin)
+	}
 	command.Stdout = stdout
 	command.Stderr = stderr
 	err = command.Run()

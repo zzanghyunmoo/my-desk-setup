@@ -447,22 +447,24 @@ func TestDockerInstallsGuestEngineAndRequestsShellRestart(t *testing.T) {
 	err := docker.Apply(context.Background(), dockerAction())
 	var actionRequired *adapters.ActionRequiredError
 	if !errors.As(err, &actionRequired) ||
-		!strings.Contains(actionRequired.Reason, "restart the guest shell") {
-		t.Fatalf("Apply() error = %v, want shell restart action", err)
+		!strings.Contains(actionRequired.Reason, "root-equivalent daemon access") ||
+		!strings.Contains(actionRequired.Reason, "sudo usermod -aG docker gurumee") {
+		t.Fatalf("Apply() error = %v, want explicit privileged action", err)
 	}
 	joined := recordedArgv(port.commands)
 	for _, expected := range []string{
 		"apt-get update",
 		"apt-get install -y --no-install-recommends docker-ce docker-ce-cli containerd.io docker-compose-plugin",
 		"systemctl enable --now docker",
-		"usermod -aG docker gurumee",
 	} {
 		if !strings.Contains(joined, expected) {
 			t.Fatalf("commands do not contain %q:\n%s", expected, joined)
 		}
 	}
-	if strings.Contains(joined, "docker login") {
-		t.Fatalf("Docker installation attempted authentication:\n%s", joined)
+	for _, forbidden := range []string{"docker login", "usermod -aG docker"} {
+		if strings.Contains(joined, forbidden) {
+			t.Fatalf("Docker installation attempted forbidden %q:\n%s", forbidden, joined)
+		}
 	}
 }
 

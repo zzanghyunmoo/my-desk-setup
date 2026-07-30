@@ -27,7 +27,14 @@ func TestPackageAdapterPropagatesInstallerExecutionFailure(t *testing.T) {
 			adapter := packages.Adapter{
 				Home: t.TempDir(),
 				Port: &recordingPort{
-					err: func(transport.Command) error {
+					err: func(command transport.Command) error {
+						if installer == "apt" &&
+							command.Executable == "/usr/bin/sudo" &&
+							len(command.Arguments) == 2 &&
+							command.Arguments[0] == "-n" &&
+							command.Arguments[1] == "true" {
+							return nil
+						}
 						return executionErr
 					},
 				},

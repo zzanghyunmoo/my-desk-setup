@@ -3,6 +3,7 @@ package release
 import (
 	"archive/tar"
 	"archive/zip"
+	"bytes"
 	"compress/gzip"
 	"context"
 	"crypto/sha256"
@@ -93,6 +94,29 @@ func TestBuildProducesDeterministicStrictRelease(t *testing.T) {
 	}
 	if got, want := len(firstManifest.Bootstraps), 2; got != want {
 		t.Fatalf("bootstrap count = %d, want %d", got, want)
+	}
+	hostBinary := extractArchiveBinary(
+		t,
+		filepath.Join(first, "mds_0.1.0_darwin_amd64.tar.gz"),
+	)
+	hostBytes, err := os.ReadFile(hostBinary)
+	if err != nil {
+		t.Fatalf("read host binary: %v", err)
+	}
+	for _, artifact := range firstManifest.Artifacts {
+		if artifact.OS != "linux" {
+			continue
+		}
+		url := fmt.Sprintf(
+			"https://github.com/zzanghyunmoo/my-desk-setup/releases/download/v%s/%s",
+			firstManifest.Version,
+			artifact.Name,
+		)
+		for _, embedded := range []string{url, artifact.SHA256} {
+			if !bytes.Contains(hostBytes, []byte(embedded)) {
+				t.Fatalf("host binary does not embed guest artifact identity %q", embedded)
+			}
+		}
 	}
 
 	if runtime.GOOS == "windows" {

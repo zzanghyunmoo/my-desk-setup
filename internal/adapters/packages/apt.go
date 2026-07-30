@@ -1,12 +1,16 @@
 package packages
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
+	"github.com/zzanghyunmoo/my-desk-setup/internal/adapters"
 	"github.com/zzanghyunmoo/my-desk-setup/internal/planning"
 	"github.com/zzanghyunmoo/my-desk-setup/internal/transport"
 )
+
+const sudoExecutable = "/usr/bin/sudo"
 
 func APTInstall(action planning.Action) ([]transport.Command, error) {
 	packages := strings.Fields(action.Package)
@@ -25,10 +29,38 @@ func APTInstall(action planning.Action) ([]transport.Command, error) {
 	}
 	arguments = append(arguments, packages...)
 	return []transport.Command{
-		{Executable: "sudo", Arguments: []string{"-n", "true"}},
+		sudoPreflightCommand(),
 		{
-			Executable: "sudo",
+			Executable: sudoExecutable,
 			Arguments:  arguments,
 		},
 	}, nil
+}
+
+// RequireSudo verifies that the user has explicitly refreshed sudo credentials.
+// mds never prompts for a password or attempts to acquire credentials itself.
+func RequireSudo(ctx context.Context, port transport.Port) error {
+	if port == nil {
+		return fmt.Errorf("sudo preflight requires a transport port")
+	}
+	if _, err := port.Run(ctx, sudoPreflightCommand()); err != nil {
+		return &adapters.ActionRequiredError{
+			Reason: "run `sudo -v` inside the guest, then rerun the same mds apply; mds does not collect sudo credentials",
+		}
+	}
+	return nil
+}
+
+func sudoPreflightCommand() transport.Command {
+	return transport.Command{
+		Executable: sudoExecutable,
+		Arguments:  []string{"-n", "true"},
+	}
+}
+
+func isSudoPreflight(command transport.Command) bool {
+	return command.Executable == sudoExecutable &&
+		len(command.Arguments) == 2 &&
+		command.Arguments[0] == "-n" &&
+		command.Arguments[1] == "true"
 }

@@ -42,6 +42,7 @@ func TestGuestRuntimeHandoffUsesExactRevisionAndBoundedArgv(t *testing.T) {
 			wantTarget: "lima-guest:mds",
 			wantArgv: []string{
 				"shell", "--tty=false", "mds", "--",
+				"/bin/sh", "-c", `exec "$HOME/.local/bin/mds" "$@"`,
 				"mds", "plan", "--target", "lima-guest:mds",
 				"--all", "--format", "json",
 			},
@@ -56,7 +57,8 @@ func TestGuestRuntimeHandoffUsesExactRevisionAndBoundedArgv(t *testing.T) {
 			wantTarget: "wsl-guest:Ubuntu-26.04",
 			wantArgv: []string{
 				"--distribution", "Ubuntu-26.04",
-				"--exec", "mds", "plan",
+				"--exec", "/bin/sh", "-c",
+				`exec "$HOME/.local/bin/mds" "$@"`, "mds", "plan",
 				"--target", "wsl-guest:Ubuntu-26.04",
 				"--all", "--format", "json",
 			},
@@ -124,7 +126,7 @@ func TestGuestRuntimeHandoffUsesExactRevisionAndBoundedArgv(t *testing.T) {
 	}
 }
 
-func TestGuestRuntimeMissingOrStaleMDSRequiresReviewedBootstrap(t *testing.T) {
+func TestGuestRuntimeMissingOrStaleMDSWithoutReleaseMetadataRequiresAction(t *testing.T) {
 	tests := []struct {
 		name      string
 		handoff   func() (transport.Result, error)
@@ -208,7 +210,7 @@ func TestGuestRuntimeMissingOrStaleMDSRequiresReviewedBootstrap(t *testing.T) {
 				t.Fatalf("Apply() error = %v, want action-required bootstrap handoff", err)
 			}
 			for _, expected := range []string{
-				"checksum-verified Linux artifact",
+				"no reviewed Linux/arm64 artifact URL and SHA-256",
 				testGuestCLIRevision,
 				testGuestCatalogRevision,
 			} {
@@ -217,6 +219,122 @@ func TestGuestRuntimeMissingOrStaleMDSRequiresReviewedBootstrap(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestGuestRuntimeAutomaticallyBootstrapsReviewedLinuxArtifact(t *testing.T) {
+	const (
+		artifactURL = "https://github.com/zzanghyunmoo/my-desk-setup/releases/download/v1.2.3/mds_1.2.3_linux_arm64.tar.gz"
+		artifactSHA = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	)
+	handoffAttempts := 0
+	port := &guestRuntimePort{
+		result: func(command transport.Command) (transport.Result, error) {
+			switch {
+			case command.Executable == "limactl" &&
+				slices.Equal(command.Arguments, []string{"list", "--json"}):
+				return transport.Result{
+					Stdout: `{"name":"mds","status":"Running","arch":"aarch64","limaVersion":"2.1.1"}`,
+				}, nil
+			case isGuestBootstrapCommand(command):
+				return transport.Result{}, nil
+			case isGuestMDSCommand(command):
+				handoffAttempts++
+				if handoffAttempts < 2 {
+					return transport.Result{}, errors.New("mds executable not found")
+				}
+				return transport.Result{Stdout: guestPlanIdentityJSON(
+					"lima-guest:mds",
+					testGuestCLIRevision,
+					testGuestCatalogRevision,
+				)}, nil
+			default:
+				return transport.Result{}, nil
+			}
+		},
+	}
+	runtime := hostadapter.GuestRuntime{
+		Architecture:    "arm64",
+		Port:            port,
+		Delegate:        guestRuntimeDelegate{},
+		Spec:            guest.Spec{WSLDistribution: "Ubuntu-26.04"},
+		CLIRevision:     testGuestCLIRevision,
+		CatalogRevision: testGuestCatalogRevision,
+		BootstrapArtifacts: map[string]hostadapter.GuestBootstrapArtifact{
+			"arm64": {URL: artifactURL, SHA256: artifactSHA},
+		},
+	}
+	if err := runtime.Apply(context.Background(), planning.Action{
+		ID: "macos-host:local/lima", ComponentID: "lima",
+	}); err != nil {
+		t.Fatalf("Apply(): %v", err)
+	}
+	var bootstrap transport.Command
+	for _, command := range port.commands {
+		if isGuestBootstrapCommand(command) {
+			bootstrap = command
+			break
+		}
+	}
+	if len(bootstrap.Stdin) == 0 ||
+		!strings.Contains(string(bootstrap.Stdin), "sha256sum -c") {
+		t.Fatalf("bootstrap stdin does not contain checksum-verifying installer")
+	}
+	joined := strings.Join(bootstrap.Arguments, " ")
+	for _, expected := range []string{artifactURL, artifactSHA, "/bin/sh -eu -s --"} {
+		if !strings.Contains(joined, expected) {
+			t.Fatalf("bootstrap argv = %q, want %q", joined, expected)
+		}
+	}
+	for _, forbidden := range []string{" auth ", " login ", "token"} {
+		if strings.Contains(strings.ToLower(" "+joined+" "), forbidden) {
+			t.Fatalf("bootstrap argv contains forbidden auth surface %q", forbidden)
+		}
+	}
+}
+
+func TestGuestRuntimeBootstrapPreservesUserOwnedMDS(t *testing.T) {
+	const artifactSHA = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	port := &guestRuntimePort{
+		result: func(command transport.Command) (transport.Result, error) {
+			switch {
+			case command.Executable == "limactl" &&
+				slices.Equal(command.Arguments, []string{"list", "--json"}):
+				return transport.Result{
+					Stdout: `{"name":"mds","status":"Running","arch":"aarch64","limaVersion":"2.1.1"}`,
+				}, nil
+			case isGuestBootstrapCommand(command):
+				return transport.Result{
+					ExitCode: 73,
+					Stderr:   "refusing to replace guest-local mds without the mds ownership marker",
+				}, errors.New("bootstrap ownership conflict")
+			case isGuestMDSCommand(command):
+				return transport.Result{}, errors.New("stale guest-local mds")
+			default:
+				return transport.Result{}, nil
+			}
+		},
+	}
+	runtime := hostadapter.GuestRuntime{
+		Architecture:    "arm64",
+		Port:            port,
+		Delegate:        guestRuntimeDelegate{},
+		Spec:            guest.Spec{WSLDistribution: "Ubuntu-26.04"},
+		CLIRevision:     testGuestCLIRevision,
+		CatalogRevision: testGuestCatalogRevision,
+		BootstrapArtifacts: map[string]hostadapter.GuestBootstrapArtifact{
+			"arm64": {
+				URL: "https://example.invalid/mds.tar.gz", SHA256: artifactSHA,
+			},
+		},
+	}
+	err := runtime.Apply(context.Background(), planning.Action{
+		ID: "macos-host:local/lima", ComponentID: "lima",
+	})
+	var actionRequired *adapters.ActionRequiredError
+	if !errors.As(err, &actionRequired) ||
+		!strings.Contains(actionRequired.Reason, "ownership marker") {
+		t.Fatalf("Apply() error = %v, want ownership action-required", err)
 	}
 }
 
@@ -261,6 +379,11 @@ func isGuestMDSCommand(command transport.Command) bool {
 		}
 	}
 	return false
+}
+
+func isGuestBootstrapCommand(command transport.Command) bool {
+	return len(command.Stdin) > 0 &&
+		strings.Contains(string(command.Stdin), "mds.guest-bootstrap/v1")
 }
 
 func findGuestMDSCommand(
