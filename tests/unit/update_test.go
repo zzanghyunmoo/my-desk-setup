@@ -75,6 +75,16 @@ func TestUpdatePlanIsDeterministicAndDoesNotMutateInput(t *testing.T) {
 		first.TargetPlan.CatalogRevision != first.AfterCatalogRevision {
 		t.Fatalf("resulting target plan = %+v", first.TargetPlan)
 	}
+	if got, want := len(first.CompatibilityMatrix), 4; got != want {
+		t.Fatalf("compatibility matrix entries = %d, want %d", got, want)
+	}
+	for _, entry := range first.CompatibilityMatrix {
+		if entry.PlanDigest == "" ||
+			(entry.TargetKind != catalog.TargetWSLGuest &&
+				entry.TargetKind != catalog.TargetLimaGuest) {
+			t.Fatalf("unexpected compatibility entry: %+v", entry)
+		}
+	}
 }
 
 func TestUpdateRejectsNoChangeAndUnknownCandidateFields(t *testing.T) {
@@ -126,6 +136,39 @@ func TestUpdateRejectsNoChangeAndUnknownCandidateFields(t *testing.T) {
 				t.Fatalf("Build(%s) succeeded", name)
 			}
 		})
+	}
+}
+
+func TestUpdateRejectsIncompleteVendorTargetArchitectureMatrix(t *testing.T) {
+	environment, err := catalog.LoadFS(catalogdata.FS)
+	if err != nil {
+		t.Fatalf("LoadFS(): %v", err)
+	}
+	id, _ := target.NewID(target.KindLimaGuest, "mds")
+	_, _, err = updateflow.Build(
+		environment,
+		target.Facts{
+			ID: id, OS: "linux", OSVersion: "26.04",
+			Architecture: "amd64", Reachable: true,
+		},
+		updateflow.Candidate{
+			ComponentID: "bun",
+			Version:     "99.0.0",
+			Source:      "fixture",
+			Provenance:  "https://example.com/bun/99.0.0",
+			Artifacts: map[string]catalog.Artifact{
+				"linux-amd64": {
+					URL:    "https://example.com/bun.zip",
+					SHA256: strings.Repeat("a", 64),
+					Format: "zip", Executable: "bun",
+				},
+			},
+		},
+	)
+	if err == nil ||
+		!strings.Contains(err.Error(), "compatibility matrix") ||
+		!strings.Contains(err.Error(), "darwin-amd64") {
+		t.Fatalf("Build(incomplete matrix) error = %v", err)
 	}
 }
 

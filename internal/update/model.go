@@ -29,7 +29,16 @@ type Plan struct {
 	Old                   catalog.LockEntry `json:"old"`
 	New                   catalog.LockEntry `json:"new"`
 	TargetPlan            planning.Plan     `json:"target_plan"`
+	CompatibilityMatrix   []MatrixEntry     `json:"compatibility_matrix"`
 	Digest                string            `json:"digest"`
+}
+
+type MatrixEntry struct {
+	TargetKind   catalog.TargetKind `json:"target_kind"`
+	TargetID     string             `json:"target_id"`
+	Architecture string             `json:"architecture"`
+	PlanDigest   string             `json:"plan_digest"`
+	ArtifactKey  string             `json:"artifact_key,omitempty"`
 }
 
 type Result struct {

@@ -73,6 +73,8 @@ mds update \
 - `before_catalog_revision`, `after_catalog_revision`
 - `old`, `new` version/provenance/artifacts
 - `target_plan` action, blocker와 plan digest
+- `compatibility_matrix`의 모든 supported target/`amd64`/`arm64` plan digest와
+  vendor artifact key
 - top-level update `digest`
 
 preview에는 `--plan-digest`를 주지 않는다.
@@ -96,6 +98,7 @@ mutation 전에 다음 preimage를 모두 재검증한다.
 - old lock entry
 - current target fingerprint
 - resulting target plan digest
+- supported target/architecture compatibility matrix
 
 어느 하나라도 달라지면 candidate와 current state로 preview부터 다시 한다.
 stale digest를 강제로 우회하지 않는다.
@@ -107,6 +110,12 @@ update는 state root의 catalog-scoped writer lease를 먼저 획득하고 targe
 lease를 다음에 획득한다. 두 lease 아래에서 catalog와 target preimage를 다시
 검증한 뒤 lock file 게시와 target reconcile을 수행하므로, 경쟁에서 진 update는
 catalog lock이나 target을 변경하지 않는다.
+
+전역 lock은 현재 머신 한 대만을 위한 상태가 아니다. preview와 apply는
+candidate component가 지원되는 macOS host, Windows host, WSL guest와 Lima
+guest 각각에 대해 `amd64`/`arm64` 계획을 만든다. `vendor` installer이면 모든
+eligible OS/architecture artifact URL과 checksum이 새 lock에 있어야 한다.
+하나라도 빠지거나 apply 시 matrix가 달라지면 lock file을 게시하지 않는다.
 
 ```sh
 git diff -- catalog/locks/versions.lock.yaml

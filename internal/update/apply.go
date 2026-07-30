@@ -119,6 +119,24 @@ func Apply(
 			updatedRevision,
 		)
 	}
+	component, err := pinnedComponent(updated, plan.ComponentID)
+	if err != nil {
+		return Result{}, err
+	}
+	matrix, err := buildCompatibilityMatrix(
+		updated,
+		component,
+		plan.TargetPlan.Target.CLIRevision,
+		updatedRevision,
+	)
+	if err != nil {
+		return Result{}, err
+	}
+	if !reflect.DeepEqual(matrix, plan.CompatibilityMatrix) {
+		return Result{}, errors.New(
+			"compatibility matrix changed before lock publication",
+		)
+	}
 	if err := writeLock(catalogRoot, updated.Lock); err != nil {
 		return Result{}, err
 	}

@@ -69,18 +69,134 @@ func Build(
 	if err != nil {
 		return Plan{}, catalog.Environment{}, fmt.Errorf("build resulting target plan: %w", err)
 	}
+	matrix, err := buildCompatibilityMatrix(
+		updated,
+		component,
+		facts.CLIRevision,
+		afterRevision,
+	)
+	if err != nil {
+		return Plan{}, catalog.Environment{}, err
+	}
 	plan := Plan{
 		SchemaVersion: PlanSchema, ComponentID: candidate.ComponentID,
 		LockKey:               component.VersionPolicy.LockKey,
 		BeforeCatalogRevision: beforeRevision,
 		AfterCatalogRevision:  afterRevision,
 		Old:                   old, New: replacement, TargetPlan: targetPlan,
+		CompatibilityMatrix: matrix,
 	}
 	plan.Digest, err = Digest(plan)
 	if err != nil {
 		return Plan{}, catalog.Environment{}, err
 	}
 	return plan, updated, nil
+}
+
+func buildCompatibilityMatrix(
+	environment catalog.Environment,
+	component catalog.Component,
+	cliRevision,
+	catalogRevision string,
+) ([]MatrixEntry, error) {
+	selection, err := planning.Components([]string{component.ID})
+	if err != nil {
+		return nil, err
+	}
+	var matrix []MatrixEntry
+	for _, targetKind := range catalog.TargetKinds {
+		support := component.Targets[targetKind]
+		if support.Status == catalog.StatusUnsupported {
+			continue
+		}
+		for _, architecture := range []string{"amd64", "arm64"} {
+			facts, err := compatibilityFacts(
+				targetKind,
+				architecture,
+				cliRevision,
+				catalogRevision,
+			)
+			if err != nil {
+				return nil, err
+			}
+			artifactKey := ""
+			if support.Installer == "vendor" {
+				artifactKey = facts.OS + "-" + architecture
+				lock := environment.Lock.Versions[component.VersionPolicy.LockKey]
+				if _, exists := lock.Artifacts[artifactKey]; !exists {
+					return nil, fmt.Errorf(
+						"compatibility matrix %s/%s requires reviewed artifact %q",
+						targetKind,
+						architecture,
+						artifactKey,
+					)
+				}
+			}
+			targetPlan, err := planning.Build(environment, facts, selection)
+			if err != nil {
+				return nil, fmt.Errorf(
+					"compatibility matrix %s/%s: %w",
+					targetKind,
+					architecture,
+					err,
+				)
+			}
+			matrix = append(matrix, MatrixEntry{
+				TargetKind: targetKind, TargetID: facts.ID.String(),
+				Architecture: architecture, PlanDigest: targetPlan.Digest,
+				ArtifactKey: artifactKey,
+			})
+		}
+	}
+	if len(matrix) == 0 {
+		return nil, fmt.Errorf(
+			"component %q has no supported compatibility target",
+			component.ID,
+		)
+	}
+	return matrix, nil
+}
+
+func compatibilityFacts(
+	targetKind catalog.TargetKind,
+	architecture,
+	cliRevision,
+	catalogRevision string,
+) (target.Facts, error) {
+	var (
+		kind      target.Kind
+		name      string
+		osName    string
+		osVersion string
+		systemd   bool
+	)
+	switch targetKind {
+	case catalog.TargetMacOSHost:
+		kind, name, osName = target.KindMacOSHost, "local", "darwin"
+	case catalog.TargetWindowsHost:
+		kind, name, osName = target.KindWindowsHost, "local", "windows"
+	case catalog.TargetWSLGuest:
+		kind, name, osName = target.KindWSLGuest, "Ubuntu-26.04", "linux"
+		osVersion, systemd = "26.04", true
+	case catalog.TargetLimaGuest:
+		kind, name, osName = target.KindLimaGuest, "mds", "linux"
+		osVersion, systemd = "26.04", true
+	default:
+		return target.Facts{}, fmt.Errorf(
+			"unsupported compatibility target %q",
+			targetKind,
+		)
+	}
+	id, err := target.NewID(kind, name)
+	if err != nil {
+		return target.Facts{}, err
+	}
+	return target.Facts{
+		ID: id, OS: osName, OSVersion: osVersion,
+		Architecture: architecture, Reachable: true,
+		SystemdSupported: systemd, SystemdActive: systemd,
+		CLIRevision: cliRevision, CatalogRevision: catalogRevision,
+	}, nil
 }
 
 func validateCandidate(candidate Candidate) error {
