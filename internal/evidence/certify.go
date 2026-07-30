@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/zzanghyunmoo/my-desk-setup/internal/cli"
 	"github.com/zzanghyunmoo/my-desk-setup/internal/doctor"
 	"github.com/zzanghyunmoo/my-desk-setup/internal/planning"
 	"github.com/zzanghyunmoo/my-desk-setup/internal/target"
@@ -62,7 +63,7 @@ func Certify(ctx context.Context, request CertifyRequest) (Manifest, error) {
 		selectionArgs...,
 	)
 
-	planOutput, err := runMDS(
+	planOutput, _, err := runMDS(
 		ctx,
 		request.MDSPath,
 		append([]string{"plan"}, common...),
@@ -76,7 +77,7 @@ func Certify(ctx context.Context, request CertifyRequest) (Manifest, error) {
 		return Manifest{}, fmt.Errorf("decode plan output: %w", err)
 	}
 
-	doctorOutput, err := runMDS(
+	doctorOutput, doctorActionRequired, err := runMDS(
 		ctx,
 		request.MDSPath,
 		append([]string{"doctor"}, common...),
@@ -88,6 +89,9 @@ func Certify(ctx context.Context, request CertifyRequest) (Manifest, error) {
 	var report doctor.Report
 	if err := decodeStrict(doctorOutput, &report); err != nil {
 		return Manifest{}, fmt.Errorf("decode doctor output: %w", err)
+	}
+	if err := validateDoctorExit(doctorActionRequired, report.Ready); err != nil {
+		return Manifest{}, err
 	}
 
 	targetIdentity, err := targetIdentity(plan.Target)
@@ -250,7 +254,7 @@ func runMDS(
 	binary string,
 	arguments []string,
 	allowUnready bool,
-) ([]byte, error) {
+) ([]byte, bool, error) {
 	result, err := transport.NewLocal().Run(ctx, transport.Command{
 		Executable:  binary,
 		Arguments:   arguments,
@@ -260,16 +264,26 @@ func runMDS(
 	if err != nil {
 		var commandError *transport.CommandError
 		if !allowUnready || !errors.As(err, &commandError) ||
-			commandError.Result.ExitCode != 1 ||
+			commandError.Result.ExitCode != cli.ExitActionRequired ||
 			strings.TrimSpace(result.Stdout) == "" {
-			return nil, err
+			return nil, false, err
 		}
+		return []byte(result.Stdout), true, nil
 	}
-	return []byte(result.Stdout), nil
+	return []byte(result.Stdout), false, nil
+}
+
+func validateDoctorExit(actionRequired, ready bool) error {
+	if actionRequired == ready {
+		return errors.New(
+			"doctor exit status does not match report readiness",
+		)
+	}
+	return nil
 }
 
 func readCLIIdentity(ctx context.Context, binary string) (CLIIdentity, error) {
-	output, err := runMDS(ctx, binary, []string{"--version"}, false)
+	output, _, err := runMDS(ctx, binary, []string{"--version"}, false)
 	if err != nil {
 		return CLIIdentity{}, fmt.Errorf("read mds identity: %w", err)
 	}

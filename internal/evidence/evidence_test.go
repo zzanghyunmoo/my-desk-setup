@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/zzanghyunmoo/my-desk-setup/internal/adapters"
+	"github.com/zzanghyunmoo/my-desk-setup/internal/cli"
 	"github.com/zzanghyunmoo/my-desk-setup/internal/doctor"
 	"github.com/zzanghyunmoo/my-desk-setup/internal/planning"
 	"github.com/zzanghyunmoo/my-desk-setup/internal/target"
@@ -45,6 +46,140 @@ func TestCertifyAndVerifyReadyActualTarget(t *testing.T) {
 	}
 	if manifest.CLI.Commit != fixtureCommit || manifest.CLI.Version != "0.1.0" {
 		t.Fatalf("CLI identity = %+v", manifest.CLI)
+	}
+}
+
+func TestCertifyAcceptsActionRequiredDoctorReport(t *testing.T) {
+	bundle := certifyFixture(t, false)
+
+	manifest, err := Verify(bundle, VerifyOptions{
+		ExpectedCLIRevision:     fixtureCLIRevision,
+		ExpectedCatalogRevision: fixtureCatalogRevision,
+	})
+	if err != nil {
+		t.Fatalf("Verify(): %v", err)
+	}
+	if manifest.Status != StatusBlocked {
+		t.Fatalf("status = %q, want %q", manifest.Status, StatusBlocked)
+	}
+}
+
+func TestRunMDSPreservesActionRequiredSignal(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the focused fake binary fixture uses a POSIX executable")
+	}
+	binaryPath := filepath.Join(t.TempDir(), "fake-mds")
+	if err := os.WriteFile(
+		binaryPath,
+		[]byte("#!/bin/sh\nprintf '{}\\n'\nexit 4\n"),
+		0o700,
+	); err != nil {
+		t.Fatalf("write fake mds: %v", err)
+	}
+
+	output, actionRequired, err := runMDS(
+		context.Background(),
+		binaryPath,
+		[]string{"doctor"},
+		true,
+	)
+	if err != nil {
+		t.Fatalf("runMDS(): %v", err)
+	}
+	if strings.TrimSpace(string(output)) != "{}" || !actionRequired {
+		t.Fatalf(
+			"runMDS() output=%q actionRequired=%t, want JSON and true",
+			output,
+			actionRequired,
+		)
+	}
+}
+
+func TestRunMDSRejectsNonContractPartialResults(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the focused fake binary fixture uses a POSIX executable")
+	}
+	tests := []struct {
+		name         string
+		script       string
+		allowUnready bool
+	}{
+		{
+			name:         "legacy generic failure",
+			script:       "#!/bin/sh\nprintf '{}\\n'\nexit 1\n",
+			allowUnready: true,
+		},
+		{
+			name:         "action required without report",
+			script:       "#!/bin/sh\nexit 4\n",
+			allowUnready: true,
+		},
+		{
+			name:         "action required not allowed",
+			script:       "#!/bin/sh\nprintf '{}\\n'\nexit 4\n",
+			allowUnready: false,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			binaryPath := filepath.Join(t.TempDir(), "fake-mds")
+			if err := os.WriteFile(
+				binaryPath,
+				[]byte(test.script),
+				0o700,
+			); err != nil {
+				t.Fatalf("write fake mds: %v", err)
+			}
+			if _, _, err := runMDS(
+				context.Background(),
+				binaryPath,
+				[]string{"doctor"},
+				test.allowUnready,
+			); err == nil {
+				t.Fatal("runMDS() error = nil, want contract rejection")
+			}
+		})
+	}
+}
+
+func TestDoctorExitMustMatchReportReadiness(t *testing.T) {
+	tests := []struct {
+		name           string
+		actionRequired bool
+		ready          bool
+		wantError      bool
+	}{
+		{name: "ready success", ready: true},
+		{
+			name:           "blocked action required",
+			actionRequired: true,
+			ready:          false,
+		},
+		{
+			name:           "ready action required mismatch",
+			actionRequired: true,
+			ready:          true,
+			wantError:      true,
+		},
+		{
+			name:      "blocked success mismatch",
+			ready:     false,
+			wantError: true,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			err := validateDoctorExit(test.actionRequired, test.ready)
+			if (err != nil) != test.wantError {
+				t.Fatalf(
+					"validateDoctorExit(%t, %t) error=%v, wantError=%t",
+					test.actionRequired,
+					test.ready,
+					err,
+					test.wantError,
+				)
+			}
+		})
 	}
 }
 
@@ -428,8 +563,8 @@ func certifyFixtureWithReport(
 	writeJSON(t, doctorPath, report)
 	binaryPath := filepath.Join(root, "fake-mds")
 	doctorExit := 0
-	if !ready {
-		doctorExit = 1
+	if !report.Ready {
+		doctorExit = cli.ExitActionRequired
 	}
 	script := fmt.Sprintf(`#!/bin/sh
 case "$1" in
