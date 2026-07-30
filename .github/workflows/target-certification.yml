@@ -57,8 +57,13 @@ on:
       runner_label:
         description: Target-specific self-hosted runner label
         required: true
-        default: mds-target
-        type: string
+        default: mds-lima-guest
+        type: choice
+        options:
+          - mds-macos-host
+          - mds-windows-host
+          - mds-wsl-guest
+          - mds-lima-guest
 
 permissions:
   contents: read
@@ -72,8 +77,8 @@ jobs:
     name: Fixture contract (implemented only)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version-file: go.mod
           cache: true
@@ -99,10 +104,10 @@ jobs:
       EVIDENCE_OUTPUT: ${{ format('{0}/run-{1}-attempt-{2}', inputs.evidence_output, github.run_id, github.run_attempt) }}
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ inputs.expected_commit }}
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version-file: go.mod
           cache: true
@@ -111,6 +116,7 @@ jobs:
         shell: bash
         env:
           EXPECTED_COMMIT: ${{ inputs.expected_commit }}
+          RUNNER_LABEL: ${{ inputs.runner_label }}
           TARGET_ID: ${{ inputs.target_id }}
         run: |
           if [[ ! "$EXPECTED_COMMIT" =~ ^[0-9a-f]{40}$|^[0-9a-f]{64}$ ]]; then
@@ -119,15 +125,28 @@ jobs:
           fi
           test "$(git rev-parse HEAD)" = "$EXPECTED_COMMIT"
           case "$TARGET_ID" in
-            macos-host:local) target_kind=macos-host ;;
-            windows-host:local) target_kind=windows-host ;;
-            wsl-guest:Ubuntu-26.04) target_kind=wsl-guest ;;
-            lima-guest:mds) target_kind=lima-guest ;;
+            macos-host:local)
+              target_kind=macos-host
+              expected_runner_label=mds-macos-host
+              ;;
+            windows-host:local)
+              target_kind=windows-host
+              expected_runner_label=mds-windows-host
+              ;;
+            wsl-guest:Ubuntu-26.04)
+              target_kind=wsl-guest
+              expected_runner_label=mds-wsl-guest
+              ;;
+            lima-guest:mds)
+              target_kind=lima-guest
+              expected_runner_label=mds-lima-guest
+              ;;
             *)
               echo "unsupported promotion target ID: $TARGET_ID" >&2
               exit 2
               ;;
           esac
+          test "$RUNNER_LABEL" = "$expected_runner_label"
           echo "target_kind=$target_kind" >> "$GITHUB_OUTPUT"
       - name: Capture actual target evidence
         continue-on-error: true
@@ -164,7 +183,7 @@ jobs:
             --require-publication-acceptable
       - name: Preserve honest certification output
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: target-evidence-${{ steps.certification-identity.outputs.target_kind }}-${{ inputs.expected_commit }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ env.EVIDENCE_OUTPUT }}
