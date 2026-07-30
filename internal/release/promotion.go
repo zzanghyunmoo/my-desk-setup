@@ -13,6 +13,8 @@ import (
 	"strings"
 	"time"
 
+	exactartifact "github.com/zzanghyunmoo/my-desk-setup/internal/artifact"
+	"github.com/zzanghyunmoo/my-desk-setup/internal/durable"
 	"github.com/zzanghyunmoo/my-desk-setup/internal/evidence"
 	targetpkg "github.com/zzanghyunmoo/my-desk-setup/internal/target"
 )
@@ -296,7 +298,7 @@ func WritePromotionReport(path string, report PromotionReport) error {
 		return fmt.Errorf("encode promotion report: %w", err)
 	}
 	data = append(data, '\n')
-	if err := os.WriteFile(path, data, 0o600); err != nil {
+	if err := durable.WriteFile(path, data, 0o600); err != nil {
 		return fmt.Errorf("write promotion report: %w", err)
 	}
 	return nil
@@ -386,17 +388,17 @@ func VerifyPromotionReport(
 				promoted.Status,
 			)
 		}
-		if !checksumPattern.MatchString(promoted.BinarySHA256) {
+		if exactartifact.ValidateSHA256(promoted.BinarySHA256) != nil {
 			return PromotionReport{}, fmt.Errorf(
 				"promotion target %q has invalid binary identity",
 				promoted.ID,
 			)
 		}
 		if !strings.HasPrefix(promoted.PlanDigest, "sha256:") ||
-			!checksumPattern.MatchString(strings.TrimPrefix(
+			exactartifact.ValidateSHA256(strings.TrimPrefix(
 				promoted.PlanDigest,
 				"sha256:",
-			)) {
+			)) != nil {
 			return PromotionReport{}, fmt.Errorf(
 				"promotion target %q has invalid plan digest",
 				promoted.ID,

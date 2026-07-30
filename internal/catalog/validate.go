@@ -3,16 +3,26 @@ package catalog
 import (
 	"errors"
 	"fmt"
+	"net/url"
 	"reflect"
 	"regexp"
 	"sort"
 	"strings"
+
+	exactartifact "github.com/zzanghyunmoo/my-desk-setup/internal/artifact"
 )
 
 var credentialValuePattern = regexp.MustCompile(
 	`(?i)(api[_-]?key|bearer|credential|password|secret|token)\s*[:=]\s*\S+`,
 )
-var sha256Pattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
+
+var catalogIdentifierPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
+
+var componentKinds = map[string]bool{
+	"agent": true, "build": true, "cli": true, "container": true,
+	"editor": true, "gui": true, "language": true, "platform": true,
+	"terminal": true,
+}
 
 func Validate(environment Environment) error {
 	var problems []string
@@ -21,6 +31,9 @@ func Validate(environment Environment) error {
 	}
 	if environment.Lock.SchemaVersion != 1 {
 		problems = append(problems, "lock schema_version must be 1")
+	}
+	if len(environment.Catalog.Components) == 0 {
+		problems = append(problems, "catalog requires at least one component")
 	}
 	for id, specification := range environment.Targets {
 		problems = append(
@@ -33,8 +46,11 @@ func Validate(environment Environment) error {
 	capabilityOwner := make(map[string]string)
 	lockKeys := make(map[string]string)
 	for _, component := range environment.Catalog.Components {
-		if component.ID == "" {
-			problems = append(problems, "component id is required")
+		if !catalogIdentifierPattern.MatchString(component.ID) {
+			problems = append(
+				problems,
+				fmt.Sprintf("component id %q must match %s", component.ID, catalogIdentifierPattern),
+			)
 			continue
 		}
 		if _, exists := components[component.ID]; exists {
@@ -42,8 +58,14 @@ func Validate(environment Environment) error {
 			continue
 		}
 		components[component.ID] = component
-		if component.Name == "" || component.Kind == "" {
-			problems = append(problems, fmt.Sprintf("component %q requires name and kind", component.ID))
+		if component.Name == "" {
+			problems = append(problems, fmt.Sprintf("component %q requires a name", component.ID))
+		}
+		if !componentKinds[component.Kind] {
+			problems = append(
+				problems,
+				fmt.Sprintf("component %q has invalid kind %q", component.ID, component.Kind),
+			)
 		}
 		if len(component.Provides) == 0 {
 			problems = append(problems, fmt.Sprintf("component %q provides no capabilities", component.ID))
@@ -57,6 +79,12 @@ func Validate(environment Environment) error {
 			duplicateValues("component "+component.ID+" dependencies", component.Dependencies)...,
 		)
 		for _, capability := range component.Provides {
+			if !catalogIdentifierPattern.MatchString(capability) {
+				problems = append(
+					problems,
+					fmt.Sprintf("component %q capability %q has an invalid identifier", component.ID, capability),
+				)
+			}
 			if owner, exists := capabilityOwner[capability]; exists {
 				problems = append(
 					problems,
@@ -65,6 +93,36 @@ func Validate(environment Environment) error {
 				continue
 			}
 			capabilityOwner[capability] = component.ID
+		}
+		for _, dependency := range component.Dependencies {
+			if !catalogIdentifierPattern.MatchString(dependency) {
+				problems = append(
+					problems,
+					fmt.Sprintf("component %q dependency %q has an invalid identifier", component.ID, dependency),
+				)
+			}
+		}
+		if len(component.Verification.Command) == 0 {
+			problems = append(
+				problems,
+				fmt.Sprintf("component %q verification command is required", component.ID),
+			)
+		}
+		for _, argument := range component.Verification.Command {
+			if argument == "" {
+				problems = append(
+					problems,
+					fmt.Sprintf("component %q verification command contains an empty argument", component.ID),
+				)
+			}
+		}
+		for _, scenario := range component.Verification.Functional {
+			if scenario == "" {
+				problems = append(
+					problems,
+					fmt.Sprintf("component %q functional verification contains an empty scenario", component.ID),
+				)
+			}
 		}
 		problems = append(problems, validateTargets(component)...)
 		problems = append(problems, validateVersionPolicy(component, environment.Lock, lockKeys)...)
@@ -128,10 +186,17 @@ func Validate(environment Environment) error {
 	}
 
 	for key := range environment.Lock.Versions {
+		if !catalogIdentifierPattern.MatchString(key) {
+			problems = append(
+				problems,
+				fmt.Sprintf("lock key %q has an invalid identifier", key),
+			)
+		}
 		if _, used := lockKeys[key]; !used {
 			problems = append(problems, fmt.Sprintf("lock contains unused key %q", key))
 		}
 	}
+	problems = append(problems, validateMiseFiles(environment)...)
 	problems = append(problems, findCredentialMaterial(reflect.ValueOf(environment), "environment")...)
 
 	if len(problems) == 0 {
@@ -163,8 +228,8 @@ func validateTargetSpec(id string, specification TargetSpec) []string {
 		for _, architecture := range []string{"amd64", "arm64"} {
 			image, exists := images[architecture]
 			if !exists ||
-				!strings.HasPrefix(image.URL, "https://") ||
-				!sha256Pattern.MatchString(image.SHA256) {
+				validateReviewedHTTPS(image.URL) != nil ||
+				exactartifact.ValidateSHA256(image.SHA256) != nil {
 				problems = append(
 					problems,
 					fmt.Sprintf(
@@ -251,8 +316,13 @@ func validateVersionPolicy(
 	switch component.VersionPolicy.Mode {
 	case "pinned":
 		key := component.VersionPolicy.LockKey
-		if key == "" {
-			return []string{fmt.Sprintf("component %q pinned policy requires lock_key", component.ID)}
+		if !catalogIdentifierPattern.MatchString(key) {
+			return []string{
+				fmt.Sprintf(
+					"component %q pinned policy requires a valid lock_key",
+					component.ID,
+				),
+			}
 		}
 		if owner, exists := lockKeys[key]; exists {
 			return []string{
@@ -267,6 +337,45 @@ func validateVersionPolicy(
 		if entry.Version == "" || entry.Source == "" || entry.Provenance == "" {
 			return []string{
 				fmt.Sprintf("lock key %q requires version, source, and provenance", key),
+			}
+		}
+		if err := validateReviewedHTTPS(entry.Provenance); err != nil {
+			return []string{
+				fmt.Sprintf("lock key %q provenance %v", key, err),
+			}
+		}
+		usesMise := componentUsesInstaller(component, "mise")
+		if usesMise {
+			for _, platform := range []string{"linux-amd64", "linux-arm64"} {
+				_, hasArtifact := entry.Artifacts[platform]
+				reason, unavailable := entry.UnavailablePlatforms[platform]
+				if hasArtifact == unavailable || unavailable && strings.TrimSpace(reason) == "" {
+					return []string{
+						fmt.Sprintf(
+							"lock key %q mise platform %q requires exactly one reviewed artifact or unavailable reason",
+							key,
+							platform,
+						),
+					}
+				}
+			}
+		} else if entry.InstallRef != "" || len(entry.UnavailablePlatforms) > 0 {
+			return []string{
+				fmt.Sprintf(
+					"lock key %q cannot declare mise-only install_ref or unavailable_platforms",
+					key,
+				),
+			}
+		}
+		for platform := range entry.UnavailablePlatforms {
+			if !catalogIdentifierPattern.MatchString(platform) {
+				return []string{
+					fmt.Sprintf(
+						"lock key %q unavailable platform %q has an invalid identifier",
+						key,
+						platform,
+					),
+				}
 			}
 		}
 		bunPackage, usesBun, packageProblem := componentBunPackage(component)
@@ -296,14 +405,17 @@ func validateVersionPolicy(
 			}
 		}
 		for platform, artifact := range entry.Artifacts {
-			if artifact.URL == "" || len(artifact.SHA256) != 64 ||
+			if !catalogIdentifierPattern.MatchString(platform) ||
+				validateReviewedHTTPS(artifact.URL) != nil ||
+				exactartifact.ValidateSHA256(artifact.SHA256) != nil ||
 				(artifact.Format != "binary" &&
 					artifact.Format != "zip" &&
-					artifact.Format != "tar.gz") ||
+					artifact.Format != "tar.gz" &&
+					artifact.Format != "tar.xz") ||
 				artifact.Executable == "" {
 				return []string{
 					fmt.Sprintf(
-						"lock key %q artifact %q requires URL, SHA-256, binary/zip/tar.gz format, and executable",
+						"lock key %q artifact %q requires a valid platform identifier, credential-free HTTPS URL, SHA-256, binary/zip/tar.gz/tar.xz format, and executable",
 						key,
 						platform,
 					),
@@ -345,6 +457,27 @@ func componentBunPackage(component Component) (string, bool, string) {
 		}
 	}
 	return packageName, packageName != "", ""
+}
+
+func componentUsesInstaller(component Component, installer string) bool {
+	for _, target := range TargetKinds {
+		support := component.Targets[target]
+		if support.Status == StatusSupported && support.Installer == installer {
+			return true
+		}
+	}
+	return false
+}
+
+func validateReviewedHTTPS(value string) error {
+	parsed, err := url.ParseRequestURI(value)
+	if err != nil || parsed.Scheme != "https" || parsed.Host == "" ||
+		parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return errors.New(
+			"must be an absolute credential-free HTTPS URL without a query or fragment",
+		)
+	}
+	return nil
 }
 
 func installerAllowed(target TargetKind, installer string) bool {

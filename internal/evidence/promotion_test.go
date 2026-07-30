@@ -24,6 +24,7 @@ func TestCertifyRejectsUnexpectedBinarySHA256BeforeExecution(t *testing.T) {
 	_, err := Certify(context.Background(), CertifyRequest{
 		MDSPath: binary, TargetID: "lima-guest:mds", OutputDir: output,
 		All: true, ExpectedBinarySHA256: strings.Repeat("f", 64),
+		ExpectedGuestCreationNonce: strings.Repeat("a", 64),
 	})
 	if err == nil || !strings.Contains(err.Error(), "binary checksum mismatch") {
 		t.Fatalf("Certify(binary mismatch) error = %v", err)
@@ -171,6 +172,18 @@ func rewriteEvidenceOutcome(
 	manifest.Status = StatusBlocked
 	manifest.PlanDigest = plan.Digest
 	manifest.Components = append([]ComponentCheck(nil), snapshot.Checks...)
+	if manifest.ApplyReceipt == nil {
+		t.Fatal("fixture manifest is missing apply receipt")
+	}
+	manifest.ApplyReceipt.PlanDigest = plan.Digest
+	manifest.ApplyReceipt.Complete = false
+	manifest.ApplyReceipt.Outcomes[0].Status = string(actionStatus)
+	if actionStatus == planning.ActionPlanned {
+		manifest.ApplyReceipt.Outcomes[0].Status = "failed"
+	}
+	manifest.ApplyReceipt.Outcomes[0].Noop = false
+	manifest.ApplyReceipt.Outcomes[0].VerifiedVersion = ""
+	manifest.RepeatReceipt = nil
 
 	writeJSON(t, bundle+"/"+PlanFile, plan)
 	writeJSON(t, bundle+"/"+DoctorFile, snapshot)

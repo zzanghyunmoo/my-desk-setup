@@ -64,6 +64,8 @@ func NewRoot(streams Streams, system Runtime) *cobra.Command {
 	root.SetOut(streams.Output)
 	root.SetErr(streams.Error)
 	commands := []*cobra.Command{
+		newCatalogCommand(streams),
+		newVersionCommand(streams),
 		newPlanCommand(streams, system),
 		newApplyCommand(streams, system),
 		newDoctorCommand(streams, system),
@@ -77,9 +79,18 @@ func NewRoot(streams Streams, system Runtime) *cobra.Command {
 }
 
 func Run(args []string, streams Streams, system Runtime) int {
+	return RunContext(context.Background(), args, streams, system)
+}
+
+func RunContext(
+	ctx context.Context,
+	args []string,
+	streams Streams,
+	system Runtime,
+) int {
 	root := NewRoot(streams, system)
 	root.SetArgs(args)
-	if err := root.Execute(); err != nil {
+	if err := root.ExecuteContext(ctx); err != nil {
 		if _, _, findErr := root.Find(args); findErr != nil {
 			err = invalidInput(err)
 		}
@@ -197,14 +208,15 @@ func resolveTarget(
 	system Runtime,
 	requireCurrent bool,
 ) (target.Facts, error) {
+	local, localErr := target.DiscoverLocal(
+		system.GOOS,
+		system.GOARCH,
+		target.GetenvFunc(system.Getenv),
+	)
 	var facts target.Facts
 	var err error
 	if value == "" {
-		facts, err = target.DiscoverLocal(
-			system.GOOS,
-			system.GOARCH,
-			target.GetenvFunc(system.Getenv),
-		)
+		facts, err = local, localErr
 	} else {
 		var id target.ID
 		id, err = target.ParseID(value)
@@ -224,12 +236,10 @@ func resolveTarget(
 	if err != nil {
 		return target.Facts{}, invalidInput(err)
 	}
-	local, localErr := target.DiscoverLocal(
-		system.GOOS,
-		system.GOARCH,
-		target.GetenvFunc(system.Getenv),
-	)
 	isCurrent := localErr == nil && local.ID == facts.ID
+	if isCurrent {
+		facts = local
+	}
 	if requireCurrent && !isCurrent {
 		return target.Facts{}, actionRequired(fmt.Errorf(
 			"apply target %s is not the current local target; run the same mds revision inside that guest",

@@ -29,7 +29,12 @@
           },
           "provenance": {
             "type": "string",
-            "format": "uri"
+            "format": "uri",
+            "pattern": "^https://[^/@?#\\s]+(?::[0-9]+)?(?:/[^?#\\s]*)?$"
+          },
+          "install_ref": {
+            "type": "string",
+            "minLength": 1
           },
           "npm": {
             "type": "object",
@@ -63,20 +68,31 @@
               "properties": {
                 "url": {
                   "type": "string",
-                  "format": "uri"
+                  "format": "uri",
+                  "pattern": "^https://[^/@?#\\s]+(?::[0-9]+)?(?:/[^?#\\s]*)?$"
                 },
                 "sha256": {
                   "type": "string",
                   "pattern": "^[a-f0-9]{64}$"
                 },
                 "format": {
-                  "enum": ["binary", "zip", "tar.gz"]
+                  "enum": ["binary", "zip", "tar.gz", "tar.xz"]
                 },
                 "executable": {
                   "type": "string",
                   "minLength": 1
                 }
               }
+            }
+          },
+          "unavailable_platforms": {
+            "type": "object",
+            "propertyNames": {
+              "pattern": "^[a-z0-9][a-z0-9-]*$"
+            },
+            "additionalProperties": {
+              "type": "string",
+              "minLength": 1
             }
           }
         }

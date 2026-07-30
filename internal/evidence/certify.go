@@ -11,15 +11,26 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
 
+	catalogdata "github.com/zzanghyunmoo/my-desk-setup/catalog"
+	exactartifact "github.com/zzanghyunmoo/my-desk-setup/internal/artifact"
+	"github.com/zzanghyunmoo/my-desk-setup/internal/catalog"
 	"github.com/zzanghyunmoo/my-desk-setup/internal/cli"
 	"github.com/zzanghyunmoo/my-desk-setup/internal/doctor"
 	"github.com/zzanghyunmoo/my-desk-setup/internal/planning"
+	"github.com/zzanghyunmoo/my-desk-setup/internal/state"
 	"github.com/zzanghyunmoo/my-desk-setup/internal/target"
 	"github.com/zzanghyunmoo/my-desk-setup/internal/transport"
+)
+
+const (
+	certificationReadTimeout   = 10 * time.Minute
+	certificationApplyTimeout  = 2 * time.Hour
+	certificationRepeatTimeout = 30 * time.Minute
 )
 
 var (
@@ -58,6 +69,10 @@ func Certify(ctx context.Context, request CertifyRequest) (Manifest, error) {
 	if err != nil {
 		return Manifest{}, err
 	}
+	certifiedTarget, environment, err := certificationTarget(request)
+	if err != nil {
+		return Manifest{}, err
+	}
 	common := append(
 		[]string{"--target", request.TargetID, "--format", "json"},
 		selectionArgs...,
@@ -67,7 +82,9 @@ func Certify(ctx context.Context, request CertifyRequest) (Manifest, error) {
 		ctx,
 		request.MDSPath,
 		append([]string{"plan"}, common...),
+		environment,
 		false,
+		certificationReadTimeout,
 	)
 	if err != nil {
 		return Manifest{}, fmt.Errorf("capture read-only plan: %w", err)
@@ -76,12 +93,69 @@ func Certify(ctx context.Context, request CertifyRequest) (Manifest, error) {
 	if err := decodeStrict(planOutput, &plan); err != nil {
 		return Manifest{}, fmt.Errorf("decode plan output: %w", err)
 	}
+	applyArguments := append(
+		[]string{"apply", "--plan-digest", plan.Digest},
+		common...,
+	)
+	applyOutput, applyActionRequired, err := runMDS(
+		ctx,
+		request.MDSPath,
+		applyArguments,
+		environment,
+		true,
+		certificationApplyTimeout,
+	)
+	if err != nil {
+		return Manifest{}, fmt.Errorf("execute reviewed apply: %w", err)
+	}
+	var applyReceipt state.Receipt
+	if err := decodeStrict(applyOutput, &applyReceipt); err != nil {
+		return Manifest{}, fmt.Errorf("decode apply receipt: %w", err)
+	}
+	if err := validateCertificationReceipt(
+		applyReceipt,
+		plan,
+		applyActionRequired,
+		false,
+	); err != nil {
+		return Manifest{}, fmt.Errorf("validate apply receipt: %w", err)
+	}
+
+	var repeatReceipt *state.Receipt
+	if applyReceipt.Complete {
+		repeatOutput, repeatActionRequired, err := runMDS(
+			ctx,
+			request.MDSPath,
+			applyArguments,
+			environment,
+			true,
+			certificationRepeatTimeout,
+		)
+		if err != nil {
+			return Manifest{}, fmt.Errorf("execute repeat apply: %w", err)
+		}
+		var repeated state.Receipt
+		if err := decodeStrict(repeatOutput, &repeated); err != nil {
+			return Manifest{}, fmt.Errorf("decode repeat apply receipt: %w", err)
+		}
+		if err := validateCertificationReceipt(
+			repeated,
+			plan,
+			repeatActionRequired,
+			true,
+		); err != nil {
+			return Manifest{}, fmt.Errorf("validate repeat apply receipt: %w", err)
+		}
+		repeatReceipt = &repeated
+	}
 
 	doctorOutput, doctorActionRequired, err := runMDS(
 		ctx,
 		request.MDSPath,
 		append([]string{"doctor"}, common...),
+		environment,
 		true,
+		certificationReadTimeout,
 	)
 	if err != nil {
 		return Manifest{}, fmt.Errorf("capture read-only doctor: %w", err)
@@ -106,6 +180,15 @@ func Certify(ctx context.Context, request CertifyRequest) (Manifest, error) {
 	if err != nil {
 		return Manifest{}, err
 	}
+	if plan.Target.ID != certifiedTarget.ID ||
+		plan.Target.Architecture != certifiedTarget.Architecture ||
+		plan.Target.ImageRevision != certifiedTarget.ImageRevision ||
+		plan.Target.ImageProvenance != certifiedTarget.ImageProvenance ||
+		plan.Target.ImageCreationNonce != certifiedTarget.ImageCreationNonce {
+		return Manifest{}, errors.New(
+			"captured plan target does not match independently certified runtime identity",
+		)
+	}
 	if err := scanEvidenceMaterial(PlanFile, planOutput); err != nil {
 		return Manifest{}, err
 	}
@@ -124,6 +207,8 @@ func Certify(ctx context.Context, request CertifyRequest) (Manifest, error) {
 
 	status := StatusVerified
 	if len(plan.Blockers) > 0 ||
+		!applyReceipt.Complete ||
+		repeatReceipt == nil ||
 		!snapshot.Ready ||
 		!targetIdentityComplete(plan.Target) {
 		status = StatusBlocked
@@ -139,7 +224,8 @@ func Certify(ctx context.Context, request CertifyRequest) (Manifest, error) {
 		Target:         targetIdentity, CLI: cli,
 		BinarySHA256:    binarySHA256,
 		CatalogRevision: plan.CatalogRevision, PlanDigest: plan.Digest,
-		Components: components,
+		Components: components, ApplyReceipt: &applyReceipt,
+		RepeatReceipt: repeatReceipt,
 	}
 	if err := writeBundle(request.OutputDir, manifest, plan, snapshot); err != nil {
 		return Manifest{}, err
@@ -179,11 +265,28 @@ func validateCertifyRequest(request CertifyRequest) error {
 		return errors.New("mds binary must not be a reparse point")
 	}
 	if request.ExpectedBinarySHA256 != "" &&
-		!sha256Pattern.MatchString(request.ExpectedBinarySHA256) {
+		exactartifact.ValidateSHA256(request.ExpectedBinarySHA256) != nil {
 		return errors.New("expected mds binary SHA-256 must be 64 lowercase hex characters")
 	}
-	if _, err := target.ParseID(request.TargetID); err != nil {
+	id, err := target.ParseID(request.TargetID)
+	if err != nil {
 		return fmt.Errorf("invalid certification target: %w", err)
+	}
+	switch id.Kind {
+	case target.KindWSLGuest, target.KindLimaGuest:
+		if exactartifact.ValidateSHA256(
+			request.ExpectedGuestCreationNonce,
+		) != nil {
+			return errors.New(
+				"guest certification requires the 64-character lowercase creation nonce from the host ownership record",
+			)
+		}
+	default:
+		if request.ExpectedGuestCreationNonce != "" {
+			return errors.New(
+				"host certification must not provide a guest creation nonce",
+			)
+		}
 	}
 	if request.OutputDir == "" {
 		return errors.New("evidence output directory is required")
@@ -249,16 +352,197 @@ func selectionArguments(request CertifyRequest) ([]string, error) {
 	}
 }
 
+func certificationTarget(
+	request CertifyRequest,
+) (target.Facts, map[string]string, error) {
+	id, err := target.ParseID(request.TargetID)
+	if err != nil {
+		return target.Facts{}, nil, err
+	}
+	var facts target.Facts
+	if request.RuntimeProbe != nil {
+		facts, err = request.RuntimeProbe(id)
+	} else {
+		facts, err = probeCertificationTarget(
+			id,
+			request.ExpectedGuestCreationNonce,
+		)
+	}
+	if err != nil {
+		return target.Facts{}, nil, err
+	}
+	if facts.ID != id {
+		return target.Facts{}, nil, errors.New(
+			"certification runtime probe returned a different target",
+		)
+	}
+	environment := make(map[string]string, 4)
+	switch id.Kind {
+	case target.KindWSLGuest:
+		environment["WSL_DISTRO_NAME"] = id.Name
+	case target.KindLimaGuest:
+		environment["LIMA_INSTANCE"] = id.Name
+	}
+	if facts.ImageRevision != "" {
+		environment["MDS_IMAGE_REVISION"] = facts.ImageRevision
+	}
+	if facts.ImageProvenance != "" {
+		environment["MDS_IMAGE_PROVENANCE"] = facts.ImageProvenance
+	}
+	if facts.ImageCreationNonce != "" {
+		environment["MDS_IMAGE_CREATION_NONCE"] = facts.ImageCreationNonce
+	}
+	return facts, environment, nil
+}
+
+func probeCertificationTarget(
+	id target.ID,
+	expectedGuestCreationNonce string,
+) (target.Facts, error) {
+	switch id.Kind {
+	case target.KindMacOSHost:
+		if runtime.GOOS != "darwin" || id.Name != "local" {
+			return target.Facts{}, errors.New(
+				"macOS certification requires the local Darwin runtime",
+			)
+		}
+		return target.Facts{
+			ID: id, OS: "darwin", Architecture: runtime.GOARCH, Reachable: true,
+		}, nil
+	case target.KindWindowsHost:
+		if runtime.GOOS != "windows" || id.Name != "local" {
+			return target.Facts{}, errors.New(
+				"windows certification requires the local Windows runtime",
+			)
+		}
+		return target.Facts{
+			ID: id, OS: "windows", Architecture: runtime.GOARCH, Reachable: true,
+		}, nil
+	case target.KindWSLGuest:
+		if runtime.GOOS != "linux" ||
+			strings.TrimSpace(os.Getenv("WSL_DISTRO_NAME")) != id.Name {
+			return target.Facts{}, errors.New(
+				"wsl certification requires the exact requested WSL distribution",
+			)
+		}
+		kernel, err := os.ReadFile("/proc/sys/kernel/osrelease")
+		if err != nil || !strings.Contains(
+			strings.ToLower(string(kernel)),
+			"microsoft",
+		) {
+			return target.Facts{}, errors.New(
+				"wsl certification requires an independently observed Microsoft kernel",
+			)
+		}
+	case target.KindLimaGuest:
+		if runtime.GOOS != "linux" ||
+			strings.TrimSpace(os.Getenv("LIMA_INSTANCE")) != id.Name {
+			return target.Facts{}, errors.New(
+				"lima certification requires the exact requested Lima instance",
+			)
+		}
+		marker, err := os.Lstat("/run/lima-ssh-ready")
+		if err != nil || !marker.Mode().IsRegular() ||
+			marker.Mode()&os.ModeSymlink != 0 ||
+			!runtimeMarkerOwnedByRoot(marker) {
+			return target.Facts{}, errors.New(
+				"lima certification requires the root-owned Lima runtime marker",
+			)
+		}
+	default:
+		return target.Facts{}, fmt.Errorf(
+			"unsupported certification target kind %q",
+			id.Kind,
+		)
+	}
+	markerContent, err := readRootOwnedRuntimeMarker(target.ImageIdentityPath)
+	if err != nil {
+		return target.Facts{}, fmt.Errorf(
+			"certification requires the provisioned guest image identity marker: %w",
+			err,
+		)
+	}
+	observedImage, err := target.ParseImageIdentity(markerContent)
+	if err != nil {
+		return target.Facts{}, fmt.Errorf(
+			"parse provisioned guest image identity marker: %w",
+			err,
+		)
+	}
+	environment, err := catalog.LoadFS(catalogdata.FS)
+	if err != nil {
+		return target.Facts{}, fmt.Errorf("load certification catalog: %w", err)
+	}
+	specification, exists := environment.Targets["ubuntu-26.04"]
+	if !exists {
+		return target.Facts{}, errors.New(
+			"certification catalog is missing the Ubuntu target",
+		)
+	}
+	images := specification.Images
+	if id.Kind == target.KindWSLGuest {
+		images = specification.WSLImages
+	}
+	image, exists := images[runtime.GOARCH]
+	if !exists {
+		return target.Facts{}, fmt.Errorf(
+			"certification catalog has no %s image for %s",
+			id.Kind,
+			runtime.GOARCH,
+		)
+	}
+	if err := validateCertifiedGuestImage(
+		observedImage,
+		image,
+		expectedGuestCreationNonce,
+	); err != nil {
+		return target.Facts{}, err
+	}
+	return target.Facts{
+		ID: id, OS: "linux", Architecture: runtime.GOARCH, Reachable: true,
+		ImageRevision:      observedImage.Revision,
+		ImageProvenance:    observedImage.Provenance,
+		ImageCreationNonce: observedImage.CreationNonce,
+	}, nil
+}
+
+func validateCertifiedGuestImage(
+	observedImage target.ImageIdentity,
+	image catalog.ImageSpec,
+	expectedGuestCreationNonce string,
+) error {
+	expectedRevision := "sha256:" + image.SHA256
+	if observedImage.Revision != expectedRevision ||
+		observedImage.Provenance != image.URL {
+		return fmt.Errorf(
+			"provisioned guest image identity does not match the certification catalog: observed=%s %s expected=%s %s",
+			observedImage.Revision,
+			observedImage.Provenance,
+			expectedRevision,
+			image.URL,
+		)
+	}
+	if observedImage.CreationNonce != expectedGuestCreationNonce {
+		return errors.New(
+			"provisioned guest creation identity does not match the protected host ownership record",
+		)
+	}
+	return nil
+}
+
 func runMDS(
 	ctx context.Context,
 	binary string,
 	arguments []string,
+	environment map[string]string,
 	allowUnready bool,
+	timeout time.Duration,
 ) ([]byte, bool, error) {
 	result, err := transport.NewLocal().Run(ctx, transport.Command{
 		Executable:  binary,
 		Arguments:   arguments,
-		Timeout:     5 * time.Minute,
+		Environment: environment,
+		Timeout:     timeout,
 		OutputLimit: 4 << 20,
 	})
 	if err != nil {
@@ -282,8 +566,98 @@ func validateDoctorExit(actionRequired, ready bool) error {
 	return nil
 }
 
+func validateCertificationReceipt(
+	receipt state.Receipt,
+	plan planning.Plan,
+	actionRequired,
+	requireNoop bool,
+) error {
+	if receipt.SchemaVersion != state.ReceiptSchema ||
+		receipt.PlanDigest != plan.Digest ||
+		receipt.CatalogRevision != plan.CatalogRevision ||
+		receipt.TargetID != plan.Target.ID.String() {
+		return errors.New("receipt identity does not match the reviewed plan")
+	}
+	if actionRequired == receipt.Complete {
+		return errors.New("apply exit status does not match receipt completion")
+	}
+	if len(receipt.Outcomes) != len(plan.Actions) {
+		return errors.New("receipt does not cover every reviewed action")
+	}
+	allReady := true
+	for index, action := range plan.Actions {
+		outcome := receipt.Outcomes[index]
+		if outcome.ActionID != action.ID ||
+			outcome.RequestedVersion != action.Version {
+			return fmt.Errorf(
+				"receipt outcome %d does not match reviewed action %s",
+				index,
+				action.ID,
+			)
+		}
+		switch outcome.Status {
+		case "ready", "action-required", "unsupported", "blocked", "failed":
+		default:
+			return fmt.Errorf(
+				"receipt outcome %s has unknown status %q",
+				action.ID,
+				outcome.Status,
+			)
+		}
+		if action.Status == planning.ActionActionRequired &&
+			outcome.Status != string(planning.ActionActionRequired) {
+			return fmt.Errorf(
+				"receipt outcome %s does not preserve action-required status",
+				action.ID,
+			)
+		}
+		if action.Status == planning.ActionUnsupported &&
+			outcome.Status != string(planning.ActionUnsupported) {
+			return fmt.Errorf(
+				"receipt outcome %s does not preserve unsupported status",
+				action.ID,
+			)
+		}
+		if outcome.Noop && outcome.Status != "ready" {
+			return fmt.Errorf(
+				"receipt outcome %s claims no-op without readiness",
+				action.ID,
+			)
+		}
+		if outcome.Status != "ready" {
+			allReady = false
+		}
+	}
+	if receipt.Complete != allReady {
+		return errors.New(
+			"receipt completion does not match reviewed action outcomes",
+		)
+	}
+	if requireNoop {
+		if !receipt.Complete {
+			return errors.New("repeat apply receipt is incomplete")
+		}
+		for _, outcome := range receipt.Outcomes {
+			if !outcome.Noop {
+				return fmt.Errorf(
+					"repeat apply mutated or reverified action %s instead of converging as a no-op",
+					outcome.ActionID,
+				)
+			}
+		}
+	}
+	return nil
+}
+
 func readCLIIdentity(ctx context.Context, binary string) (CLIIdentity, error) {
-	output, _, err := runMDS(ctx, binary, []string{"--version"}, false)
+	output, _, err := runMDS(
+		ctx,
+		binary,
+		[]string{"--version"},
+		nil,
+		false,
+		certificationReadTimeout,
+	)
 	if err != nil {
 		return CLIIdentity{}, fmt.Errorf("read mds identity: %w", err)
 	}

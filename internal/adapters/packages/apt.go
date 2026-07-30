@@ -4,13 +4,21 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/zzanghyunmoo/my-desk-setup/internal/adapters"
 	"github.com/zzanghyunmoo/my-desk-setup/internal/planning"
 	"github.com/zzanghyunmoo/my-desk-setup/internal/transport"
 )
 
-const sudoExecutable = "/usr/bin/sudo"
+const (
+	sudoExecutable      = "/usr/bin/sudo"
+	privilegedTrue      = "/usr/bin/true"
+	privilegedEnv       = "/usr/bin/env"
+	privilegedAPTGet    = "/usr/bin/apt-get"
+	privilegedInstall   = "/usr/bin/install"
+	privilegedSystemctl = "/usr/bin/systemctl"
+)
 
 func APTInstall(action planning.Action) ([]transport.Command, error) {
 	packages := strings.Fields(action.Package)
@@ -19,10 +27,10 @@ func APTInstall(action planning.Action) ([]transport.Command, error) {
 	}
 	arguments := []string{
 		"-n",
-		"env",
+		privilegedEnv,
 		"DEBIAN_FRONTEND=noninteractive",
 		"APT_LISTCHANGES_FRONTEND=none",
-		"apt-get",
+		privilegedAPTGet,
 		"install",
 		"-y",
 		"--no-install-recommends",
@@ -33,6 +41,7 @@ func APTInstall(action planning.Action) ([]transport.Command, error) {
 		{
 			Executable: sudoExecutable,
 			Arguments:  arguments,
+			Timeout:    45 * time.Minute,
 		},
 	}, nil
 }
@@ -43,7 +52,11 @@ func RequireSudo(ctx context.Context, port transport.Port) error {
 	if port == nil {
 		return fmt.Errorf("sudo preflight requires a transport port")
 	}
-	if _, err := port.Run(ctx, sudoPreflightCommand()); err != nil {
+	preflight := sudoPreflightCommand()
+	if err := ValidatePrivilegedCommand(preflight); err != nil {
+		return err
+	}
+	if _, err := port.Run(ctx, preflight); err != nil {
 		return &adapters.ActionRequiredError{
 			Reason: "run `sudo -v` inside the guest, then rerun the same mds apply; mds does not collect sudo credentials",
 		}
@@ -54,7 +67,8 @@ func RequireSudo(ctx context.Context, port transport.Port) error {
 func sudoPreflightCommand() transport.Command {
 	return transport.Command{
 		Executable: sudoExecutable,
-		Arguments:  []string{"-n", "true"},
+		Arguments:  []string{"-n", privilegedTrue},
+		Timeout:    30 * time.Second,
 	}
 }
 
@@ -62,5 +76,5 @@ func isSudoPreflight(command transport.Command) bool {
 	return command.Executable == sudoExecutable &&
 		len(command.Arguments) == 2 &&
 		command.Arguments[0] == "-n" &&
-		command.Arguments[1] == "true"
+		command.Arguments[1] == privilegedTrue
 }

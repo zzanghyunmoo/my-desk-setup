@@ -16,9 +16,11 @@ import (
 	"time"
 
 	"github.com/zzanghyunmoo/my-desk-setup/internal/adapters"
+	"github.com/zzanghyunmoo/my-desk-setup/internal/catalog"
 	"github.com/zzanghyunmoo/my-desk-setup/internal/cli"
 	"github.com/zzanghyunmoo/my-desk-setup/internal/doctor"
 	"github.com/zzanghyunmoo/my-desk-setup/internal/planning"
+	"github.com/zzanghyunmoo/my-desk-setup/internal/state"
 	"github.com/zzanghyunmoo/my-desk-setup/internal/target"
 )
 
@@ -81,7 +83,9 @@ func TestRunMDSPreservesActionRequiredSignal(t *testing.T) {
 		context.Background(),
 		binaryPath,
 		[]string{"doctor"},
+		nil,
 		true,
+		certificationReadTimeout,
 	)
 	if err != nil {
 		t.Fatalf("runMDS(): %v", err)
@@ -134,7 +138,9 @@ func TestRunMDSRejectsNonContractPartialResults(t *testing.T) {
 				context.Background(),
 				binaryPath,
 				[]string{"doctor"},
+				nil,
 				test.allowUnready,
+				certificationReadTimeout,
 			); err == nil {
 				t.Fatal("runMDS() error = nil, want contract rejection")
 			}
@@ -466,6 +472,83 @@ func TestVerifyParsesUnixTimestampAsSigned64BitDecimal(t *testing.T) {
 	assertErrorContains(t, err, "captured_at_unix")
 }
 
+func TestVerifyBindsReceiptOutcomesToReviewedActions(t *testing.T) {
+	bundle := certifyFixture(t, true)
+	rewriteManifest(t, bundle, func(manifest *Manifest) {
+		manifest.ApplyReceipt.Outcomes[0].ActionID = "lima-guest:mds/other"
+	})
+
+	_, err := Verify(bundle, VerifyOptions{})
+	assertErrorContains(t, err, "does not match reviewed action")
+}
+
+func TestVerifyRejectsUnknownReceiptOutcomeStatus(t *testing.T) {
+	bundle := certifyFixture(t, true)
+	rewriteManifest(t, bundle, func(manifest *Manifest) {
+		manifest.ApplyReceipt.Outcomes[0].Status = "verified-ish"
+		manifest.ApplyReceipt.Complete = false
+		manifest.RepeatReceipt = nil
+		manifest.Status = StatusBlocked
+	})
+
+	_, err := Verify(bundle, VerifyOptions{})
+	assertErrorContains(t, err, "unknown status")
+}
+
+func TestCertificationTargetPropagatesIndependentlyProbedGuestIdentity(t *testing.T) {
+	id, err := target.NewID(target.KindLimaGuest, "mds")
+	if err != nil {
+		t.Fatalf("NewID(): %v", err)
+	}
+	facts := target.Facts{
+		ID:                 id,
+		OS:                 "linux",
+		Architecture:       "arm64",
+		ImageRevision:      "sha256:image",
+		ImageProvenance:    "https://example.invalid/ubuntu.img",
+		ImageCreationNonce: strings.Repeat("a", 64),
+	}
+	certified, environment, err := certificationTarget(CertifyRequest{
+		TargetID: id.String(),
+		RuntimeProbe: func(probed target.ID) (target.Facts, error) {
+			if probed != id {
+				return target.Facts{}, errors.New("unexpected target")
+			}
+			return facts, nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("certificationTarget(): %v", err)
+	}
+	if certified != facts {
+		t.Fatalf("certified target = %+v, want %+v", certified, facts)
+	}
+	if environment["LIMA_INSTANCE"] != "mds" ||
+		environment["MDS_IMAGE_REVISION"] != "sha256:image" ||
+		environment["MDS_IMAGE_PROVENANCE"] != facts.ImageProvenance ||
+		environment["MDS_IMAGE_CREATION_NONCE"] !=
+			facts.ImageCreationNonce {
+		t.Fatalf("certification environment = %#v", environment)
+	}
+}
+
+func TestCertifiedGuestImageRejectsReplacementNonce(t *testing.T) {
+	image := catalog.ImageSpec{
+		URL:    "https://example.invalid/ubuntu.img",
+		SHA256: strings.Repeat("a", 64),
+	}
+	err := validateCertifiedGuestImage(
+		target.ImageIdentity{
+			Revision:      "sha256:" + image.SHA256,
+			Provenance:    image.URL,
+			CreationNonce: strings.Repeat("b", 64),
+		},
+		image,
+		strings.Repeat("c", 64),
+	)
+	assertErrorContains(t, err, "creation identity")
+}
+
 func TestTargetIdentityCompletenessKeepsPartialTargetsBlocked(t *testing.T) {
 	id, err := target.NewID(target.KindLimaGuest, "mds")
 	if err != nil {
@@ -474,7 +557,9 @@ func TestTargetIdentityCompletenessKeepsPartialTargetsBlocked(t *testing.T) {
 	facts := target.Facts{
 		ID: id, OS: "linux", OSVersion: "26.04", Architecture: "arm64",
 		RuntimeVersion: "1.0.0", ImageRevision: "sha256:image",
-		Reachable: true, CLIRevision: fixtureCLIRevision,
+		ImageProvenance:    "https://example.invalid/ubuntu.img",
+		ImageCreationNonce: strings.Repeat("a", 64),
+		Reachable:          true, CLIRevision: fixtureCLIRevision,
 		CatalogRevision: fixtureCatalogRevision,
 	}
 	if !targetIdentityComplete(facts) {
@@ -483,6 +568,43 @@ func TestTargetIdentityCompletenessKeepsPartialTargetsBlocked(t *testing.T) {
 	facts.ImageRevision = ""
 	if targetIdentityComplete(facts) {
 		t.Fatal("Lima identity without reviewed image revision reported complete")
+	}
+}
+
+func TestCertifyRejectsRepeatApplyMutationAfterDistinctFirstApply(t *testing.T) {
+	bundle := certifyFixture(t, true)
+	root := filepath.Dir(bundle)
+	repeatReceiptPath := filepath.Join(root, "fixture-repeat-receipt.json")
+	var repeated state.Receipt
+	readJSON(t, repeatReceiptPath, &repeated)
+	repeated.Outcomes[0].Noop = false
+	writeJSON(t, repeatReceiptPath, repeated)
+	if err := os.Remove(filepath.Join(root, "fixture-apply-count")); err != nil {
+		t.Fatalf("reset fake apply count: %v", err)
+	}
+	var plan planning.Plan
+	readJSON(t, filepath.Join(root, "fixture-plan.json"), &plan)
+
+	_, err := Certify(context.Background(), CertifyRequest{
+		MDSPath:                    filepath.Join(root, "fake-mds"),
+		TargetID:                   plan.Target.ID.String(),
+		OutputDir:                  filepath.Join(root, "mutating-repeat-bundle"),
+		Components:                 []string{"go"},
+		ExpectedGuestCreationNonce: plan.Target.ImageCreationNonce,
+		Now:                        func() time.Time { return time.Unix(1<<40, 0).UTC() },
+		RuntimeProbe: func(id target.ID) (target.Facts, error) {
+			if id != plan.Target.ID {
+				return target.Facts{}, errors.New("unexpected target")
+			}
+			return plan.Target, nil
+		},
+	})
+	assertErrorContains(t, err, "repeat apply mutated")
+	if _, statErr := os.Stat(filepath.Join(root, "mutating-repeat-bundle")); !errors.Is(
+		statErr,
+		os.ErrNotExist,
+	) {
+		t.Fatalf("failed certification published output: %v", statErr)
 	}
 }
 
@@ -514,8 +636,10 @@ func certifyFixtureWithReport(
 	facts := target.Facts{
 		ID: targetID, OS: "linux", OSVersion: "26.04", Architecture: "arm64",
 		RuntimeVersion: "1.0.0", ImageRevision: "sha256:image",
-		SystemdSupported: true,
-		SystemdActive:    true, Reachable: true,
+		ImageProvenance:    "https://example.invalid/ubuntu.img",
+		ImageCreationNonce: strings.Repeat("a", 64),
+		SystemdSupported:   true,
+		SystemdActive:      true, Reachable: true,
 		CLIRevision: fixtureCLIRevision, CatalogRevision: fixtureCatalogRevision,
 	}
 	plan := planning.Plan{
@@ -559,8 +683,26 @@ func certifyFixtureWithReport(
 
 	planPath := filepath.Join(root, "fixture-plan.json")
 	doctorPath := filepath.Join(root, "fixture-doctor.json")
+	firstReceiptPath := filepath.Join(root, "fixture-first-receipt.json")
+	repeatReceiptPath := filepath.Join(root, "fixture-repeat-receipt.json")
+	applyCountPath := filepath.Join(root, "fixture-apply-count")
 	writeJSON(t, planPath, plan)
 	writeJSON(t, doctorPath, report)
+	firstReceipt := state.Receipt{
+		SchemaVersion: state.ReceiptSchema,
+		PlanDigest:    plan.Digest, CatalogRevision: plan.CatalogRevision,
+		TargetID: plan.Target.ID.String(), Complete: true,
+		Outcomes: []state.ActionOutcome{{
+			ActionID: "lima-guest:mds/go", Status: "ready",
+			RequestedVersion: "1.25.0", InstalledVersion: "1.25.0",
+			VerifiedVersion: "1.25.0", Noop: false,
+		}},
+	}
+	repeatReceipt := firstReceipt
+	repeatReceipt.Outcomes = append([]state.ActionOutcome(nil), firstReceipt.Outcomes...)
+	repeatReceipt.Outcomes[0].Noop = true
+	writeJSON(t, firstReceiptPath, firstReceipt)
+	writeJSON(t, repeatReceiptPath, repeatReceipt)
 	binaryPath := filepath.Join(root, "fake-mds")
 	doctorExit := 0
 	if !report.Ready {
@@ -574,6 +716,13 @@ case "$1" in
   plan)
     exec /bin/cat %q
     ;;
+  apply)
+    if [ -e %q ]; then
+      exec /bin/cat %q
+    fi
+    : > %q
+    exec /bin/cat %q
+    ;;
   doctor)
     /bin/cat %q
     exit %d
@@ -583,7 +732,16 @@ case "$1" in
     exit 2
     ;;
 esac
-`, fixtureCLIRevision, planPath, doctorPath, doctorExit)
+`,
+		fixtureCLIRevision,
+		planPath,
+		applyCountPath,
+		repeatReceiptPath,
+		applyCountPath,
+		firstReceiptPath,
+		doctorPath,
+		doctorExit,
+	)
 	if err := os.WriteFile(binaryPath, []byte(script), 0o700); err != nil {
 		t.Fatalf("write fake mds: %v", err)
 	}
@@ -591,8 +749,15 @@ esac
 	bundle := filepath.Join(root, "bundle")
 	manifest, err := Certify(context.Background(), CertifyRequest{
 		MDSPath: binaryPath, TargetID: targetID.String(), OutputDir: bundle,
-		Components: []string{"go"},
-		Now:        func() time.Time { return time.Unix(1<<40, 0).UTC() },
+		Components:                 []string{"go"},
+		ExpectedGuestCreationNonce: facts.ImageCreationNonce,
+		Now:                        func() time.Time { return time.Unix(1<<40, 0).UTC() },
+		RuntimeProbe: func(id target.ID) (target.Facts, error) {
+			if id != plan.Target.ID {
+				return target.Facts{}, errors.New("unexpected target")
+			}
+			return plan.Target, nil
+		},
 	})
 	if err != nil {
 		t.Fatalf("Certify(): %v", err)

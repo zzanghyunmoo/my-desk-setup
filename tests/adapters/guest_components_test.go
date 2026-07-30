@@ -38,17 +38,38 @@ func TestAPTUsesNoninteractiveSudoArgv(t *testing.T) {
 	if got, want := commands[0].Executable, "/usr/bin/sudo"; got != want {
 		t.Fatalf("sudo preflight executable = %q, want %q", got, want)
 	}
-	if got, want := commands[0].Arguments, []string{"-n", "true"}; !reflect.DeepEqual(got, want) {
+	if got, want := commands[0].Arguments, []string{"-n", "/usr/bin/true"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("sudo preflight = %v, want %v", got, want)
 	}
 	joined := strings.Join(commands[1].Arguments, " ")
 	for _, expected := range []string{
-		"-n env",
+		"-n /usr/bin/env",
 		"DEBIAN_FRONTEND=noninteractive",
-		"apt-get install -y --no-install-recommends git curl",
+		"/usr/bin/apt-get install -y --no-install-recommends git curl",
 	} {
 		if !strings.Contains(joined, expected) {
 			t.Fatalf("APT arguments %q do not contain %q", joined, expected)
+		}
+	}
+}
+
+func TestPrivilegedCommandAllowlistRejectsShellAndUnreviewedService(t *testing.T) {
+	for _, command := range []transport.Command{
+		{
+			Executable: "/usr/bin/sudo",
+			Arguments:  []string{"-n", "sh", "-c", "apt-get install curl"},
+		},
+		{
+			Executable: "/usr/bin/sudo",
+			Arguments:  []string{"-n", "/usr/bin/systemctl", "enable", "--now", "ssh"},
+		},
+		{
+			Executable: "/usr/bin/sudo",
+			Arguments:  []string{"apt-get", "update"},
+		},
+	} {
+		if err := packages.ValidatePrivilegedCommand(command); err == nil {
+			t.Fatalf("ValidatePrivilegedCommand(%+v) succeeded", command)
 		}
 	}
 }
@@ -57,7 +78,7 @@ func TestAPTRequiresUserManagedSudoCredentialRefresh(t *testing.T) {
 	port := &recordingPort{
 		err: func(command transport.Command) error {
 			if command.Executable == "/usr/bin/sudo" &&
-				reflect.DeepEqual(command.Arguments, []string{"-n", "true"}) {
+				reflect.DeepEqual(command.Arguments, []string{"-n", "/usr/bin/true"}) {
 				return errors.New("sudo: a password is required")
 			}
 			return nil
@@ -187,7 +208,7 @@ func TestExplicitUpdateMayReplacePinnedPackageButNormalApplyMayNot(t *testing.T)
 	environment := catalog.Environment{
 		Catalog: catalog.Catalog{Components: []catalog.Component{
 			{
-				ID: "tool", Kind: "build",
+				ID: "base-cli", Kind: "build",
 				VersionPolicy: catalog.VersionPolicy{
 					Mode: "pinned", LockKey: "tool",
 				},
@@ -198,10 +219,10 @@ func TestExplicitUpdateMayReplacePinnedPackageButNormalApplyMayNot(t *testing.T)
 		}},
 	}
 	action := planning.Action{
-		ID: "lima-guest:mds/tool", ComponentID: "tool",
+		ID: "lima-guest:mds/base-cli", ComponentID: "base-cli",
 		Installer: "mise", Package: "tool", Version: "2.0.0",
 		Verification: [][]string{
-			{"tool", "--version"},
+			{"git", "--version"},
 		},
 	}
 	normal := packages.Adapter{
@@ -228,7 +249,7 @@ func TestExplicitUpdateMayReplacePinnedPackageButNormalApplyMayNot(t *testing.T)
 func TestVendorInstallVerifiesChecksumAndPublishesAtomically(t *testing.T) {
 	archive := zipArtifact(t, "fixture/bin/tool", []byte("#!/bin/sh\necho ok\n"))
 	sum := sha256.Sum256(archive)
-	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 		_, _ = writer.Write(archive)
 	}))
 	defer server.Close()
@@ -269,8 +290,55 @@ func TestVendorInstallVerifiesChecksumAndPublishesAtomically(t *testing.T) {
 	}
 }
 
+func TestVendorInstallAcceptsChecksumPinnedHTTPSReleaseRedirect(t *testing.T) {
+	archive := zipArtifact(t, "tool", []byte("#!/bin/sh\necho ok\n"))
+	sum := sha256.Sum256(archive)
+	assetServer := httptest.NewTLSServer(http.HandlerFunc(
+		func(writer http.ResponseWriter, _ *http.Request) {
+			_, _ = writer.Write(archive)
+		},
+	))
+	defer assetServer.Close()
+	redirectServer := httptest.NewTLSServer(http.HandlerFunc(
+		func(writer http.ResponseWriter, request *http.Request) {
+			http.Redirect(
+				writer,
+				request,
+				assetServer.URL+"/asset?signature=temporary",
+				http.StatusFound,
+			)
+		},
+	))
+	defer redirectServer.Close()
+
+	home := t.TempDir()
+	vendor := packages.Vendor{
+		Home: home, Platform: "linux", Arch: "amd64",
+		Client: redirectServer.Client(),
+	}
+	err := vendor.Install(
+		context.Background(),
+		catalog.Component{ID: "fixture"},
+		catalog.LockEntry{
+			Artifacts: map[string]catalog.Artifact{
+				"linux-amd64": {
+					URL:    redirectServer.URL + "/start",
+					SHA256: hex.EncodeToString(sum[:]),
+					Format: "zip", Executable: "tool",
+				},
+			},
+		},
+	)
+	if err != nil {
+		t.Fatalf("Install(): %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".local", "bin", "tool")); err != nil {
+		t.Fatalf("installed tool: %v", err)
+	}
+}
+
 func TestVendorRejectsChecksumMismatch(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 		_, _ = writer.Write([]byte("not the reviewed artifact"))
 	}))
 	defer server.Close()
@@ -305,7 +373,7 @@ func TestVendorExtractsExactTarGzExecutable(t *testing.T) {
 		[]byte("#!/bin/sh\necho acli\n"),
 	)
 	sum := sha256.Sum256(archive)
-	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 		_, _ = writer.Write(archive)
 	}))
 	defer server.Close()

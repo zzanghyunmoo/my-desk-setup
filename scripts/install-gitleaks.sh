@@ -35,8 +35,37 @@ mds_tmp=$(mktemp -d)
 trap 'rm -rf "$mds_tmp"' EXIT HUP INT TERM
 mds_archive="$mds_tmp/$mds_archive_name"
 
-curl -fsSL "$mds_url" -o "$mds_archive"
+mds_effective_url=$(
+  ulimit -f 1048576
+  curl --fail --show-error --silent --location --max-redirs 3 \
+    --proto '=https' --proto-redir '=https' --tlsv1.2 \
+    --connect-timeout 30 --max-time 600 --max-filesize 536870912 \
+    --output "$mds_archive" --write-out '%{url_effective}' "$mds_url"
+)
+case "$mds_effective_url" in
+  https://*) ;;
+  *)
+    echo "gitleaks redirect must remain HTTPS" >&2
+    exit 1
+    ;;
+esac
+mds_effective_authority=${mds_effective_url#https://}
+mds_effective_authority=${mds_effective_authority%%/*}
+case "$mds_effective_authority" in
+  "" | *@*)
+    echo "gitleaks redirect must not contain userinfo" >&2
+    exit 1
+    ;;
+esac
 printf '%s  %s\n' "$mds_sha256" "$mds_archive" | shasum -a 256 -c -
+mds_binary_entries=$(
+  tar -tzf "$mds_archive" |
+    awk '$0 == "gitleaks" { count++ } END { print count + 0 }'
+)
+if [ "$mds_binary_entries" -ne 1 ]; then
+  echo "gitleaks archive must contain one exact gitleaks entry" >&2
+  exit 1
+fi
 tar -xzf "$mds_archive" -C "$mds_tmp" gitleaks
 if [ ! -f "$mds_tmp/gitleaks" ] || [ -L "$mds_tmp/gitleaks" ]; then
   echo "gitleaks archive did not contain a regular binary" >&2

@@ -21,7 +21,9 @@ import (
 	"strings"
 	"time"
 
+	exactartifact "github.com/zzanghyunmoo/my-desk-setup/internal/artifact"
 	"github.com/zzanghyunmoo/my-desk-setup/internal/catalog"
+	"github.com/zzanghyunmoo/my-desk-setup/internal/durable"
 )
 
 const (
@@ -32,9 +34,8 @@ const (
 )
 
 var (
-	versionPattern  = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z]+(?:[.-][0-9A-Za-z]+)*)?$`)
-	commitPattern   = regexp.MustCompile(`^(?:[0-9a-f]{40}|[0-9a-f]{64})$`)
-	checksumPattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
+	versionPattern = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z]+(?:[.-][0-9A-Za-z]+)*)?$`)
+	commitPattern  = regexp.MustCompile(`^(?:[0-9a-f]{40}|[0-9a-f]{64})$`)
 )
 
 type Options struct {
@@ -218,7 +219,7 @@ func Build(ctx context.Context, options Options) (returnErr error) {
 	if _, err := Verify(staging); err != nil {
 		return fmt.Errorf("verify staged release: %w", err)
 	}
-	if err := os.Rename(staging, outputDir); err != nil {
+	if err := durable.PublishDirectory(staging, outputDir); err != nil {
 		return fmt.Errorf("publish release directory: %w", err)
 	}
 	return nil
@@ -627,10 +628,10 @@ func validateManifest(manifest Manifest) error {
 		return fmt.Errorf("invalid manifest commit %q", manifest.Commit)
 	}
 	if !strings.HasPrefix(manifest.CatalogRevision, "sha256:") ||
-		!checksumPattern.MatchString(strings.TrimPrefix(
+		exactartifact.ValidateSHA256(strings.TrimPrefix(
 			manifest.CatalogRevision,
 			"sha256:",
-		)) {
+		)) != nil {
 		return fmt.Errorf(
 			"invalid manifest catalog revision %q",
 			manifest.CatalogRevision,
@@ -662,8 +663,8 @@ func validateManifest(manifest Manifest) error {
 				releaseTarget.architecture,
 			)
 		}
-		if !checksumPattern.MatchString(artifact.SHA256) ||
-			!checksumPattern.MatchString(artifact.BinarySHA256) ||
+		if exactartifact.ValidateSHA256(artifact.SHA256) != nil ||
+			exactartifact.ValidateSHA256(artifact.BinarySHA256) != nil ||
 			artifact.Size <= 0 {
 			return fmt.Errorf("manifest artifact %q has invalid file identity", artifact.Name)
 		}
@@ -680,7 +681,7 @@ func validateManifest(manifest Manifest) error {
 		if bootstrap.Name != expected.name || bootstrap.OS != expected.os {
 			return fmt.Errorf("manifest bootstrap %d does not match expected identity", index)
 		}
-		if !checksumPattern.MatchString(bootstrap.SHA256) || bootstrap.Size <= 0 {
+		if exactartifact.ValidateSHA256(bootstrap.SHA256) != nil || bootstrap.Size <= 0 {
 			return fmt.Errorf("manifest bootstrap %q has invalid file identity", bootstrap.Name)
 		}
 	}
@@ -729,7 +730,7 @@ func readChecksums(path string) (map[string]string, error) {
 		line := scanner.Text()
 		digest, name, found := strings.Cut(line, "  ")
 		if !found ||
-			!checksumPattern.MatchString(digest) ||
+			exactartifact.ValidateSHA256(digest) != nil ||
 			name == "" ||
 			name != filepath.Base(name) ||
 			strings.Contains(name, `\`) {

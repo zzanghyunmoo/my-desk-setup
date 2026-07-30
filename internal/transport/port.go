@@ -5,16 +5,19 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"os/exec"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
 )
 
 const (
-	DefaultTimeout     = 2 * time.Minute
+	DefaultTimeout     = 10 * time.Minute
 	DefaultOutputLimit = 1 << 20
+	DiagnosticLimit    = 2048
 )
 
 type Command struct {
@@ -71,6 +74,15 @@ func (Executor) Run(
 	stdout := newLimitedBuffer(outputLimit)
 	stderr := newLimitedBuffer(outputLimit)
 	command := exec.CommandContext(ctx, executable, arguments...)
+	tree, err := newProcessTree(command)
+	if err != nil {
+		return Result{}, fmt.Errorf("prepare command process tree: %w", err)
+	}
+	defer func() {
+		_ = tree.Close()
+	}()
+	command.Cancel = tree.Terminate
+	command.WaitDelay = 5 * time.Second
 	command.Env = commandEnv
 	command.Dir = workingDirectory
 	if len(stdin) > 0 {
@@ -78,7 +90,20 @@ func (Executor) Run(
 	}
 	command.Stdout = stdout
 	command.Stderr = stderr
-	err = command.Run()
+	err = command.Start()
+	if err == nil {
+		if attachErr := tree.Attach(); attachErr != nil {
+			_ = tree.Terminate()
+			_ = command.Wait()
+			err = fmt.Errorf("attach command process tree: %w", attachErr)
+		} else {
+			err = command.Wait()
+		}
+	}
+	terminationErr := tree.Terminate()
+	if terminationErr != nil && err == nil {
+		err = fmt.Errorf("terminate command descendants: %w", terminationErr)
+	}
 	result := Result{
 		Executable: executable,
 		Arguments:  append([]string(nil), arguments...),
@@ -223,7 +248,67 @@ type CommandError struct {
 }
 
 func (err *CommandError) Error() string {
-	return fmt.Sprintf("%s exited with code %d", err.Result.Executable, err.Result.ExitCode)
+	detail := SanitizeDiagnostic(strings.TrimSpace(
+		err.Result.Stderr + "\n" + err.Result.Stdout,
+	))
+	if detail == "" {
+		return fmt.Sprintf(
+			"%s exited with code %d",
+			err.Result.Executable,
+			err.Result.ExitCode,
+		)
+	}
+	return fmt.Sprintf(
+		"%s exited with code %d: %s",
+		err.Result.Executable,
+		err.Result.ExitCode,
+		detail,
+	)
+}
+
+var credentialAssignmentPattern = regexp.MustCompile(
+	`(?i)\b(api[_-]?key|authorization|cookie|credential|password|passwd|private[_-]?key|secret|token)\s*[:=]\s*[^\s,;]+`,
+)
+var credentialTokenPattern = regexp.MustCompile(
+	`(?i)\b(gh[pousr]_[A-Za-z0-9_]{8,}|sk-[A-Za-z0-9_-]{8,}|eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,})\b`,
+)
+var diagnosticURLPattern = regexp.MustCompile(`https?://[^\s<>"']+`)
+
+// SanitizeDiagnostic returns a bounded, single-line-safe diagnostic suitable
+// for journals and receipts. Raw child-process output remains transient.
+func SanitizeDiagnostic(value string) string {
+	value = credentialAssignmentPattern.ReplaceAllString(value, "$1=[redacted]")
+	value = credentialTokenPattern.ReplaceAllString(value, "[redacted]")
+	value = diagnosticURLPattern.ReplaceAllStringFunc(value, sanitizeURL)
+	value = strings.TrimSpace(value)
+	if len(value) > DiagnosticLimit {
+		value = value[:DiagnosticLimit] + " [diagnostic truncated]"
+	}
+	return value
+}
+
+func sanitizeURL(value string) string {
+	parsed, err := url.Parse(value)
+	if err != nil {
+		return "[redacted-url]"
+	}
+	if parsed.User != nil {
+		parsed.User = url.User("[redacted]")
+	}
+	query := parsed.Query()
+	for key := range query {
+		normalized := strings.ToLower(key)
+		for _, marker := range []string{
+			"auth", "code", "cookie", "credential", "key", "password", "secret", "signature", "token",
+		} {
+			if strings.Contains(normalized, marker) {
+				query.Set(key, "[redacted]")
+				break
+			}
+		}
+	}
+	parsed.RawQuery = query.Encode()
+	return parsed.String()
 }
 
 type limitedBuffer struct {

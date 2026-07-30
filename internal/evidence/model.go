@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"time"
 
+	"github.com/zzanghyunmoo/my-desk-setup/internal/state"
 	"github.com/zzanghyunmoo/my-desk-setup/internal/target"
 )
 
@@ -36,6 +37,8 @@ type Manifest struct {
 	CatalogRevision string           `json:"catalog_revision"`
 	PlanDigest      string           `json:"plan_digest"`
 	Components      []ComponentCheck `json:"components"`
+	ApplyReceipt    *state.Receipt   `json:"apply_receipt,omitempty"`
+	RepeatReceipt   *state.Receipt   `json:"repeat_receipt,omitempty"`
 }
 
 type TargetIdentity struct {
@@ -82,7 +85,13 @@ type CertifyRequest struct {
 	// ExpectedBinarySHA256 binds capture to a release artifact before the
 	// target executes the binary.
 	ExpectedBinarySHA256 string
-	Now                  func() time.Time
+	// ExpectedGuestCreationNonce is copied from the host's committed ownership
+	// record and reviewed at the protected target-certification gate.
+	ExpectedGuestCreationNonce string
+	Now                        func() time.Time
+	// RuntimeProbe is a deterministic test seam. Production callers leave it
+	// nil so certification derives guest identity from protected runtime facts.
+	RuntimeProbe func(target.ID) (target.Facts, error)
 }
 
 type VerifyOptions struct {

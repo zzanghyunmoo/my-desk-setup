@@ -70,11 +70,13 @@ type VersionLock struct {
 }
 
 type LockEntry struct {
-	Version    string              `yaml:"version" json:"version"`
-	Source     string              `yaml:"source" json:"source"`
-	Provenance string              `yaml:"provenance" json:"provenance"`
-	NPM        *NPMArtifact        `yaml:"npm,omitempty" json:"npm,omitempty"`
-	Artifacts  map[string]Artifact `yaml:"artifacts,omitempty" json:"artifacts,omitempty"`
+	Version              string              `yaml:"version" json:"version"`
+	Source               string              `yaml:"source" json:"source"`
+	Provenance           string              `yaml:"provenance" json:"provenance"`
+	InstallRef           string              `yaml:"install_ref,omitempty" json:"install_ref,omitempty"`
+	NPM                  *NPMArtifact        `yaml:"npm,omitempty" json:"npm,omitempty"`
+	Artifacts            map[string]Artifact `yaml:"artifacts,omitempty" json:"artifacts,omitempty"`
+	UnavailablePlatforms map[string]string   `yaml:"unavailable_platforms,omitempty" json:"unavailable_platforms,omitempty"`
 }
 
 type NPMArtifact struct {
@@ -95,6 +97,15 @@ type Environment struct {
 	Profiles map[string]Profile    `json:"profiles"`
 	Targets  map[string]TargetSpec `json:"targets"`
 	Lock     VersionLock           `json:"lock"`
+	Mise     MiseFiles             `json:"mise"`
+}
+
+// MiseFiles are the exact strict-mode inputs consumed by `mise install
+// --locked`. Keeping them in Environment binds those installer inputs to the
+// canonical catalog revision and every plan digest derived from it.
+type MiseFiles struct {
+	Config string `json:"config"`
+	Lock   string `json:"lock"`
 }
 
 type TargetSpec struct {

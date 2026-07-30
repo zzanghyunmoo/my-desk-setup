@@ -10,6 +10,7 @@ import (
 	"github.com/zzanghyunmoo/my-desk-setup/internal/planning"
 	"github.com/zzanghyunmoo/my-desk-setup/internal/state"
 	"github.com/zzanghyunmoo/my-desk-setup/internal/target"
+	"github.com/zzanghyunmoo/my-desk-setup/internal/transport"
 )
 
 type Hooks struct {
@@ -83,11 +84,17 @@ func (runner Runner) apply(
 		return state.Receipt{}, fmt.Errorf("fingerprint observed target: %w", err)
 	}
 	if plannedFingerprint != actualFingerprint {
-		return state.Receipt{}, fmt.Errorf(
+		return state.Receipt{}, &StalePlanError{Cause: fmt.Errorf(
 			"target preimage changed: planned %s observed %s",
 			plannedFingerprint,
 			actualFingerprint,
-		)
+		)}
+	}
+	if err := actualFacts.ApplyPreflight(); err != nil {
+		return state.Receipt{}, &adapters.ActionRequiredError{
+			Reason: transport.SanitizeDiagnostic(err.Error()) +
+				"; restore target readiness and rerun the same reviewed digest",
+		}
 	}
 
 	paths, err := state.NewPaths(stateRoot, plan.Target.ID.String())
@@ -132,6 +139,7 @@ func (runner Runner) apply(
 		if action.Status == planning.ActionUnsupported ||
 			action.Status == planning.ActionActionRequired {
 			outcome.Status = string(action.Status)
+			outcome.ReasonCode = string(action.Status)
 			outcome.Reason = action.Reason
 			statuses[action.ID] = outcome.Status
 			outcomes = append(outcomes, outcome)
@@ -139,6 +147,7 @@ func (runner Runner) apply(
 		}
 		if dependency := blockedDependency(action, statuses); dependency != "" {
 			outcome.Status = "blocked"
+			outcome.ReasonCode = "dependency-not-ready"
 			outcome.Reason = "dependency is not ready: " + dependency
 			statuses[action.ID] = outcome.Status
 			outcomes = append(outcomes, outcome)
@@ -148,7 +157,8 @@ func (runner Runner) apply(
 		observation, observeErr := runner.Adapter.Observe(ctx, action)
 		if observeErr != nil {
 			outcome.Status = "failed"
-			outcome.Reason = "observe: " + observeErr.Error()
+			outcome.ReasonCode = "observation-failed"
+			outcome.Reason = "observe: " + transport.SanitizeDiagnostic(observeErr.Error())
 			statuses[action.ID] = outcome.Status
 			outcomes = append(outcomes, outcome)
 			continue
@@ -156,7 +166,8 @@ func (runner Runner) apply(
 		outcome.InstalledVersion = observation.InstalledVersion
 		if observation.State == adapters.StateConflict {
 			outcome.Status = "failed"
-			outcome.Reason = "conflict: " + observation.Detail
+			outcome.ReasonCode = "user-owned-or-version-conflict"
+			outcome.Reason = "conflict: " + transport.SanitizeDiagnostic(observation.Detail)
 			statuses[action.ID] = outcome.Status
 			outcomes = append(outcomes, outcome)
 			continue
@@ -164,6 +175,7 @@ func (runner Runner) apply(
 		if observation.State == adapters.StateReady {
 			if err := runner.Adapter.Verify(ctx, action); err == nil {
 				outcome.Status = "ready"
+				outcome.ReasonCode = "ready"
 				outcome.Noop = true
 				outcome.VerifiedVersion = observation.InstalledVersion
 				statuses[action.ID] = outcome.Status
@@ -189,17 +201,21 @@ func (runner Runner) apply(
 			journalPhase := "apply-failed"
 			if errors.As(err, &actionRequired) {
 				outcome.Status = "action-required"
+				outcome.ReasonCode = "action-required"
 				outcome.Reason = actionRequired.Reason
 				journalPhase = "apply-action-required"
 			} else {
 				outcome.Status = "failed"
-				outcome.Reason = "apply: " + err.Error()
+				outcome.ReasonCode = "apply-failed"
+				outcome.Reason = "apply: " + transport.SanitizeDiagnostic(err.Error())
 			}
 			statuses[action.ID] = outcome.Status
 			outcomes = append(outcomes, outcome)
 			if journalErr := journal.Append(state.JournalEvent{
 				At: runner.Now().UTC(), PlanDigest: plan.Digest,
-				ActionID: action.ID, Phase: journalPhase, Detail: err.Error(),
+				ActionID: action.ID, Phase: journalPhase,
+				ReasonCode: outcome.ReasonCode,
+				Detail:     transport.SanitizeDiagnostic(err.Error()),
 			}); journalErr != nil {
 				return state.Receipt{}, journalErr
 			}
@@ -218,12 +234,15 @@ func (runner Runner) apply(
 		}
 		if err := runner.Adapter.Verify(ctx, action); err != nil {
 			outcome.Status = "failed"
-			outcome.Reason = "verify: " + err.Error()
+			outcome.ReasonCode = "functional-verification-failed"
+			outcome.Reason = "verify: " + transport.SanitizeDiagnostic(err.Error())
 			statuses[action.ID] = outcome.Status
 			outcomes = append(outcomes, outcome)
 			if journalErr := journal.Append(state.JournalEvent{
 				At: runner.Now().UTC(), PlanDigest: plan.Digest,
-				ActionID: action.ID, Phase: "verify-failed", Detail: err.Error(),
+				ActionID: action.ID, Phase: "verify-failed",
+				ReasonCode: outcome.ReasonCode,
+				Detail:     transport.SanitizeDiagnostic(err.Error()),
 			}); journalErr != nil {
 				return state.Receipt{}, journalErr
 			}
@@ -232,12 +251,14 @@ func (runner Runner) apply(
 		finalObservation, err := runner.Adapter.Observe(ctx, action)
 		if err != nil || finalObservation.State != adapters.StateReady {
 			outcome.Status = "failed"
+			outcome.ReasonCode = "post-verification-not-ready"
 			outcome.Reason = "post-verify observation is not ready"
 			statuses[action.ID] = outcome.Status
 			outcomes = append(outcomes, outcome)
 			continue
 		}
 		outcome.Status = "ready"
+		outcome.ReasonCode = "ready"
 		outcome.InstalledVersion = finalObservation.InstalledVersion
 		outcome.VerifiedVersion = finalObservation.InstalledVersion
 		statuses[action.ID] = outcome.Status

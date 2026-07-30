@@ -16,6 +16,7 @@ import (
 	"github.com/zzanghyunmoo/my-desk-setup/internal/planning"
 	"github.com/zzanghyunmoo/my-desk-setup/internal/state"
 	"github.com/zzanghyunmoo/my-desk-setup/internal/target"
+	"github.com/zzanghyunmoo/my-desk-setup/internal/version"
 )
 
 func TestCLIPlanJSONUsesEmbeddedCatalog(t *testing.T) {
@@ -61,6 +62,165 @@ func TestCLIPlanJSONUsesEmbeddedCatalog(t *testing.T) {
 	for _, action := range plan.Actions {
 		if action.ComponentID == "notion-desktop" {
 			t.Fatalf("notion CLI plan contains desktop action")
+		}
+	}
+}
+
+func TestCLIExplicitCurrentGuestPreservesObservedImageIdentity(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	var observed target.Facts
+	digest := strings.Repeat("a", 64)
+	code := cli.Run(
+		[]string{
+			"plan",
+			"--target", "wsl-guest:Ubuntu-26.04",
+			"--component", "notion-cli",
+			"--format", "json",
+		},
+		cli.Streams{
+			Input: strings.NewReader(""), Output: &stdout, Error: &stderr,
+		},
+		cli.Runtime{
+			GOOS: "linux", GOARCH: "amd64",
+			Getenv: func(key string) string {
+				switch key {
+				case "WSL_DISTRO_NAME":
+					return "Ubuntu-26.04"
+				case "MDS_IMAGE_REVISION":
+					return "sha256:" + digest
+				case "MDS_IMAGE_PROVENANCE":
+					return "https://example.invalid/ubuntu.wsl"
+				case "MDS_IMAGE_CREATION_NONCE":
+					return strings.Repeat("b", 64)
+				default:
+					return ""
+				}
+			},
+			ObserveTarget: func(
+				_ context.Context,
+				facts target.Facts,
+			) (target.Facts, error) {
+				observed = facts
+				facts.OSVersion = "26.04"
+				facts.RuntimeVersion = "fixture"
+				facts.SystemdSupported = true
+				facts.SystemdActive = true
+				return facts, nil
+			},
+		},
+	)
+	if code != 0 {
+		t.Fatalf("Run() code = %d stderr=%q", code, stderr.String())
+	}
+	if observed.ImageRevision != "sha256:"+digest ||
+		observed.ImageProvenance != "https://example.invalid/ubuntu.wsl" ||
+		observed.ImageCreationNonce != strings.Repeat("b", 64) {
+		t.Fatalf("ObserveTarget input lost guest image identity: %+v", observed)
+	}
+}
+
+func TestCLIVersionCommandRemainsBackwardCompatible(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	code := cli.Run(
+		[]string{"version"},
+		cli.Streams{
+			Input: strings.NewReader(""), Output: &stdout, Error: &stderr,
+		},
+		cli.Runtime{},
+	)
+	if code != cli.ExitSuccess || strings.TrimSpace(stdout.String()) == "" {
+		t.Fatalf(
+			"version code=%d stdout=%q stderr=%q",
+			code,
+			stdout.String(),
+			stderr.String(),
+		)
+	}
+}
+
+func TestCLIVersionJSONIsOneClosedMachineReadableDocument(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	code := cli.Run(
+		[]string{"version", "--format", "json"},
+		cli.Streams{
+			Input: strings.NewReader(""), Output: &stdout, Error: &stderr,
+		},
+		cli.Runtime{},
+	)
+	if code != cli.ExitSuccess || stderr.Len() != 0 {
+		t.Fatalf(
+			"version code=%d stdout=%q stderr=%q",
+			code,
+			stdout.String(),
+			stderr.String(),
+		)
+	}
+	var envelope struct {
+		SchemaVersion string `json:"schema_version"`
+		Version       string `json:"version"`
+		Commit        string `json:"commit"`
+		Date          string `json:"date"`
+	}
+	decoder := json.NewDecoder(bytes.NewReader(stdout.Bytes()))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&envelope); err != nil {
+		t.Fatalf("decode version JSON: %v", err)
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
+		t.Fatalf("version output contains trailing JSON: %v", err)
+	}
+	if envelope.SchemaVersion != cli.VersionSchema ||
+		envelope.Version != version.Version ||
+		envelope.Commit != version.Commit ||
+		envelope.Date != version.Date {
+		t.Fatalf("version envelope = %+v", envelope)
+	}
+}
+
+func TestCLICatalogJSONIsMachineReadable(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	code := cli.Run(
+		[]string{"catalog", "--format", "json"},
+		cli.Streams{
+			Input: strings.NewReader(""), Output: &stdout, Error: &stderr,
+		},
+		cli.Runtime{},
+	)
+	if code != cli.ExitSuccess {
+		t.Fatalf("catalog code=%d stderr=%q", code, stderr.String())
+	}
+	var envelope struct {
+		SchemaVersion string `json:"schema_version"`
+		Environment   struct {
+			Catalog struct {
+				Components []struct {
+					ID       string                    `json:"id"`
+					Provides []string                  `json:"provides"`
+					Targets  map[string]map[string]any `json:"targets"`
+				} `json:"components"`
+			} `json:"catalog"`
+			Profiles map[string]any `json:"profiles"`
+			Targets  map[string]any `json:"targets"`
+		} `json:"environment"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &envelope); err != nil {
+		t.Fatalf("decode catalog JSON: %v", err)
+	}
+	if envelope.SchemaVersion != cli.CatalogSchema ||
+		len(envelope.Environment.Catalog.Components) == 0 ||
+		len(envelope.Environment.Profiles) == 0 ||
+		len(envelope.Environment.Targets) == 0 {
+		t.Fatalf("catalog envelope = %+v", envelope)
+	}
+	for _, component := range envelope.Environment.Catalog.Components {
+		if component.ID == "" || len(component.Provides) == 0 ||
+			len(component.Targets) != 4 {
+			t.Fatalf("component is not agent-discoverable: %+v", component)
 		}
 	}
 }

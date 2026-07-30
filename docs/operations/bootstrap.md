@@ -29,7 +29,8 @@ checksum이 맞지 않는 archive를 bootstrap 또는 target certification에 �
 `release-promotion.json`도 영구 asset으로 포함된다.
 
 embedded catalog revision은 component/profile/version lock뿐 아니라
-`catalog/targets/ubuntu-26.04.yaml`의 Lima와 WSL image URL/SHA-256도 포함한다.
+`mise.toml`, `mise.lock` 및 `catalog/targets/ubuntu-26.04.yaml`의 Lima와 WSL
+image URL/SHA-256도 포함한다.
 따라서 target image가 바뀌면 release catalog revision과 관련 plan digest가
 함께 바뀐다. host의 `lima`/`wsl` plan action은 선택된 architecture의
 `image_url`, `image_sha256`, `image_kind`, `guest_distribution`을 명시해
@@ -37,7 +38,12 @@ embedded catalog revision은 component/profile/version lock뿐 아니라
 
 macOS와 Windows host binary에는 같은 release의 Linux `amd64`/`arm64`
 archive URL과 SHA-256이 함께 embed된다. guest bootstrap은 이 exact identity만
-사용하며 `latest`나 별도 moving catalog를 조회하지 않는다.
+사용하며 `latest`나 별도 moving catalog를 조회하지 않는다. GitHub Release
+asset download는 최대 3회의 HTTPS redirect만 따르고, 최종 authority에
+userinfo가 없는지 확인하며, 512 MiB 제한과 exact SHA-256 검증을 모두
+통과해야 extraction을 시작한다. Windows downloader의 10분 cancellation
+token은 redirect와 response header뿐 아니라 비동기 body read 전체에도
+적용된다.
 
 ### Maintainer build
 
@@ -97,6 +103,10 @@ bootstrap은 `~/.local/bin/mds`에 설치하고 인증을 실행하지 않는다
 `plan` JSON의 target, selection, `action-required`, catalog revision과
 digest를 보관해 검토한다.
 
+Homebrew가 없는 macOS host에서는 bootstrap 또는 apply가 Homebrew의 moving
+installer를 대신 실행하지 않는다. 표시된 prerequisite를 사용자가 검토해
+Homebrew를 설치한 뒤 새 plan과 digest를 만들어야 한다.
+
 검토한 plan과 같은 selection으로 적용한다.
 
 ```sh
@@ -123,7 +133,13 @@ Lima만 별도로 검토하고 준비할 수도 있다.
 ```
 
 adapter는 pinned Ubuntu 26.04 image와 digest로 `mds`라는 Lima instance를
-생성하거나 시작한다. 생성 후 host에서 다음 상태를 확인한다.
+생성한다. template은 선택 architecture의 단일 image URL·SHA-256과
+transaction별 creation nonce를 stdin으로 전달한다. 제품 ownership receipt가
+없거나 live root-owned marker의 nonce가 receipt와 다른 same-name instance는
+시작·bootstrap·재구성하지 않고 conflict/action-required로 중단한다. 기존
+instance가 stopped 상태면 mds가 먼저 시작하지 않으며, 사용자가 시작한 뒤
+marker를 재검증한다.
+생성 후 host에서 다음 상태를 확인한다.
 
 ```sh
 limactl list
@@ -216,6 +232,12 @@ temporary file로 image를 streaming download하고 checksum을 검증한 뒤에
 `wsl.exe --install --from-file ... --name Ubuntu-26.04 --no-launch`를
 실행한다. 이름만 지정하는 moving `wsl --install --distribution` 경로는
 사용하지 않으며 checksum mismatch는 설치 전에 hard failure다.
+제품 ownership receipt가 없는 `Ubuntu-26.04` distribution이 이미 있으면
+image identity가 우연히 같더라도 자동 재구성하지 않고 사용자의 결정을
+요청한다. committed receipt가 있더라도 root-owned marker의 creation nonce가
+다르면 삭제 뒤 같은 이름으로 교체된 외부 distribution으로 판정한다. stopped
+distribution은 mds가 자동 시작하지 않고 사용자가 먼저 launch한 뒤 marker를
+확인한다.
 
 Windows feature 활성화, reboot 또는 최초 Linux user 생성이 필요하면
 `action-required`로 종료한다. 자동 reboot나 계정 생성을 시도하지 않는다.
@@ -225,6 +247,10 @@ Windows feature 활성화, reboot 또는 최초 Linux user 생성이 필요하�
 3. PowerShell을 다시 열고 `plan --component wsl`을 재실행한다.
 4. digest가 같아도 action과 target preimage를 다시 검토한다.
 5. 현재 plan의 exact digest로 `apply --component wsl`을 재실행한다.
+
+재실행 시 mds는 WSL 기본 사용자의 UID가 0이 아니고 passwd의 home이
+`/root`가 아니며 현재 `$HOME`과 일치하는지 확인한다. 이 조건을 통과하기 전에는
+guest-local `mds`를 bootstrap하지 않는다.
 
 WSL lifecycle도 host에서 guest-owned 경로를 직접 수정하지 않는다. 준비 후
 missing/stale guest-local `mds`는 Lima와 같은 guest-local checksum verifier로
@@ -281,9 +307,27 @@ scripts/certify-target.sh \
   --all
 ```
 
-certifier는 production binary의 read-only `plan`과 `doctor`만 실행한다.
-readiness가 남으면 `blocked` bundle을 보존하고 non-zero로 종료한다. 이
-종료를 무시해 `verified`로 게시하지 않는다.
+WSL/Lima guest를 수동 인증할 때는 host의 committed ownership record에서 읽은
+creation nonce를 target/name과 대조한 뒤 명시한다.
+
+```sh
+scripts/certify-target.sh \
+  --mds "$HOME/.local/bin/mds" \
+  --target lima-guest:mds \
+  --output ./target-evidence/lima-guest \
+  --expected-binary-sha256 '<release-binary-sha256>' \
+  --expected-guest-creation-nonce '<host-ownership-creation-nonce>' \
+  --all
+```
+
+certifier는 production binary로 read-only `plan`을 만든 뒤 exact digest의
+`apply`를 실제 target에서 실행한다. 첫 receipt가 complete이면 같은 apply를
+한 번 더 실행해 모든 action이 no-op으로 수렴하는지 확인하고, 마지막으로
+read-only `doctor`를 실행한다. 따라서 certification은 target을 변경할 수 있는
+명시적 운영 작업이며 일반 fixture CI에서 실행하지 않는다. 첫 apply가
+incomplete이거나 repeat apply가 mutation/reverification을 요구하거나 readiness가
+남으면 `blocked` bundle을 보존하고 non-zero로 종료한다. 이 종료를 무시해
+`verified`로 게시하지 않는다.
 
 bundle을 publication identity와 함께 다시 검증한다.
 
@@ -303,6 +347,8 @@ scripts/verify-target-evidence.sh \
 나오는 `0.1.0 (commit=<sha>, date=<RFC3339>)` identity다. verifier는 bundle의
 exact file set, checksum, secret-free material, CLI/catalog/plan/target
 identity, on-disk binary SHA-256과 recomputed status를 확인한다.
+manifest에 포함된 first/repeat receipt도 reviewed action 순서·version·target·
+catalog·plan digest 및 complete/no-op 의미와 다시 대조한다.
 
 `--require-publication-acceptable`은 `blocked`를 `verified`로 바꾸지 않는다.
 완전한 표준 target에서 모든 남은 결과가 사용자가 직접 해결해야 하는
@@ -326,12 +372,35 @@ allowlisted label만 사용한다.
 - `mds-lima-guest`
 
 target ID와 runner label은 workflow 안에서 exact pair로 다시 검증한다.
+self-hosted guest certifier는 WSL의 exact distribution 환경과 Microsoft kernel,
+또는 Lima의 exact instance 환경과 root-owned runtime marker를 확인한다. 두 guest
+모두 생성 시 provision된 root-owned `/etc/mds/image-identity-v1`을 독립적으로
+읽어 embedded catalog의 URL·SHA-256과 host ownership record의 creation
+nonce를 runner service의 `MDS_EXPECTED_GUEST_CREATION_NONCE`와 대조한 뒤 그
+관측 identity를 자식 `mds` process에
+전달한다. nonce는 guest plan target fingerprint에도 포함된다. 일반
+handoff와 certification 모두 catalog 값만으로 실제 image identity를 합성하지
+않는다.
 self-hosted runner는 target별 전용 OS 계정과 전용 작업 디렉터리에서 실행하고,
 저장된 API key, browser session, SSH agent, cloud credential 또는 repository
 secret을 두지 않는다. workflow의 자동 `GITHUB_TOKEN`은 `contents: read`로만
-제한하고 environment에는 secret을 등록하지 않는다. 보호 environment reviewer는
-requested commit, target, binary checksum과 runner label을 확인한 뒤 실행을
-허용한다. 모든 third-party action은 full commit SHA로 고정한다.
+제한하고 environment에는 secret을 등록하지 않는다. guest runner service는
+host의 committed ownership record에서 읽은 nonce를 root-owned service
+configuration에 target별로 고정한다. workflow dispatcher input으로 nonce를
+받지 않으며, 값이 없거나 형식이 틀리면 guest certification을 실행하지 않는다.
+host runner service에는 이 환경값을 두지 않는다. 보호 environment reviewer는
+`github.sha`, target, binary checksum과 runner label을 확인한 뒤 실행을
+허용한다. caller가 임의 expected commit을 전달할 수 없고 protected non-fork
+ref의 `github.sha`만 `persist-credentials: false`로 checkout한다. evidence는
+runner temp의 새 clean directory에서 생성한다. 모든 third-party action은 full
+commit SHA로 고정한다. actual-target job의 240분 상한은 내부 최대 명령 예산
+180분에 checkout·compile·검증·upload를 위한 60분 여유를 둔다.
 
-현재 Windows host, WSL Ubuntu와 Lima Ubuntu의 actual evidence는 없다. 이
-상태에서 해당 target을 verified로 기록하거나 fixture로 대체하지 않는다.
+전용 계정, exact label, protected environment, host ownership record 검증,
+guest systemd service의 root-owned nonce 주입과 rotation 순서는
+[actual-target runner 준비](target-certification-runner.md)를 따른다.
+
+현재 U11/final review head에는 macOS host, Windows host, WSL Ubuntu와
+Lima Ubuntu 어느 target도 actual evidence가 없다. `80f866a`의 macOS
+`blocked` bundle은 이전 commit의 역사적 진단일 뿐 현재 head 인증이 아니다.
+이 상태에서 어떤 target도 verified로 기록하거나 fixture로 대체하지 않는다.

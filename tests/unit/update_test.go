@@ -7,15 +7,19 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
 
 	catalogdata "github.com/zzanghyunmoo/my-desk-setup/catalog"
 	"github.com/zzanghyunmoo/my-desk-setup/internal/catalog"
+	"github.com/zzanghyunmoo/my-desk-setup/internal/cli"
 	"github.com/zzanghyunmoo/my-desk-setup/internal/target"
 	updateflow "github.com/zzanghyunmoo/my-desk-setup/internal/update"
 )
@@ -116,12 +120,42 @@ func TestUpdateRejectsNoChangeAndUnknownCandidateFields(t *testing.T) {
 			ComponentID: "typescript", Version: "6.0.3", Source: "npm",
 			Provenance: "http://example.com/typescript/6.0.3",
 		},
+		"credentialed provenance": {
+			ComponentID: "typescript", Version: "6.0.3", Source: "npm",
+			Provenance: "https://token@example.com/typescript/6.0.3",
+		},
+		"query-bearing provenance": {
+			ComponentID: "typescript", Version: "6.0.3", Source: "npm",
+			Provenance: "https://example.com/typescript/6.0.3?token=secret",
+		},
+		"credentialed artifact": {
+			ComponentID: "bun", Version: "99.0.0", Source: "fixture",
+			Provenance: "https://example.com/bun/99.0.0",
+			Artifacts: map[string]catalog.Artifact{
+				"linux-amd64": {
+					URL:    "https://token@example.com/bun.zip",
+					SHA256: strings.Repeat("a", 64),
+					Format: "zip", Executable: "bun",
+				},
+			},
+		},
 		"invalid artifact checksum": {
 			ComponentID: "bun", Version: "99.0.0", Source: "fixture",
 			Provenance: "https://example.com/bun/99.0.0",
 			Artifacts: map[string]catalog.Artifact{
 				"linux-amd64": {
 					URL: "https://example.com/bun.zip", SHA256: "not-a-sha256",
+					Format: "zip", Executable: "bun",
+				},
+			},
+		},
+		"non-canonical artifact checksum": {
+			ComponentID: "bun", Version: "99.0.0", Source: "fixture",
+			Provenance: "https://example.com/bun/99.0.0",
+			Artifacts: map[string]catalog.Artifact{
+				"linux-amd64": {
+					URL:    "https://example.com/bun.zip",
+					SHA256: strings.Repeat("A", 64),
 					Format: "zip", Executable: "bun",
 				},
 			},
@@ -136,6 +170,281 @@ func TestUpdateRejectsNoChangeAndUnknownCandidateFields(t *testing.T) {
 				t.Fatalf("Build(%s) succeeded", name)
 			}
 		})
+	}
+}
+
+func TestUpdateRejectsMiseManagedCandidateBeforeMutation(t *testing.T) {
+	environment, err := catalog.LoadFS(catalogdata.FS)
+	if err != nil {
+		t.Fatalf("LoadFS(): %v", err)
+	}
+	current := environment.Lock.Versions["go"]
+	id, _ := target.NewID(target.KindLimaGuest, "mds")
+	_, _, err = updateflow.Build(
+		environment,
+		target.Facts{
+			ID: id, OS: "linux", OSVersion: "26.04",
+			Architecture: "arm64", Reachable: true,
+		},
+		updateflow.Candidate{
+			ComponentID: "go",
+			Version:     "99.0.0",
+			Source:      current.Source,
+			Provenance:  current.Provenance,
+			Artifacts:   current.Artifacts,
+		},
+	)
+	if got := updateflow.KindOf(err); got != updateflow.ErrorInvalid ||
+		!strings.Contains(err.Error(), "mise.toml") ||
+		!strings.Contains(err.Error(), "one transaction") {
+		t.Fatalf("Build(mise candidate) error = %v kind=%q", err, got)
+	}
+	if environment.Lock.Versions["go"].Version != current.Version {
+		t.Fatal("rejected mise update mutated the input environment")
+	}
+}
+
+func TestUpdateErrorsClassifyLocalValidationAndStalePlan(t *testing.T) {
+	environment, err := catalog.LoadFS(catalogdata.FS)
+	if err != nil {
+		t.Fatalf("LoadFS(): %v", err)
+	}
+	id, _ := target.NewID(target.KindLimaGuest, "mds")
+	_, _, err = updateflow.Build(
+		environment,
+		target.Facts{ID: id, OS: "linux", Architecture: "arm64"},
+		updateflow.Candidate{
+			ComponentID: "typescript",
+			Version:     "6.0.3",
+			Source:      "npm registry",
+			Provenance:  "http://example.com/typescript/6.0.3",
+		},
+	)
+	if got := updateflow.KindOf(err); got != updateflow.ErrorInvalid {
+		t.Fatalf("Build() kind = %q, want %q; err=%v", got, updateflow.ErrorInvalid, err)
+	}
+
+	plan := updateflow.Plan{SchemaVersion: updateflow.PlanSchema}
+	if err := updateflow.Verify(plan, "sha256:not-reviewed"); err == nil {
+		t.Fatal("Verify() accepted incomplete plan")
+	} else if got := updateflow.KindOf(err); got != updateflow.ErrorStale {
+		t.Fatalf("Verify() kind = %q, want %q; err=%v", got, updateflow.ErrorStale, err)
+	}
+
+	_, err = updateflow.Discover(
+		context.Background(),
+		environment,
+		catalog.TargetLimaGuest,
+		"herdr",
+		nil,
+		"",
+	)
+	if got := updateflow.KindOf(err); got != updateflow.ErrorInvalid {
+		t.Fatalf("Discover(local validation) kind = %q, want %q; err=%v", got, updateflow.ErrorInvalid, err)
+	}
+}
+
+func TestCLIUpdateMapsLocalDiscoveryValidationToInvalidInput(t *testing.T) {
+	var stdout strings.Builder
+	var stderr strings.Builder
+	code := cli.Run(
+		[]string{
+			"update",
+			"--catalog", filepath.Join("..", "..", "catalog"),
+			"--component", "herdr",
+			"--format", "json",
+		},
+		cli.Streams{
+			Input: strings.NewReader(""), Output: &stdout, Error: &stderr,
+		},
+		cli.Runtime{
+			GOOS: "linux", GOARCH: "arm64",
+			Getenv: func(key string) string {
+				if key == "LIMA_INSTANCE" {
+					return "mds"
+				}
+				return ""
+			},
+		},
+	)
+	if code != cli.ExitInvalidInput {
+		t.Fatalf(
+			"Run() code=%d, want invalid-input %d; stderr=%q",
+			code,
+			cli.ExitInvalidInput,
+			stderr.String(),
+		)
+	}
+	var envelope cli.ErrorEnvelope
+	if err := json.Unmarshal([]byte(stderr.String()), &envelope); err != nil {
+		t.Fatalf("decode error envelope: %v\n%s", err, stderr.String())
+	}
+	if envelope.Code != "invalid-input" {
+		t.Fatalf("error envelope = %+v, want invalid-input", envelope)
+	}
+}
+
+func TestCLIUpdateRequiresWritableCheckoutCatalog(t *testing.T) {
+	var stdout strings.Builder
+	var stderr strings.Builder
+	code := cli.Run(
+		[]string{
+			"update",
+			"--component", "typescript",
+			"--format", "json",
+		},
+		cli.Streams{
+			Input: strings.NewReader(""), Output: &stdout, Error: &stderr,
+		},
+		cli.Runtime{
+			GOOS: "linux", GOARCH: "arm64",
+			Getenv: func(string) string { return "" },
+		},
+	)
+	if code != cli.ExitInvalidInput {
+		t.Fatalf(
+			"Run() code=%d, want invalid-input %d; stderr=%q",
+			code,
+			cli.ExitInvalidInput,
+			stderr.String(),
+		)
+	}
+	if !strings.Contains(stderr.String(), "embedded catalog data is read-only") {
+		t.Fatalf("stderr=%q, want read-only embedded catalog contract", stderr.String())
+	}
+}
+
+func TestUpdateDiscoveryRejectsCrossOriginRedirect(t *testing.T) {
+	environment, err := catalog.LoadFS(catalogdata.FS)
+	if err != nil {
+		t.Fatalf("LoadFS(): %v", err)
+	}
+	var server *httptest.Server
+	server = httptest.NewTLSServer(http.HandlerFunc(func(
+		writer http.ResponseWriter,
+		request *http.Request,
+	) {
+		redirectTarget := strings.Replace(server.URL, "127.0.0.1", "localhost", 1) +
+			request.URL.Path
+		http.Redirect(writer, request, redirectTarget, http.StatusFound)
+	}))
+	defer server.Close()
+
+	_, err = updateflow.Discover(
+		context.Background(),
+		environment,
+		catalog.TargetLimaGuest,
+		"typescript",
+		server.Client(),
+		server.URL,
+	)
+	if err == nil || !strings.Contains(err.Error(), "cross-origin redirect") {
+		t.Fatalf("Discover(cross-origin redirect) error = %v", err)
+	}
+}
+
+func TestUpdateDiscoveryRejectsCrossOriginTarballRedirect(t *testing.T) {
+	environment, err := catalog.LoadFS(catalogdata.FS)
+	if err != nil {
+		t.Fatalf("LoadFS(): %v", err)
+	}
+	content := []byte("reviewed tarball")
+	var server *httptest.Server
+	server = httptest.NewTLSServer(http.HandlerFunc(func(
+		writer http.ResponseWriter,
+		request *http.Request,
+	) {
+		switch request.URL.Path {
+		case "/typescript/latest":
+			payload := map[string]any{
+				"version": "6.0.3",
+				"dist": map[string]string{
+					"integrity": fixtureSRI(content),
+					"tarball": server.URL +
+						"/typescript/-/typescript-6.0.3.tgz",
+				},
+			}
+			if err := json.NewEncoder(writer).Encode(payload); err != nil {
+				t.Fatalf("encode metadata: %v", err)
+			}
+		case "/typescript/-/typescript-6.0.3.tgz":
+			redirectTarget := strings.Replace(
+				server.URL,
+				"127.0.0.1",
+				"localhost",
+				1,
+			) + request.URL.Path
+			http.Redirect(writer, request, redirectTarget, http.StatusFound)
+		default:
+			t.Fatalf("unexpected request path: %s", request.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	_, err = updateflow.Discover(
+		context.Background(),
+		environment,
+		catalog.TargetLimaGuest,
+		"typescript",
+		server.Client(),
+		server.URL,
+	)
+	if err == nil || !strings.Contains(err.Error(), "cross-origin redirect") {
+		t.Fatalf("Discover(cross-origin tarball redirect) error = %v", err)
+	}
+}
+
+func TestUpdateDiscoveryBoundsMetadataAndRedactsTransportErrors(t *testing.T) {
+	environment, err := catalog.LoadFS(catalogdata.FS)
+	if err != nil {
+		t.Fatalf("LoadFS(): %v", err)
+	}
+	server := httptest.NewTLSServer(http.HandlerFunc(func(
+		writer http.ResponseWriter,
+		_ *http.Request,
+	) {
+		_, _ = io.WriteString(
+			writer,
+			`{"version":"6.0.3","dist":{"integrity":"ignored","tarball":"ignored"},"extra":"`,
+		)
+		_, _ = io.WriteString(writer, strings.Repeat("a", (1<<20)+1))
+		_, _ = io.WriteString(writer, `"}`)
+	}))
+	defer server.Close()
+	_, err = updateflow.Discover(
+		context.Background(),
+		environment,
+		catalog.TargetLimaGuest,
+		"typescript",
+		server.Client(),
+		server.URL,
+	)
+	if err == nil || !strings.Contains(err.Error(), "exceeds 1 MiB") {
+		t.Fatalf("Discover(oversized metadata) error = %v", err)
+	}
+
+	const secret = "super-secret-token"
+	client := &http.Client{Transport: roundTripFunc(func(
+		*http.Request,
+	) (*http.Response, error) {
+		return nil, errors.New("dial https://" + secret + "@registry.example")
+	})}
+	_, err = updateflow.Discover(
+		context.Background(),
+		environment,
+		catalog.TargetLimaGuest,
+		"typescript",
+		client,
+		"https://registry.example",
+	)
+	if err == nil {
+		t.Fatal("Discover(transport failure) succeeded")
+	}
+	if strings.Contains(err.Error(), secret) {
+		t.Fatalf("Discover() leaked credential in error: %v", err)
+	}
+	if got := updateflow.KindOf(err); got != updateflow.ErrorUnreachable {
+		t.Fatalf("Discover() kind = %q, want %q; err=%v", got, updateflow.ErrorUnreachable, err)
 	}
 }
 
@@ -272,7 +581,7 @@ func TestUpdateDiscoveryRateLimitAndUnsupportedProviderMutateNothing(t *testing.
 	if err != nil {
 		t.Fatalf("LoadFS(): %v", err)
 	}
-	server := httptest.NewServer(http.HandlerFunc(func(
+	server := httptest.NewTLSServer(http.HandlerFunc(func(
 		writer http.ResponseWriter,
 		_ *http.Request,
 	) {
@@ -403,4 +712,12 @@ func newNPMRegistry(
 		}
 	}))
 	return server
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (function roundTripFunc) RoundTrip(
+	request *http.Request,
+) (*http.Response, error) {
+	return function(request)
 }

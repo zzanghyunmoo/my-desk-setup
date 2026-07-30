@@ -16,6 +16,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
+          persist-credentials: false
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version-file: go.mod
@@ -30,3 +31,18 @@ jobs:
         env:
           MDS_EXPECT_REMOTE_URL: https://github.com/${{ github.repository }}.git
         run: go test ./tests/integration -run TestRepositoryIdentity
+
+  windows-verify:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Test Windows path
+        run: go test ./...
+      - name: Build Windows CLI
+        run: go build ./cmd/mds

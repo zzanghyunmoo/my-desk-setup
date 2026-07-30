@@ -93,10 +93,6 @@ func (docker Docker) Apply(
 	}()
 	keyPath := filepath.Join(temporaryDirectory, "docker.asc")
 	listPath := filepath.Join(temporaryDirectory, "docker.list")
-	client := docker.Client
-	if client == nil {
-		client = &http.Client{Timeout: 30 * time.Second}
-	}
 	keyURL := docker.KeyURL
 	if keyURL == "" {
 		keyURL = dockerKeyURL
@@ -104,6 +100,14 @@ func (docker Docker) Apply(
 	keySHA := docker.KeySHA
 	if keySHA == "" {
 		keySHA = dockerKeySHA
+	}
+	client, err := packages.ReviewedHTTPClient(
+		docker.Client,
+		keyURL,
+		30*time.Second,
+	)
+	if err != nil {
+		return fmt.Errorf("validate Docker key URL: %w", err)
 	}
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, keyURL, nil)
 	if err != nil {
@@ -138,25 +142,29 @@ func (docker Docker) Apply(
 	commands := []transport.Command{
 		{
 			Executable: "/usr/bin/sudo",
-			Arguments:  []string{"-n", "install", "-d", "-m", "0755", "/etc/apt/keyrings"},
+			Arguments:  []string{"-n", "/usr/bin/install", "-d", "-m", "0755", "/etc/apt/keyrings"},
+			Timeout:    2 * time.Minute,
 		},
 		{
 			Executable: "/usr/bin/sudo",
-			Arguments:  []string{"-n", "install", "-m", "0644", keyPath, "/etc/apt/keyrings/docker.asc"},
+			Arguments:  []string{"-n", "/usr/bin/install", "-m", "0644", keyPath, "/etc/apt/keyrings/docker.asc"},
+			Timeout:    2 * time.Minute,
 		},
 		{
 			Executable: "/usr/bin/sudo",
 			Arguments: []string{
-				"-n", "install", "-m", "0644", listPath,
+				"-n", "/usr/bin/install", "-m", "0644", listPath,
 				"/etc/apt/sources.list.d/docker.list",
 			},
+			Timeout: 2 * time.Minute,
 		},
 		{
 			Executable: "/usr/bin/sudo",
 			Arguments: []string{
-				"-n", "env", "DEBIAN_FRONTEND=noninteractive",
-				"apt-get", "update",
+				"-n", "/usr/bin/env", "DEBIAN_FRONTEND=noninteractive",
+				"/usr/bin/apt-get", "update",
 			},
+			Timeout: 15 * time.Minute,
 		},
 	}
 	installCommands, err := packages.APTInstall(action)
@@ -166,9 +174,13 @@ func (docker Docker) Apply(
 	commands = append(commands, installCommands[1])
 	commands = append(commands, transport.Command{
 		Executable: "/usr/bin/sudo",
-		Arguments:  []string{"-n", "systemctl", "enable", "--now", "docker"},
+		Arguments:  []string{"-n", "/usr/bin/systemctl", "enable", "--now", "docker"},
+		Timeout:    5 * time.Minute,
 	})
 	for _, command := range commands {
+		if err := packages.ValidatePrivilegedCommand(command); err != nil {
+			return fmt.Errorf("reject unreviewed privileged Docker operation: %w", err)
+		}
 		if _, err := docker.Port.Run(ctx, command); err != nil {
 			return fmt.Errorf("configure guest-local Docker: %w", err)
 		}

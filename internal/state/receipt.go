@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"github.com/zzanghyunmoo/my-desk-setup/internal/durable"
 )
 
 const ReceiptSchema = "mds.receipt/v1"
@@ -29,6 +31,7 @@ type ActionOutcome struct {
 	InstalledVersion string `json:"installed_version,omitempty"`
 	VerifiedVersion  string `json:"verified_version,omitempty"`
 	Noop             bool   `json:"noop"`
+	ReasonCode       string `json:"reason_code,omitempty"`
 	Reason           string `json:"reason,omitempty"`
 }
 
@@ -58,39 +61,12 @@ func WriteReceipt(directory string, receipt Receipt) (string, error) {
 	}
 	encoded = append(encoded, '\n')
 
-	temporary, err := os.CreateTemp(directory, ".receipt-*.tmp")
-	if err != nil {
-		return "", fmt.Errorf("create receipt temporary file: %w", err)
-	}
-	temporaryPath := temporary.Name()
-	cleanup := func() {
-		_ = temporary.Close()
-		_ = os.Remove(temporaryPath)
-	}
-	if err := temporary.Chmod(0o600); err != nil {
-		cleanup()
-		return "", fmt.Errorf("restrict receipt temporary file: %w", err)
-	}
-	if _, err := temporary.Write(encoded); err != nil {
-		cleanup()
-		return "", fmt.Errorf("write receipt temporary file: %w", err)
-	}
-	if err := temporary.Sync(); err != nil {
-		cleanup()
-		return "", fmt.Errorf("sync receipt temporary file: %w", err)
-	}
-	if err := temporary.Close(); err != nil {
-		_ = os.Remove(temporaryPath)
-		return "", fmt.Errorf("close receipt temporary file: %w", err)
-	}
-	if err := os.Rename(temporaryPath, path); err != nil {
-		_ = os.Remove(temporaryPath)
-		return "", fmt.Errorf("publish receipt: %w", err)
+	if err := durable.WriteFile(path, encoded, 0o600); err != nil {
+		return "", fmt.Errorf("publish receipt durably: %w", err)
 	}
 	if receipt.Complete {
-		if err := os.Remove(partialPath); err != nil &&
-			!errors.Is(err, os.ErrNotExist) {
-			return "", fmt.Errorf("clear partial receipt: %w", err)
+		if err := durable.RemoveFile(partialPath); err != nil {
+			return "", fmt.Errorf("clear partial receipt durably: %w", err)
 		}
 	}
 	return path, nil

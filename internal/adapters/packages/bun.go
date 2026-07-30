@@ -3,6 +3,7 @@ package packages
 import (
 	"fmt"
 	"path/filepath"
+	"time"
 
 	"github.com/zzanghyunmoo/my-desk-setup/internal/planning"
 	"github.com/zzanghyunmoo/my-desk-setup/internal/transport"
@@ -27,5 +28,6 @@ func BunInstall(
 		Executable:  "bun",
 		Arguments:   []string{"add", "--global", localArtifact},
 		Environment: environment,
+		Timeout:     15 * time.Minute,
 	}, nil
 }

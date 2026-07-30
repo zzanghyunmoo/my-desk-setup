@@ -7,6 +7,8 @@
 ```text
 catalog/
 ├── components/        # component, dependency, target status, verifier
+├── mise.toml          # strict mise tool declaration
+├── mise.lock          # official mise platform artifact lock
 ├── profiles/          # named component selection
 ├── locks/             # exact version, provenance, artifact checksum
 ├── targets/           # Ubuntu 26.04 guest image identity
@@ -18,7 +20,16 @@ target-ineligible dependency, invalid installer와 missing lock을 fail closed�
 Bun-managed pinned lock은 package/version에 대응하는 official npm canonical
 tarball URL, canonical SHA-512 SRI와 lowercase SHA-256을 모두 요구한다.
 component와 capability는 단일 owner를 가진다. catalog와 lock의 canonical JSON
-SHA-256이 plan의 catalog revision에 포함된다.
+SHA-256뿐 아니라 `mise.toml`과 `mise.lock`의 exact byte content도 plan의
+catalog revision에 포함된다. 둘 중 하나만 바뀐 plan digest는 재사용할 수 없다.
+
+`catalog/mise.toml`은 strict lock mode를 사용하고 `catalog/mise.lock`은 각
+tool의 eligible `linux-x64`/`linux-arm64` cell마다 exact artifact URL과
+SHA-256 또는 구체적인 unavailable reason 중 정확히 하나를 가져야 한다.
+loader는 두 mise 파일을 `versions.lock.yaml`의 tool/version/platform
+URL·SHA-256과 다시 대조한다.
+Flutter Linux arm64처럼 공식 artifact가 없는 cell은 비공식 mirror로 채우거나
+설치 성공으로 가장하지 않고 `action-required`로 남긴다.
 
 ## 선택 방식
 
@@ -27,6 +38,7 @@ mds plan --all
 mds plan --profile owner
 mds plan --component notion-cli --component linear-cli
 mds plan --interactive
+mds catalog --format json
 ```
 
 네 방식은 같은 resolver를 사용하며 정확히 하나만 선택할 수 있다.
@@ -90,11 +102,16 @@ Windows의 Linear Desktop과 KakaoTalk은 검증된 unattended package ID가 없
 
 normal `plan`과 `apply`는 upstream latest metadata를 조회하거나 lock을 올리지
 않는다. pinned version 이동은 reviewable candidate, old/new lock diff와 exact
-update digest를 사용하는 `mds update`로만 수행한다.
+update digest를 사용하는 `mds update`로만 수행한다. update에는 writable
+repository checkout의 `--catalog`가 필요하며 embedded catalog는 읽기 전용이다.
+v1 update transaction은 `versions.lock.yaml`, `mise.toml`, `mise.lock`을 한
+번에 게시하지 못하므로 mise가 관리하는 component의 update는 mutation 전에
+명시적으로 거부한다.
 
-Bun package는 lock의 tarball을 bounded download한 뒤 SRI와 SHA-256을 모두
-검증하고 local `.tgz`로 설치한다. `package@version` registry re-resolution은
-normal/update apply 어느 쪽에서도 사용하지 않는다.
+Bun package는 query/fragment가 없는 reviewed HTTPS URL의 tarball을 redirect
+없이 bounded download한 뒤 SRI와 SHA-256을 모두 검증하고 local `.tgz`로
+설치한다. `package@version` registry re-resolution은 normal/update apply 어느
+쪽에서도 사용하지 않는다.
 
 AI agent launcher는 upstream auto-update를 끄는 managed 환경을 제공하지만
 로그인이나 token은 다루지 않는다. 사용자는 설치 뒤 각 agent에서 직접
@@ -121,6 +138,8 @@ profile은 target별 imperative script가 아니라 component ID 집합이다. p
 sed -n '1,240p' catalog/profiles/owner.yaml
 sed -n '1,240p' catalog/profiles/minimal.yaml
 sed -n '1,320p' catalog/locks/versions.lock.yaml
+sed -n '1,240p' catalog/mise.toml
+sed -n '1,320p' catalog/mise.lock
 ```
 
 계획 검토 시에는 선언만 보지 말고 실제 target 결과를 확인한다.

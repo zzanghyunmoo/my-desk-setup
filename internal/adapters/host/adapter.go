@@ -2,6 +2,7 @@ package host
 
 import (
 	"fmt"
+	"path/filepath"
 
 	"github.com/zzanghyunmoo/my-desk-setup/internal/adapters"
 	guestadapter "github.com/zzanghyunmoo/my-desk-setup/internal/adapters/guest"
@@ -28,6 +29,12 @@ func New(
 			Home: home, Platform: platform, Arch: architecture,
 		},
 	}
+	packageComponent := adapters.Component(packagesAdapter)
+	if platform == "darwin" {
+		packageComponent = packages.HomebrewPrerequisite{
+			Port: port, Delegate: packagesAdapter,
+		}
+	}
 	spec, exists := environment.Targets["ubuntu-26.04"]
 	if !exists {
 		return nil, fmt.Errorf("catalog target %q is required", "ubuntu-26.04")
@@ -38,8 +45,11 @@ func New(
 	}
 	runtime := GuestRuntime{
 		Architecture: architecture, Port: port,
-		Delegate: packagesAdapter, Spec: spec,
+		Delegate: packageComponent, Spec: spec,
 		CLIRevision: version.String(), CatalogRevision: catalogRevision,
+		OwnershipRoot: filepath.Join(
+			home, ".local", "state", "my-desk-setup", "guest-ownership",
+		),
 	}
 	for _, guestArchitecture := range []string{"amd64", "arm64"} {
 		artifact, exists := version.GuestLinuxArtifact(guestArchitecture)
@@ -58,7 +68,7 @@ func New(
 		"wsl":  runtime,
 	}
 	desktop := Desktop{
-		Platform: platform, Port: port, Delegate: packagesAdapter,
+		Platform: platform, Port: port, Delegate: packageComponent,
 	}
 	for _, componentID := range []string{
 		"notion-desktop", "linear-desktop", "slack", "kakaotalk", "chrome",
@@ -68,12 +78,12 @@ func New(
 	if platform == "darwin" {
 		for _, componentID := range []string{"claude-code", "opencode", "codex"} {
 			byID[componentID] = guestadapter.Agent{
-				Home: home, Delegate: packagesAdapter,
+				Home: home, Delegate: packageComponent,
 			}
 		}
 	}
 	return adapters.Router{
-		Default: packagesAdapter,
+		Default: packageComponent,
 		ByID:    byID,
 	}, nil
 }

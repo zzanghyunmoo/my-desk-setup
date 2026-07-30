@@ -10,10 +10,14 @@ import (
 	"time"
 
 	"github.com/zzanghyunmoo/my-desk-setup/internal/release"
+	"github.com/zzanghyunmoo/my-desk-setup/internal/shutdown"
 )
 
 func main() {
-	os.Exit(run(context.Background(), os.Args[1:], os.Stderr))
+	ctx, stop := shutdown.Notify()
+	code := run(ctx, os.Args[1:], os.Stderr)
+	stop()
+	os.Exit(code)
 }
 
 func run(ctx context.Context, arguments []string, stderr io.Writer) int {

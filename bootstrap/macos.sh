@@ -35,6 +35,17 @@ mds_archive_name="mds_${MDS_VERSION}_darwin_${mds_arch}.tar.gz"
 mds_base_url="${MDS_BASE_URL:-https://github.com/zzanghyunmoo/my-desk-setup/releases/download/v${MDS_VERSION}}"
 mds_url="${mds_base_url%/}/${mds_archive_name}"
 mds_install_dir="${MDS_INSTALL_DIR:-$HOME/.local/bin}"
+case "$mds_url" in
+  https://*[\?\#]* | https://*@*)
+    echo "release URL must be credential-free HTTPS without query or fragment" >&2
+    exit 2
+    ;;
+  https://*) ;;
+  *)
+    echo "release URL must be absolute HTTPS" >&2
+    exit 2
+    ;;
+esac
 
 if [ -n "${MDS_ARCHIVE:-}" ]; then
   if [ ! -f "$MDS_ARCHIVE" ] || [ -L "$MDS_ARCHIVE" ]; then
@@ -43,7 +54,28 @@ if [ -n "${MDS_ARCHIVE:-}" ]; then
   fi
   cp "$MDS_ARCHIVE" "$mds_archive"
 else
-  curl -fsSL "$mds_url" -o "$mds_archive"
+  mds_effective_url=$(
+    ulimit -f 1048576
+    curl --fail --show-error --silent --location --max-redirs 3 \
+      --proto '=https' --proto-redir '=https' --tlsv1.2 \
+      --connect-timeout 30 --max-time 600 --max-filesize 536870912 \
+      --output "$mds_archive" --write-out '%{url_effective}' "$mds_url"
+  )
+  case "$mds_effective_url" in
+    https://*) ;;
+    *)
+      echo "release redirect must remain HTTPS" >&2
+      exit 1
+      ;;
+  esac
+  mds_effective_authority=${mds_effective_url#https://}
+  mds_effective_authority=${mds_effective_authority%%/*}
+  case "$mds_effective_authority" in
+    "" | *@*)
+      echo "release redirect must not contain userinfo" >&2
+      exit 1
+      ;;
+  esac
 fi
 printf '%s  %s\n' "$MDS_SHA256" "$mds_archive" | shasum -a 256 -c -
 if [ "$(tar -tzf "$mds_archive")" != "mds" ]; then

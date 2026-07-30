@@ -43,14 +43,23 @@ func TestTargetCertificationCarriesExactPromotionIdentity(t *testing.T) {
 	}
 	workflow := string(content)
 	for _, required := range []string{
-		"expected_commit:",
 		"expected_binary_sha256:",
 		"--expected-binary-sha256",
+		"MDS_EXPECTED_GUEST_CREATION_NONCE",
+		`[[ ! "${MDS_EXPECTED_GUEST_CREATION_NONCE:-}" =~ ^[0-9a-f]{64}$ ]]`,
+		"--expected-guest-creation-nonce",
 		"--require-publication-acceptable",
 		"continue-on-error: true",
-		"target-evidence-${{ steps.certification-identity.outputs.target_kind }}-${{ inputs.expected_commit }}-${{ github.run_id }}-${{ github.run_attempt }}",
-		"ref: ${{ inputs.expected_commit }}",
+		"github.event.repository.fork == false",
+		"github.ref_protected == true",
+		"ref: ${{ github.sha }}",
+		"persist-credentials: false",
+		"clean: true",
+		"EXPECTED_COMMIT: ${{ github.sha }}",
 		`test "$(git rev-parse HEAD)" = "$EXPECTED_COMMIT"`,
+		`test -z "$(git status --porcelain=v1 --untracked-files=all)"`,
+		"EVIDENCE_OUTPUT=$RUNNER_TEMP/mds-target-evidence/run-$GITHUB_RUN_ID-attempt-$GITHUB_RUN_ATTEMPT",
+		"target-evidence-${{ steps.certification-identity.outputs.target_kind }}-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}",
 		"wsl-guest:Ubuntu-26.04",
 		"lima-guest:mds",
 		"mds-macos-host",
@@ -58,9 +67,43 @@ func TestTargetCertificationCarriesExactPromotionIdentity(t *testing.T) {
 		"mds-wsl-guest",
 		"mds-lima-guest",
 		`test "$RUNNER_LABEL" = "$expected_runner_label"`,
+		"timeout-minutes: 240",
 	} {
 		if !strings.Contains(workflow, required) {
 			t.Fatalf("target certification workflow missing %q", required)
+		}
+	}
+	for _, forbidden := range []string{
+		"expected_commit:",
+		"inputs.expected_commit",
+		"expected_guest_creation_nonce:",
+		"inputs.expected_guest_creation_nonce",
+		"${{ secrets.",
+	} {
+		if strings.Contains(workflow, forbidden) {
+			t.Fatalf("target certification workflow contains %q", forbidden)
+		}
+	}
+}
+
+func TestPullRequestCIRunsWindowsBuildAndTests(t *testing.T) {
+	root := repositoryRoot(t)
+	content, err := os.ReadFile(
+		filepath.Join(root, ".github", "workflows", "ci.yml"),
+	)
+	if err != nil {
+		t.Fatalf("read CI workflow: %v", err)
+	}
+	workflow := string(content)
+	for _, required := range []string{
+		"windows-verify:",
+		"runs-on: windows-latest",
+		"persist-credentials: false",
+		"go test ./...",
+		"go build ./cmd/mds",
+	} {
+		if !strings.Contains(workflow, required) {
+			t.Fatalf("CI workflow missing Windows contract %q", required)
 		}
 	}
 }
@@ -91,6 +134,46 @@ func TestWorkflowsPinReviewedActionCommits(t *testing.T) {
 			if strings.Contains(workflow, actionName+"@") &&
 				!strings.Contains(workflow, action) {
 				t.Fatalf("workflow %s does not pin %s to reviewed commit", name, actionName)
+			}
+		}
+	}
+}
+
+func TestBootstrapDownloadersKeepRedirectTimeoutAndBodyBounds(t *testing.T) {
+	root := repositoryRoot(t)
+	for name, required := range map[string][]string{
+		"bootstrap/macos.sh": {
+			"--location --max-redirs 3",
+			"--proto '=https' --proto-redir '=https'",
+			"--connect-timeout 30 --max-time 600 --max-filesize 536870912",
+			"ulimit -f 1048576",
+		},
+		"internal/adapters/host/guest-bootstrap.sh": {
+			"--location --max-redirs 3",
+			"--proto '=https' --proto-redir '=https'",
+			"--connect-timeout 30 --max-time 600 --max-filesize 536870912",
+			"ulimit -f 1048576",
+		},
+		"bootstrap/windows.ps1": {
+			"$Handler.AllowAutoRedirect = $false",
+			"$redirectCount -le 3",
+			"CancellationTokenSource",
+			"$cancellation.CancelAfter($Timeout)",
+			"ResponseHeadersRead",
+			"ReadAsync(",
+			"$cancellation.Token",
+			"[long]$MaximumBytes = 536870912",
+			"$total -gt $MaximumBytes",
+		},
+	} {
+		content, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(name)))
+		if err != nil {
+			t.Fatalf("read %s: %v", name, err)
+		}
+		script := string(content)
+		for _, contract := range required {
+			if !strings.Contains(script, contract) {
+				t.Fatalf("%s missing bounded download contract %q", name, contract)
 			}
 		}
 	}

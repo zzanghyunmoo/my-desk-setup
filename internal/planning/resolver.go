@@ -114,6 +114,31 @@ func actionFor(
 			}
 		}
 	}
+	if item.Support.Installer == "mise" &&
+		component.VersionPolicy.Mode == "pinned" {
+		lock := environment.Lock.Versions[component.VersionPolicy.LockKey]
+		platform := "linux-" + facts.Architecture
+		artifact, available := lock.Artifacts[platform]
+		if !available {
+			reason := lock.UnavailablePlatforms[platform]
+			if reason == "" {
+				reason = "the reviewed mise lock has no artifact identity for this platform"
+			}
+			action.Status = ActionActionRequired
+			action.Reason = fmt.Sprintf("%s (%s)", reason, platform)
+		} else {
+			if action.Inputs == nil {
+				action.Inputs = make(map[string]string)
+			}
+			installRef := lock.InstallRef
+			if installRef == "" {
+				installRef = lock.Version
+			}
+			action.Inputs["artifact_sha256"] = artifact.SHA256
+			action.Inputs["artifact_url"] = artifact.URL
+			action.Inputs["mise_ref"] = installRef
+		}
+	}
 
 	switch item.Support.Status {
 	case catalog.StatusUnsupported:

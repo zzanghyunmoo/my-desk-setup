@@ -22,6 +22,9 @@ func Apply(
 	if err := Verify(plan, expectedDigest); err != nil {
 		return Result{}, err
 	}
+	if err := ValidateCatalogRoot(catalogRoot); err != nil {
+		return Result{}, err
+	}
 	if runner.ObserveTarget == nil {
 		return Result{}, fmt.Errorf("target observer is required")
 	}
@@ -65,81 +68,83 @@ func Apply(
 
 	current, err := catalog.Load(catalogRoot)
 	if err != nil {
-		return Result{}, fmt.Errorf("load current catalog: %w", err)
+		return Result{}, stale(fmt.Errorf(
+			"catalog changed after review and can no longer be loaded",
+		))
 	}
 	currentRevision, err := catalog.Revision(current)
 	if err != nil {
 		return Result{}, fmt.Errorf("current catalog revision: %w", err)
 	}
-	if currentRevision != plan.BeforeCatalogRevision {
-		return Result{}, fmt.Errorf(
-			"catalog preimage changed: planned=%s current=%s",
-			plan.BeforeCatalogRevision,
-			currentRevision,
-		)
-	}
-	if !reflect.DeepEqual(current.Lock.Versions[plan.LockKey], plan.Old) {
-		return Result{}, fmt.Errorf("lock preimage changed for %s", plan.LockKey)
-	}
-	observed, err := runner.ObserveTarget(ctx, plan.TargetPlan.Target)
-	if err != nil {
-		return Result{}, fmt.Errorf("observe update target preimage: %w", err)
-	}
-	plannedFingerprint, err := plan.TargetPlan.Target.Fingerprint()
+	intentPath := transactionIntentPath(catalogLockPath)
+	intent, intentExists, err := readTransactionIntent(intentPath)
 	if err != nil {
 		return Result{}, err
 	}
-	observedFingerprint, err := observed.Fingerprint()
-	if err != nil {
-		return Result{}, err
+	if intentExists && !intent.matches(plan) {
+		if intent.UpdateDigest == plan.Digest {
+			return Result{}, errors.New(
+				"stored update intent does not match the reviewed plan",
+			)
+		}
+		if intent.Phase != intentPhaseComplete {
+			return Result{}, stale(fmt.Errorf(
+				"another update transaction is incomplete; rerun its reviewed digest %s before starting a new update",
+				intent.UpdateDigest,
+			))
+		}
+		intentExists = false
 	}
-	if plannedFingerprint != observedFingerprint {
-		return Result{}, fmt.Errorf(
-			"target preimage changed: planned=%s observed=%s",
-			plannedFingerprint,
-			observedFingerprint,
-		)
+
+	currentIsBefore := currentRevision == plan.BeforeCatalogRevision &&
+		reflect.DeepEqual(current.Lock.Versions[plan.LockKey], plan.Old)
+	currentIsAfter := currentRevision == plan.AfterCatalogRevision &&
+		reflect.DeepEqual(current.Lock.Versions[plan.LockKey], plan.New)
+	if !intentExists {
+		if !currentIsBefore {
+			return Result{}, stale(fmt.Errorf(
+				"catalog preimage changed: planned=%s current=%s",
+				plan.BeforeCatalogRevision,
+				currentRevision,
+			))
+		}
+		updated, err := updatedEnvironment(current, plan)
+		if err != nil {
+			return Result{}, err
+		}
+		if err := validateTargetPreimage(ctx, runner, plan); err != nil {
+			return Result{}, err
+		}
+		intent = newTransactionIntent(plan, current.Lock, updated.Lock)
+		if err := writeTransactionIntent(intentPath, intent); err != nil {
+			return Result{}, err
+		}
+		intentExists = true
+	} else {
+		switch {
+		case currentIsBefore:
+		case currentIsAfter && intent.Phase != intentPhasePrepared:
+		default:
+			return Result{}, stale(fmt.Errorf(
+				"catalog no longer matches the resumable update transaction",
+			))
+		}
+		if _, err := updatedEnvironmentFromIntent(
+			current,
+			plan,
+			intent,
+			currentIsAfter,
+		); err != nil {
+			return Result{}, err
+		}
+		if err := validateTargetPreimage(ctx, runner, plan); err != nil {
+			return Result{}, err
+		}
 	}
-	updated, err := cloneEnvironment(current)
-	if err != nil {
-		return Result{}, err
+	if !intentExists {
+		return Result{}, errors.New("update intent was not prepared")
 	}
-	updated.Lock.Versions[plan.LockKey] = plan.New
-	if err := catalog.Validate(updated); err != nil {
-		return Result{}, fmt.Errorf("updated catalog validation: %w", err)
-	}
-	updatedRevision, err := catalog.Revision(updated)
-	if err != nil {
-		return Result{}, err
-	}
-	if updatedRevision != plan.AfterCatalogRevision {
-		return Result{}, fmt.Errorf(
-			"updated catalog revision mismatch: planned=%s actual=%s",
-			plan.AfterCatalogRevision,
-			updatedRevision,
-		)
-	}
-	component, err := pinnedComponent(updated, plan.ComponentID)
-	if err != nil {
-		return Result{}, err
-	}
-	matrix, err := buildCompatibilityMatrix(
-		updated,
-		component,
-		plan.TargetPlan.Target.CLIRevision,
-		updatedRevision,
-	)
-	if err != nil {
-		return Result{}, err
-	}
-	if !reflect.DeepEqual(matrix, plan.CompatibilityMatrix) {
-		return Result{}, errors.New(
-			"compatibility matrix changed before lock publication",
-		)
-	}
-	if err := writeLock(catalogRoot, updated.Lock); err != nil {
-		return Result{}, err
-	}
+
 	receipt, err := runner.ApplyWithTargetLease(
 		ctx,
 		plan.TargetPlan,
@@ -150,10 +155,132 @@ func Apply(
 	if err != nil {
 		return Result{}, err
 	}
+	intent.Receipt = &receipt
+	if !receipt.Complete {
+		intent.Phase = intentPhasePrepared
+		if err := writeTransactionIntent(intentPath, intent); err != nil {
+			return Result{}, err
+		}
+		return Result{
+			SchemaVersion: ResultSchema, UpdateDigest: plan.Digest,
+			CatalogRevision: plan.BeforeCatalogRevision, Receipt: receipt,
+		}, nil
+	}
+
+	intent.Phase = intentPhaseTarget
+	if err := writeTransactionIntent(intentPath, intent); err != nil {
+		return Result{}, err
+	}
+	if currentIsBefore {
+		if err := writeLock(catalogRoot, intent.NewLock); err != nil {
+			return Result{}, err
+		}
+	}
+	intent.Phase = intentPhaseComplete
+	if err := writeTransactionIntent(intentPath, intent); err != nil {
+		return Result{}, err
+	}
 	return Result{
 		SchemaVersion: ResultSchema, UpdateDigest: plan.Digest,
 		CatalogRevision: plan.AfterCatalogRevision, Receipt: receipt,
 	}, nil
+}
+
+func validateTargetPreimage(
+	ctx context.Context,
+	runner execution.Runner,
+	plan Plan,
+) error {
+	observed, err := runner.ObserveTarget(ctx, plan.TargetPlan.Target)
+	if err != nil {
+		return fmt.Errorf("observe update target preimage: %w", err)
+	}
+	plannedFingerprint, err := plan.TargetPlan.Target.Fingerprint()
+	if err != nil {
+		return err
+	}
+	observedFingerprint, err := observed.Fingerprint()
+	if err != nil {
+		return err
+	}
+	if plannedFingerprint != observedFingerprint {
+		return stale(fmt.Errorf(
+			"target preimage changed: planned=%s observed=%s",
+			plannedFingerprint,
+			observedFingerprint,
+		))
+	}
+	return nil
+}
+
+func updatedEnvironment(
+	current catalog.Environment,
+	plan Plan,
+) (catalog.Environment, error) {
+	updated, err := cloneEnvironment(current)
+	if err != nil {
+		return catalog.Environment{}, err
+	}
+	updated.Lock.Versions[plan.LockKey] = plan.New
+	return validateUpdatedEnvironment(updated, plan)
+}
+
+func updatedEnvironmentFromIntent(
+	current catalog.Environment,
+	plan Plan,
+	intent transactionIntent,
+	currentIsAfter bool,
+) (catalog.Environment, error) {
+	updated, err := cloneEnvironment(current)
+	if err != nil {
+		return catalog.Environment{}, err
+	}
+	if !currentIsAfter {
+		updated.Lock = intent.NewLock
+	}
+	return validateUpdatedEnvironment(updated, plan)
+}
+
+func validateUpdatedEnvironment(
+	updated catalog.Environment,
+	plan Plan,
+) (catalog.Environment, error) {
+	if err := catalog.Validate(updated); err != nil {
+		return catalog.Environment{}, stale(fmt.Errorf(
+			"updated catalog validation no longer matches the reviewed plan: %w",
+			err,
+		))
+	}
+	updatedRevision, err := catalog.Revision(updated)
+	if err != nil {
+		return catalog.Environment{}, err
+	}
+	if updatedRevision != plan.AfterCatalogRevision {
+		return catalog.Environment{}, stale(fmt.Errorf(
+			"updated catalog revision mismatch: planned=%s actual=%s",
+			plan.AfterCatalogRevision,
+			updatedRevision,
+		))
+	}
+	component, err := pinnedComponent(updated, plan.ComponentID)
+	if err != nil {
+		return catalog.Environment{}, stale(err)
+	}
+	matrix, err := buildCompatibilityMatrix(
+		updated,
+		component,
+		plan.TargetPlan.Target.CLIRevision,
+		updatedRevision,
+	)
+	if err != nil {
+		return catalog.Environment{}, stale(err)
+	}
+	if !reflect.DeepEqual(matrix, plan.CompatibilityMatrix) {
+		return catalog.Environment{}, stale(errors.New(
+			"compatibility matrix changed before lock publication",
+		))
+	}
+	return updated, nil
 }
 
 func mergeLeaseRelease(

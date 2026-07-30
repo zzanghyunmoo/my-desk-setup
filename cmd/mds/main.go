@@ -4,8 +4,17 @@ import (
 	"os"
 
 	"github.com/zzanghyunmoo/my-desk-setup/internal/cli"
+	"github.com/zzanghyunmoo/my-desk-setup/internal/shutdown"
 )
 
 func main() {
-	os.Exit(cli.Run(os.Args[1:], cli.DefaultStreams(), cli.DefaultRuntime()))
+	ctx, stop := shutdown.Notify()
+	code := cli.RunContext(
+		ctx,
+		os.Args[1:],
+		cli.DefaultStreams(),
+		cli.DefaultRuntime(),
+	)
+	stop()
+	os.Exit(code)
 }

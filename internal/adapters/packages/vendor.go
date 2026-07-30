@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -19,8 +20,6 @@ import (
 	exactartifact "github.com/zzanghyunmoo/my-desk-setup/internal/artifact"
 	"github.com/zzanghyunmoo/my-desk-setup/internal/catalog"
 )
-
-const maxArtifactSize = 512 << 20
 
 type Vendor struct {
 	Client   *http.Client
@@ -33,9 +32,13 @@ func (vendor Vendor) downloadNPMTarball(
 	ctx context.Context,
 	artifact catalog.NPMArtifact,
 ) (string, func() error, error) {
-	client := vendor.Client
-	if client == nil {
-		client = &http.Client{Timeout: 5 * time.Minute}
+	client, err := ReviewedHTTPClient(
+		vendor.Client,
+		artifact.Tarball,
+		5*time.Minute,
+	)
+	if err != nil {
+		return "", nil, fmt.Errorf("validate npm tarball URL: %w", err)
 	}
 	request, err := http.NewRequestWithContext(
 		ctx,
@@ -45,9 +48,6 @@ func (vendor Vendor) downloadNPMTarball(
 	)
 	if err != nil {
 		return "", nil, fmt.Errorf("create npm tarball request: %w", err)
-	}
-	if request.URL.Scheme != "https" || request.URL.Host == "" {
-		return "", nil, errors.New("npm tarball requires an absolute HTTPS URL")
 	}
 	response, err := client.Do(request)
 	if err != nil {
@@ -122,9 +122,13 @@ func (vendor Vendor) Install(
 	if vendor.Home == "" {
 		return errors.New("home directory is required for vendor installation")
 	}
-	client := vendor.Client
-	if client == nil {
-		client = &http.Client{Timeout: 5 * time.Minute}
+	client, err := reviewedReleaseHTTPClient(
+		vendor.Client,
+		artifact.URL,
+		5*time.Minute,
+	)
+	if err != nil {
+		return fmt.Errorf("validate reviewed artifact URL: %w", err)
 	}
 
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, artifact.URL, nil)
@@ -133,13 +137,18 @@ func (vendor Vendor) Install(
 	}
 	response, err := client.Do(request)
 	if err != nil {
-		return fmt.Errorf("download %s: %w", artifact.URL, err)
+		return fmt.Errorf("download reviewed artifact: %w", err)
 	}
 	defer func() {
 		_ = response.Body.Close()
 	}()
 	if response.StatusCode != http.StatusOK {
-		return fmt.Errorf("download %s: HTTP %s", artifact.URL, response.Status)
+		return fmt.Errorf("download reviewed artifact: HTTP %s", response.Status)
+	}
+	if response.Request == nil || !safeReleaseRedirectURL(response.Request.URL) {
+		return errors.New(
+			"artifact redirect did not remain credential-free HTTPS",
+		)
 	}
 	temporaryDirectory, err := os.MkdirTemp("", "mds-artifact-*")
 	if err != nil {
@@ -190,6 +199,98 @@ func (vendor Vendor) Install(
 	return installExecutable(sourcePath, filepath.Join(vendor.Home, ".local", "bin", name))
 }
 
+func ReviewedHTTPClient(
+	base *http.Client,
+	reviewed string,
+	maxTimeout time.Duration,
+) (*http.Client, error) {
+	expected, err := url.ParseRequestURI(reviewed)
+	if err != nil || expected.Scheme != "https" || expected.Host == "" ||
+		expected.User != nil || expected.RawQuery != "" ||
+		expected.Fragment != "" {
+		return nil, errors.New(
+			"artifact requires an absolute credential-free HTTPS URL without a query or fragment",
+		)
+	}
+	if maxTimeout <= 0 {
+		return nil, errors.New("artifact client timeout must be positive")
+	}
+	client := http.Client{Timeout: maxTimeout}
+	if base != nil {
+		client = *base
+		if client.Timeout <= 0 || client.Timeout > maxTimeout {
+			client.Timeout = maxTimeout
+		}
+	}
+	previousCheck := client.CheckRedirect
+	client.CheckRedirect = func(
+		request *http.Request,
+		via []*http.Request,
+	) error {
+		if request.URL.User != nil ||
+			request.URL.Scheme != expected.Scheme ||
+			!strings.EqualFold(request.URL.Host, expected.Host) {
+			return errors.New("cross-origin artifact redirect is not allowed")
+		}
+		if previousCheck != nil {
+			return previousCheck(request, via)
+		}
+		if len(via) >= 10 {
+			return errors.New("too many artifact redirects")
+		}
+		return nil
+	}
+	return &client, nil
+}
+
+func reviewedReleaseHTTPClient(
+	base *http.Client,
+	reviewed string,
+	maxTimeout time.Duration,
+) (*http.Client, error) {
+	if _, err := ReviewedHTTPClient(nil, reviewed, maxTimeout); err != nil {
+		return nil, err
+	}
+	client := http.Client{Timeout: maxTimeout}
+	if base != nil {
+		client = *base
+		if client.Timeout <= 0 || client.Timeout > maxTimeout {
+			client.Timeout = maxTimeout
+		}
+	}
+	client.Jar = nil
+	previousCheck := client.CheckRedirect
+	client.CheckRedirect = func(
+		request *http.Request,
+		via []*http.Request,
+	) error {
+		if !safeReleaseRedirectURL(request.URL) {
+			return errors.New(
+				"release artifact redirect must remain credential-free HTTPS",
+			)
+		}
+		if len(via) > 3 {
+			return errors.New("too many release artifact redirects")
+		}
+		request.Header.Del("Authorization")
+		request.Header.Del("Cookie")
+		request.Header.Del("Proxy-Authorization")
+		if previousCheck != nil {
+			return previousCheck(request, via)
+		}
+		return nil
+	}
+	return &client, nil
+}
+
+func safeReleaseRedirectURL(value *url.URL) bool {
+	return value != nil &&
+		value.Scheme == "https" &&
+		value.Host != "" &&
+		value.User == nil &&
+		value.Fragment == ""
+}
+
 func extractTarGzExecutable(
 	archivePath,
 	destination,
@@ -209,7 +310,7 @@ func extractTarGzExecutable(
 	defer func() {
 		_ = compressed.Close()
 	}()
-	reader := tar.NewReader(io.LimitReader(compressed, maxArtifactSize+1))
+	reader := tar.NewReader(io.LimitReader(compressed, exactartifact.MaxDownloadBytes+1))
 	for {
 		header, err := reader.Next()
 		if errors.Is(err, io.EOF) {
@@ -229,7 +330,10 @@ func extractTarGzExecutable(
 		if err != nil {
 			return "", fmt.Errorf("create extracted executable: %w", err)
 		}
-		written, copyErr := io.Copy(file, io.LimitReader(reader, maxArtifactSize+1))
+		written, copyErr := io.Copy(
+			file,
+			io.LimitReader(reader, exactartifact.MaxDownloadBytes+1),
+		)
 		closeErr := file.Close()
 		if copyErr != nil {
 			copyErr = fmt.Errorf("extract executable: %w", copyErr)
@@ -240,8 +344,11 @@ func extractTarGzExecutable(
 		if writeErr := errors.Join(copyErr, closeErr); writeErr != nil {
 			return "", writeErr
 		}
-		if written > maxArtifactSize {
-			return "", fmt.Errorf("extracted executable exceeds %d bytes", maxArtifactSize)
+		if written > exactartifact.MaxDownloadBytes {
+			return "", fmt.Errorf(
+				"extracted executable exceeds %d bytes",
+				exactartifact.MaxDownloadBytes,
+			)
 		}
 		return path, nil
 	}
@@ -254,7 +361,10 @@ func DownloadAndVerify(reader io.Reader, path, expected string) error {
 		return fmt.Errorf("create artifact file: %w", err)
 	}
 	hash := sha256.New()
-	written, copyErr := io.Copy(io.MultiWriter(file, hash), io.LimitReader(reader, maxArtifactSize+1))
+	written, copyErr := io.Copy(
+		io.MultiWriter(file, hash),
+		io.LimitReader(reader, exactartifact.MaxDownloadBytes+1),
+	)
 	closeErr := file.Close()
 	if copyErr != nil {
 		copyErr = fmt.Errorf("download artifact: %w", copyErr)
@@ -265,8 +375,11 @@ func DownloadAndVerify(reader io.Reader, path, expected string) error {
 	if writeErr := errors.Join(copyErr, closeErr); writeErr != nil {
 		return writeErr
 	}
-	if written > maxArtifactSize {
-		return fmt.Errorf("artifact exceeds %d bytes", maxArtifactSize)
+	if written > exactartifact.MaxDownloadBytes {
+		return fmt.Errorf(
+			"artifact exceeds %d bytes",
+			exactartifact.MaxDownloadBytes,
+		)
 	}
 	actual := hex.EncodeToString(hash.Sum(nil))
 	if actual != expected {
@@ -306,7 +419,10 @@ func extractZipExecutable(
 				wrapError("close artifact executable", reader.Close()),
 			)
 		}
-		written, copyErr := io.Copy(file, io.LimitReader(reader, maxArtifactSize+1))
+		written, copyErr := io.Copy(
+			file,
+			io.LimitReader(reader, exactartifact.MaxDownloadBytes+1),
+		)
 		closeErr := file.Close()
 		readerCloseErr := reader.Close()
 		if copyErr != nil {
@@ -322,8 +438,11 @@ func extractZipExecutable(
 		); writeErr != nil {
 			return "", writeErr
 		}
-		if written > maxArtifactSize {
-			return "", fmt.Errorf("extracted executable exceeds %d bytes", maxArtifactSize)
+		if written > exactartifact.MaxDownloadBytes {
+			return "", fmt.Errorf(
+				"extracted executable exceeds %d bytes",
+				exactartifact.MaxDownloadBytes,
+			)
 		}
 		return path, nil
 	}

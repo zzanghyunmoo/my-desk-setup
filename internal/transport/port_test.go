@@ -5,9 +5,12 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestCommandEnvironmentDropsInheritedCredentials(t *testing.T) {
@@ -130,6 +133,64 @@ func TestExecutorPassesBoundedCommandStdin(t *testing.T) {
 	}
 }
 
+func TestExecutorTimeoutTerminatesProcessGroupAndDiscoverableDetachedChild(t *testing.T) {
+	mutationPath := filepath.Join(t.TempDir(), "late-mutation")
+	started := time.Now()
+	_, err := (Executor{}).Run(
+		context.Background(),
+		os.Args[0],
+		[]string{"-test.run=TestExecutorProcessTreeHelper"},
+		nil,
+		map[string]string{
+			"MDS_TREE_HELPER":        "parent",
+			"MDS_TREE_MUTATION_PATH": mutationPath,
+		},
+		"",
+		150*time.Millisecond,
+		DefaultOutputLimit,
+	)
+	if err == nil || !strings.Contains(err.Error(), "timed out") {
+		t.Fatalf("Executor.Run() error = %v, want timeout", err)
+	}
+	if elapsed := time.Since(started); elapsed > 2*time.Second {
+		t.Fatalf("Executor.Run() returned after %s, want bounded timeout", elapsed)
+	}
+	time.Sleep(900 * time.Millisecond)
+	if _, err := os.Stat(mutationPath); !os.IsNotExist(err) {
+		t.Fatalf("descendant mutation survived timeout: %v", err)
+	}
+}
+
+func TestExecutorProcessTreeHelper(t *testing.T) {
+	switch os.Getenv("MDS_TREE_HELPER") {
+	case "parent":
+		command := exec.Command(
+			os.Args[0],
+			"-test.run=TestExecutorProcessTreeHelper",
+		)
+		command.Env = append(os.Environ(), "MDS_TREE_HELPER=child")
+		command.Stdout = os.Stdout
+		command.Stderr = os.Stderr
+		detachTestProcess(command)
+		if err := command.Start(); err != nil {
+			os.Exit(2)
+		}
+		time.Sleep(30 * time.Second)
+		os.Exit(0)
+	case "child":
+		time.Sleep(600 * time.Millisecond)
+		if err := os.WriteFile(
+			os.Getenv("MDS_TREE_MUTATION_PATH"),
+			[]byte("survived"),
+			0o600,
+		); err != nil {
+			os.Exit(3)
+		}
+		time.Sleep(30 * time.Second)
+		os.Exit(0)
+	}
+}
+
 func TestExecutorStdinHelper(t *testing.T) {
 	if os.Getenv("MDS_STDIN_HELPER") != "1" {
 		return
@@ -155,5 +216,26 @@ func TestLimitedBufferTruncatesWithoutShortWrite(t *testing.T) {
 	if got := buffer.String(); !strings.Contains(got, "abcd") ||
 		!strings.Contains(got, "[output truncated]") {
 		t.Fatalf("String() = %q, want prefix and truncation marker", got)
+	}
+}
+
+func TestCommandErrorIncludesBoundedRedactedDiagnostics(t *testing.T) {
+	secret := strings.Repeat("x", DiagnosticLimit)
+	err := (&CommandError{Result: Result{
+		Executable: "installer",
+		ExitCode:   23,
+		Stderr: "token=do-not-leak " +
+			"https://user:password@example.com/download?signature=do-not-leak " +
+			secret,
+	}}).Error()
+	for _, forbidden := range []string{"do-not-leak", "user:password"} {
+		if strings.Contains(err, forbidden) {
+			t.Fatalf("diagnostic leaked %q: %s", forbidden, err)
+		}
+	}
+	if !strings.Contains(err, "token=[redacted]") ||
+		!strings.Contains(err, "signature=%5Bredacted%5D") ||
+		!strings.Contains(err, "[diagnostic truncated]") {
+		t.Fatalf("diagnostic = %q, want redaction and bound", err)
 	}
 }

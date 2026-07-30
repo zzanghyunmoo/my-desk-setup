@@ -1,0 +1,27 @@
+[settings]
+lockfile = true
+locked = true
+lockfile_platforms = ["linux-x64", "linux-arm64"]
+
+[tools]
+go = "1.26.5"
+gradle = "9.6.1"
+java = "temurin-25.0.4+7.0.LTS"
+kotlin = "2.3.20"
+python = "3.14.6"
+uv = "0.11.7"
+
+[tools."http:flutter"]
+version = "3.44.4"
+bin_path = "flutter/bin"
+
+[tools."http:flutter".platforms]
+linux-x64 = { url = "https://storage.googleapis.com/flutter_infra_release/releases/stable/linux/flutter_linux_3.44.4-stable.tar.xz", checksum = "sha256:c853cda0312a162854c481fe6a1bc286d84fbb74bfab7037c39750061dc9b466" }
+
+[tools."http:neovim"]
+version = "0.11.5"
+bin_path = "bin"
+
+[tools."http:neovim".platforms]
+linux-arm64 = { url = "https://github.com/neovim/neovim/releases/download/v0.11.5/nvim-linux-arm64.tar.gz", checksum = "sha256:ea4f9a31b11cc1477ff014aebb7b207684e7280f94ffa97abdab6cacd9b98519" }
+linux-x64 = { url = "https://github.com/neovim/neovim/releases/download/v0.11.5/nvim-linux-x86_64.tar.gz", checksum = "sha256:b2f91117be5b5ea39edd7297156dc2a4a8df4add6c95a90809a8df19e7ab6f52" }

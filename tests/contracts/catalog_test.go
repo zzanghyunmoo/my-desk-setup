@@ -1,12 +1,18 @@
 package contracts_test
 
 import (
+	"encoding/json"
+	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
 
+	jsonschema "github.com/santhosh-tekuri/jsonschema/v6"
+
+	"github.com/zzanghyunmoo/my-desk-setup/internal/adapters/packages"
 	"github.com/zzanghyunmoo/my-desk-setup/internal/catalog"
+	"github.com/zzanghyunmoo/my-desk-setup/internal/transport"
 )
 
 func TestCatalogLoadsAndRevisionIsCanonical(t *testing.T) {
@@ -45,6 +51,37 @@ func TestCatalogLoadsAndRevisionIsCanonical(t *testing.T) {
 	}
 }
 
+func TestCatalogVerificationCommandsStayInsideNonPrivilegedProbeAllowlist(
+	t *testing.T,
+) {
+	environment := loadCatalog(t)
+	for _, component := range environment.Catalog.Components {
+		for _, argv := range [][]string{
+			component.Verification.Command,
+			component.Verification.Functional,
+		} {
+			if len(argv) == 0 {
+				continue
+			}
+			err := packages.ValidateCatalogVerificationCommand(
+				component.ID,
+				transport.Command{
+					Executable: argv[0],
+					Arguments:  argv[1:],
+				},
+			)
+			if err != nil {
+				t.Fatalf(
+					"component %s verification %v is not safe: %v",
+					component.ID,
+					argv,
+					err,
+				)
+			}
+		}
+	}
+}
+
 func TestCatalogRevisionBindsGuestImageIdentity(t *testing.T) {
 	environment := loadCatalog(t)
 	before, err := catalog.Revision(environment)
@@ -69,6 +106,33 @@ func TestCatalogRevisionBindsGuestImageIdentity(t *testing.T) {
 	if before == after {
 		t.Fatal("catalog revision did not bind changed WSL image digest")
 	}
+}
+
+func TestCatalogRevisionBindsExactMiseInputs(t *testing.T) {
+	environment := loadCatalog(t)
+	before, err := catalog.Revision(environment)
+	if err != nil {
+		t.Fatalf("Revision(before): %v", err)
+	}
+	environment.Mise.Lock += "\n# reviewed identity change\n"
+	after, err := catalog.Revision(environment)
+	if err != nil {
+		t.Fatalf("Revision(after): %v", err)
+	}
+	if before == after {
+		t.Fatal("catalog revision did not bind mise.lock bytes")
+	}
+}
+
+func TestValidationRejectsMiseLockArtifactDrift(t *testing.T) {
+	environment := loadCatalog(t)
+	environment.Mise.Lock = strings.Replace(
+		environment.Mise.Lock,
+		"sha256:fe4789e92b1f33358680864bbe8704289e7bb5fc207d80623c308935bd696d49",
+		"sha256:"+strings.Repeat("0", 64),
+		1,
+	)
+	assertValidationError(t, environment, `mise lock tool "go" platform "linux-arm64"`)
 }
 
 func TestStrictYAMLRejectsUnknownField(t *testing.T) {
@@ -124,6 +188,209 @@ func TestValidationRejectsCredentialLikeMaterial(t *testing.T) {
 	}
 
 	assertValidationError(t, environment, "credential-like material")
+}
+
+func TestValidationRejectsReviewedURLQuery(t *testing.T) {
+	environment := validEnvironment()
+	entry := environment.Lock.Versions["fixture"]
+	entry.Provenance = "https://example.com/fixture?token=secret"
+	environment.Lock.Versions["fixture"] = entry
+
+	assertValidationError(t, environment, "without a query or fragment")
+}
+
+func TestPublishedSchemasAndSemanticValidationRejectSameCoreDrift(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		schemaPath string
+		document   func(catalog.Environment) any
+		mutate     func(*catalog.Environment)
+	}{
+		{
+			name:       "pinned policy without lock key",
+			schemaPath: "environment.schema.json",
+			document: func(environment catalog.Environment) any {
+				return environment.Catalog
+			},
+			mutate: func(environment *catalog.Environment) {
+				environment.Catalog.Components[0].VersionPolicy.LockKey = ""
+			},
+		},
+		{
+			name:       "supported target without installer",
+			schemaPath: "environment.schema.json",
+			document: func(environment catalog.Environment) any {
+				return environment.Catalog
+			},
+			mutate: func(environment *catalog.Environment) {
+				cell := environment.Catalog.Components[0].Targets[catalog.TargetLimaGuest]
+				cell.Installer = ""
+				environment.Catalog.Components[0].Targets[catalog.TargetLimaGuest] = cell
+			},
+		},
+		{
+			name:       "query-bearing provenance",
+			schemaPath: "lock.schema.json",
+			document: func(environment catalog.Environment) any {
+				return environment.Lock
+			},
+			mutate: func(environment *catalog.Environment) {
+				entry := environment.Lock.Versions["fixture"]
+				entry.Provenance = "https://example.com/fixture?token=secret"
+				environment.Lock.Versions["fixture"] = entry
+			},
+		},
+		{
+			name:       "unknown component kind",
+			schemaPath: "environment.schema.json",
+			document: func(environment catalog.Environment) any {
+				return environment.Catalog
+			},
+			mutate: func(environment *catalog.Environment) {
+				environment.Catalog.Components[0].Kind = "unknown"
+			},
+		},
+		{
+			name:       "invalid component identifier",
+			schemaPath: "environment.schema.json",
+			document: func(environment catalog.Environment) any {
+				return environment.Catalog
+			},
+			mutate: func(environment *catalog.Environment) {
+				environment.Catalog.Components[0].ID = "Invalid_ID"
+			},
+		},
+		{
+			name:       "empty verification argument",
+			schemaPath: "environment.schema.json",
+			document: func(environment catalog.Environment) any {
+				return environment.Catalog
+			},
+			mutate: func(environment *catalog.Environment) {
+				environment.Catalog.Components[0].Verification.Command = []string{""}
+			},
+		},
+		{
+			name:       "invalid artifact platform identifier",
+			schemaPath: "lock.schema.json",
+			document: func(environment catalog.Environment) any {
+				return environment.Lock
+			},
+			mutate: func(environment *catalog.Environment) {
+				entry := environment.Lock.Versions["fixture"]
+				entry.Artifacts = map[string]catalog.Artifact{
+					"Linux_AMD64": {
+						URL:        "https://example.com/fixture",
+						SHA256:     strings.Repeat("a", 64),
+						Format:     "binary",
+						Executable: "fixture",
+					},
+				}
+				environment.Lock.Versions["fixture"] = entry
+			},
+		},
+	} {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			environment := validEnvironment()
+			test.mutate(&environment)
+			if err := catalog.Validate(environment); err == nil {
+				t.Fatal("semantic validation accepted invalid fixture")
+			}
+			if schemaAccepts(t, test.schemaPath, test.document(environment)) {
+				t.Fatal("published JSON Schema accepted semantically invalid fixture")
+			}
+		})
+	}
+}
+
+func TestPublishedTargetSchemaRejectsExplicitEmptyAndIncompatibleCells(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		mutate func(map[string]any)
+	}{
+		{
+			name: "explicit empty installer",
+			mutate: func(cell map[string]any) {
+				cell["installer"] = ""
+			},
+		},
+		{
+			name: "explicit empty package",
+			mutate: func(cell map[string]any) {
+				cell["package"] = ""
+			},
+		},
+		{
+			name: "explicit empty reason",
+			mutate: func(cell map[string]any) {
+				cell["status"] = "unsupported"
+				delete(cell, "installer")
+				delete(cell, "package")
+				cell["reason"] = ""
+			},
+		},
+		{
+			name: "target incompatible installer",
+			mutate: func(cell map[string]any) {
+				cell["installer"] = "winget"
+			},
+		},
+	} {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			encoded, err := json.Marshal(validEnvironment().Catalog)
+			if err != nil {
+				t.Fatalf("Marshal(catalog): %v", err)
+			}
+			var document map[string]any
+			if err := json.Unmarshal(encoded, &document); err != nil {
+				t.Fatalf("Unmarshal(catalog): %v", err)
+			}
+			components := document["components"].([]any)
+			component := components[0].(map[string]any)
+			targets := component["targets"].(map[string]any)
+			cell := targets["lima-guest"].(map[string]any)
+			test.mutate(cell)
+			if schemaAccepts(t, "environment.schema.json", document) {
+				t.Fatal("published JSON Schema accepted invalid raw target cell")
+			}
+		})
+	}
+}
+
+func schemaAccepts(t *testing.T, name string, document any) bool {
+	t.Helper()
+	content, err := os.ReadFile(filepath.Join(
+		repositoryRoot(t),
+		"catalog",
+		"schema",
+		name,
+	))
+	if err != nil {
+		t.Fatalf("ReadFile(schema): %v", err)
+	}
+	var schemaDocument any
+	if err := json.Unmarshal(content, &schemaDocument); err != nil {
+		t.Fatalf("decode schema: %v", err)
+	}
+	compiler := jsonschema.NewCompiler()
+	if err := compiler.AddResource(name, schemaDocument); err != nil {
+		t.Fatalf("AddResource(): %v", err)
+	}
+	compiled, err := compiler.Compile(name)
+	if err != nil {
+		t.Fatalf("Compile(): %v", err)
+	}
+	encoded, err := json.Marshal(document)
+	if err != nil {
+		t.Fatalf("Marshal(document): %v", err)
+	}
+	var jsonDocument any
+	if err := json.Unmarshal(encoded, &jsonDocument); err != nil {
+		t.Fatalf("decode document: %v", err)
+	}
+	return compiled.Validate(jsonDocument) == nil
 }
 
 func TestNotionCLISelectionDoesNotResolveDesktop(t *testing.T) {

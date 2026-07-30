@@ -3,8 +3,6 @@ package target
 import (
 	"bufio"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -54,8 +52,6 @@ func ObserveLocal(
 		if facts.RuntimeVersion == "" {
 			return Facts{}, errors.New("observe Linux runtime version: empty output")
 		}
-		imageSum := sha256.Sum256(content)
-		facts.ImageRevision = "sha256:" + hex.EncodeToString(imageSum[:])
 		if _, err := port.Run(ctx, transport.Command{
 			Executable: "systemctl",
 			Arguments:  []string{"--version"},

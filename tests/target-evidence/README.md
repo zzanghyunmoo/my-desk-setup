@@ -7,11 +7,15 @@ status `implemented`; its temporary bundles are not actual-machine
 certification and must never be published as `verified`.
 
 Actual certification runs the reviewed production `mds` binary on the explicit
-target. It executes only `plan --format json` and `doctor --format json`, writes
-the exact four-file bundle, and derives status as follows:
+target. It executes a read-only `plan --format json`, applies that exact digest,
+repeats the apply to prove every action converges as a no-op, and then executes
+`doctor --format json`. The two receipts are embedded in the exact four-file
+bundle, and status is derived as follows:
 
-- `verified`: the plan has no blockers and every bounded doctor check is ready.
-- `blocked`: a plan blocker or any non-ready doctor check remains.
+- `verified`: the first apply is complete, the repeated apply is entirely
+  no-op, the plan has no blockers, and every bounded doctor check is ready.
+- `blocked`: an apply is incomplete, a plan blocker remains, or any bounded
+  doctor check is not ready.
 - `implemented`: evidence code and fixtures exist, but no actual target has run.
 
 Use the self-hosted `Actual target` lane in
@@ -23,6 +27,7 @@ scripts/certify-target.sh \
   --target lima-guest:mds \
   --output target-evidence/run-manual-001 \
   --expected-binary-sha256 '<release-binary-sha256>' \
+  --expected-guest-creation-nonce '<host-ownership-creation-nonce>' \
   --all
 
 scripts/verify-target-evidence.sh \
@@ -35,6 +40,13 @@ scripts/verify-target-evidence.sh \
   --max-age 45m \
   --require-publication-acceptable
 ```
+
+For a manual WSL/Lima run, read the expected nonce from the host's committed
+ownership record and confirm the provider/name before passing it. The
+self-hosted workflow does not accept this value from the dispatcher: its
+dedicated guest runner service must inherit the target-specific, root-owned
+`MDS_EXPECTED_GUEST_CREATION_NONCE`. Host certification omits the nonce flag
+and host runner services must not define that environment variable.
 
 The workflow appends the GitHub run ID and attempt to its target-local output
 parent. Artifact names bind target kind, expected commit, run ID, and attempt.

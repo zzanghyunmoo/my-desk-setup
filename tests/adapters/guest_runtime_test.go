@@ -2,494 +2,606 @@ package adapters_test
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
-	"net/http"
-	"net/http/httptest"
-	"os"
-	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/zzanghyunmoo/my-desk-setup/internal/adapters"
-	guestadapter "github.com/zzanghyunmoo/my-desk-setup/internal/adapters/guest"
-	"github.com/zzanghyunmoo/my-desk-setup/internal/adapters/packages"
-	"github.com/zzanghyunmoo/my-desk-setup/internal/catalog"
+	hostadapter "github.com/zzanghyunmoo/my-desk-setup/internal/adapters/host"
+	"github.com/zzanghyunmoo/my-desk-setup/internal/guest"
 	"github.com/zzanghyunmoo/my-desk-setup/internal/planning"
-	"github.com/zzanghyunmoo/my-desk-setup/internal/target"
 	"github.com/zzanghyunmoo/my-desk-setup/internal/transport"
 )
 
-func TestEditorRefusesUserOwnedConfiguration(t *testing.T) {
-	home := t.TempDir()
-	root := filepath.Join(home, ".config", "nvim")
-	if err := os.MkdirAll(root, 0o700); err != nil {
-		t.Fatalf("create user config: %v", err)
-	}
-	editor := guestadapter.Editor{Home: home}
-	observation, err := editor.Observe(context.Background(), nvchadAction())
-	if err != nil {
-		t.Fatalf("Observe(): %v", err)
-	}
-	if observation.State != adapters.StateConflict ||
-		!strings.Contains(observation.Detail, "user-owned") {
-		t.Fatalf("observation = %+v, want user-owned conflict", observation)
-	}
-}
-
-func TestEditorPublishesExactManagedRevision(t *testing.T) {
-	home := t.TempDir()
-	port := &recordingPort{
-		result: func(command transport.Command) transport.Result {
-			if command.Executable == "git" &&
-				len(command.Arguments) >= 3 &&
-				command.Arguments[2] == "rev-parse" {
-				return transport.Result{Stdout: nvchadAction().Version + "\n"}
-			}
-			return transport.Result{}
-		},
-	}
-	editor := guestadapter.Editor{
-		Home: home,
-		Port: port,
-		Delegate: readyComponent{
-			observation: adapters.Observation{
-				State: adapters.StateReady, InstalledVersion: nvchadAction().Version,
-			},
-		},
-		Now: func() time.Time {
-			return time.Date(2026, 7, 29, 8, 0, 0, 0, time.UTC)
-		},
-	}
-	if err := editor.Apply(context.Background(), nvchadAction()); err != nil {
-		t.Fatalf("Apply(): %v", err)
-	}
-	observation, err := editor.Observe(context.Background(), nvchadAction())
-	if err != nil {
-		t.Fatalf("Observe(after apply): %v", err)
-	}
-	if observation.State != adapters.StateReady ||
-		observation.InstalledVersion != nvchadAction().Version {
-		t.Fatalf("observation = %+v, want exact managed revision", observation)
-	}
-	marker, err := os.ReadFile(filepath.Join(home, ".config", "nvim", ".mds-managed.json"))
-	if err != nil {
-		t.Fatalf("read ownership marker: %v", err)
-	}
-	if !strings.Contains(string(marker), `"schema_version": "mds.ownership/v1"`) {
-		t.Fatalf("ownership marker = %s", marker)
-	}
-	for _, command := range port.commands {
-		if strings.Contains(command.Executable, "sh") {
-			t.Fatalf("editor used shell transport: %+v", command)
-		}
-	}
-}
-
-func TestExplicitUpdateReplacesOnlyManagedEditorConfiguration(t *testing.T) {
-	home := t.TempDir()
-	revision := "1111111111111111111111111111111111111111"
-	port := &recordingPort{
-		result: func(command transport.Command) transport.Result {
-			if command.Executable == "git" &&
-				len(command.Arguments) >= 3 &&
-				command.Arguments[2] == "rev-parse" {
-				return transport.Result{Stdout: revision + "\n"}
-			}
-			return transport.Result{}
-		},
-	}
-	action := nvchadAction()
-	action.Version = revision
-	editor := guestadapter.Editor{
-		Home: home, Port: port, Delegate: readyComponent{},
-		Now: func() time.Time {
-			return time.Date(2026, 7, 29, 8, 0, 0, 0, time.UTC)
-		},
-	}
-	if err := editor.Apply(context.Background(), action); err != nil {
-		t.Fatalf("Apply(initial): %v", err)
-	}
-	revision = "2222222222222222222222222222222222222222"
-	action.Version = revision
-	editor.AllowReplace = true
-	if err := editor.Apply(context.Background(), action); err != nil {
-		t.Fatalf("Apply(update): %v", err)
-	}
-	observation, err := editor.Observe(context.Background(), action)
-	if err != nil {
-		t.Fatalf("Observe(updated): %v", err)
-	}
-	if observation.State != adapters.StateReady ||
-		observation.InstalledVersion != revision {
-		t.Fatalf("observation = %+v, want updated managed revision", observation)
-	}
-
-	userHome := t.TempDir()
-	userRoot := filepath.Join(userHome, ".config", "nvim")
-	if err := os.MkdirAll(userRoot, 0o700); err != nil {
-		t.Fatalf("create user config: %v", err)
-	}
-	userEditor := editor
-	userEditor.Home = userHome
-	observation, err = userEditor.Observe(context.Background(), action)
-	if err != nil {
-		t.Fatalf("Observe(user-owned): %v", err)
-	}
-	if observation.State != adapters.StateConflict {
-		t.Fatalf("user-owned observation = %+v, want conflict", observation)
-	}
-}
-
-func TestDockerRequiresActiveSystemdBeforeMutation(t *testing.T) {
-	port := &recordingPort{}
-	docker := guestadapter.Docker{
-		Facts: target.Facts{SystemdSupported: true, SystemdActive: false},
-		Port:  port,
-	}
-	err := docker.Apply(context.Background(), dockerAction())
-	var actionRequired *adapters.ActionRequiredError
-	if !errors.As(err, &actionRequired) {
-		t.Fatalf("Apply() error = %v, want action-required", err)
-	}
-	if len(port.commands) != 0 {
-		t.Fatalf("commands executed before systemd preflight: %+v", port.commands)
-	}
-}
-
-func TestAgentPublishesNoAutoUpdateLauncherWithoutAuth(t *testing.T) {
-	home := t.TempDir()
-	action := planning.Action{
-		ID:          "lima-guest:mds/claude-code",
-		ComponentID: "claude-code",
-		Version:     "2.1.212",
-		Verification: [][]string{
-			{"claude", "--version"},
-		},
-	}
-	agent := guestadapter.Agent{
-		Home: home,
-		Delegate: readyComponent{
-			observation: adapters.Observation{
-				State: adapters.StateReady, InstalledVersion: action.Version,
-			},
-		},
-	}
-	if err := agent.Apply(context.Background(), action); err != nil {
-		t.Fatalf("Apply(): %v", err)
-	}
-	path := filepath.Join(home, ".local", "bin", "claude")
-	content, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("read launcher: %v", err)
-	}
-	for _, expected := range []string{
-		"DISABLE_AUTOUPDATER=1",
-		"OPENCODE_DISABLE_AUTOUPDATE=1",
-		filepath.Join(home, ".local", "share", "bun", "bin", "claude"),
+func TestLimaRuntimeCreatesOnePinnedImageTemplateFromStdin(t *testing.T) {
+	for _, test := range []struct {
+		architecture string
+		limaArch     string
+	}{
+		{architecture: "arm64", limaArch: "aarch64"},
+		{architecture: "amd64", limaArch: "x86_64"},
 	} {
-		if !strings.Contains(string(content), expected) {
-			t.Fatalf("launcher does not contain %q:\n%s", expected, content)
-		}
-	}
-	for _, forbidden := range []string{" auth ", " login ", "TOKEN=", "KEY="} {
-		if strings.Contains(string(content), forbidden) {
-			t.Fatalf("launcher contains forbidden authentication material %q", forbidden)
-		}
-	}
-	info, err := os.Stat(path)
-	if err != nil {
-		t.Fatalf("stat launcher: %v", err)
-	}
-	if info.Mode().Perm() != 0o700 {
-		t.Fatalf("launcher mode = %o, want 700", info.Mode().Perm())
-	}
-}
-
-func TestAgentRefusesExistingLauncher(t *testing.T) {
-	home := t.TempDir()
-	path := filepath.Join(home, ".local", "bin", "codex")
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		t.Fatalf("create launcher directory: %v", err)
-	}
-	if err := os.WriteFile(path, []byte("#!/bin/sh\necho user-owned\n"), 0o700); err != nil {
-		t.Fatalf("write user launcher: %v", err)
-	}
-	agent := guestadapter.Agent{Home: home, Delegate: readyComponent{}}
-	observation, err := agent.Observe(context.Background(), planning.Action{
-		ComponentID: "codex",
-		Verification: [][]string{
-			{"codex", "--version"},
-		},
-	})
-	if err != nil {
-		t.Fatalf("Observe(): %v", err)
-	}
-	if observation.State != adapters.StateConflict ||
-		!strings.Contains(observation.Detail, "user-owned") {
-		t.Fatalf("observation = %+v, want user-owned conflict", observation)
-	}
-}
-
-func TestAgentRejectsSymlinkedManagedLauncher(t *testing.T) {
-	home := t.TempDir()
-	action := planning.Action{
-		ComponentID: "codex",
-		Verification: [][]string{
-			{"codex", "--version"},
-		},
-	}
-	agent := guestadapter.Agent{Home: home, Delegate: readyComponent{}}
-	if err := agent.Apply(context.Background(), action); err != nil {
-		t.Fatalf("Apply(create launcher): %v", err)
-	}
-
-	path := filepath.Join(home, ".local", "bin", "codex")
-	content, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("read launcher: %v", err)
-	}
-	target := filepath.Join(home, "user-owned-target")
-	if err := os.WriteFile(target, content, 0o700); err != nil {
-		t.Fatalf("write symlink target: %v", err)
-	}
-	if err := os.Remove(path); err != nil {
-		t.Fatalf("remove launcher: %v", err)
-	}
-	if err := os.Symlink(target, path); err != nil {
-		t.Fatalf("create launcher symlink: %v", err)
-	}
-
-	observation, err := agent.Observe(context.Background(), action)
-	if err != nil {
-		t.Fatalf("Observe(): %v", err)
-	}
-	if observation.State != adapters.StateConflict {
-		t.Fatalf("observation = %+v, want symlink conflict", observation)
-	}
-	if err := agent.Apply(context.Background(), action); err == nil {
-		t.Fatal("Apply(symlink) error = nil, want no-overwrite conflict")
-	}
-	info, err := os.Lstat(path)
-	if err != nil {
-		t.Fatalf("lstat launcher: %v", err)
-	}
-	if info.Mode()&os.ModeSymlink == 0 {
-		t.Fatalf("launcher mode = %v, want preserved symlink", info.Mode())
-	}
-}
-
-func TestDockerRejectsExternalHostSocket(t *testing.T) {
-	docker := guestadapter.Docker{
-		Delegate: readyComponent{},
-		Getenv: func(key string) string {
-			if key == "DOCKER_HOST" {
-				return "tcp://host.docker.internal:2375"
+		test := test
+		t.Run(test.architecture, func(t *testing.T) {
+			const imageURL = "https://cloud-images.example/ubuntu-26.04.img"
+			imageSHA := strings.Repeat("a", 64)
+			ownershipRoot := t.TempDir()
+			port := &recordingPort{
+				result: func(command transport.Command) transport.Result {
+					if command.Executable == "limactl" &&
+						len(command.Arguments) > 0 &&
+						command.Arguments[0] == "list" {
+						return transport.Result{}
+					}
+					if strings.Contains(strings.Join(command.Arguments, " "), "mds plan") {
+						return transport.Result{Stdout: hostRuntimePlanIdentityWithRevisions(
+							"lima-guest:mds",
+							"cli",
+							"sha256:catalog",
+							imageURL,
+							imageSHA,
+							ownershipNonce(
+								t,
+								ownershipRoot,
+								"lima",
+								"mds",
+							),
+						)}
+					}
+					if isGuestImageIdentityReadCommand(command) {
+						return transport.Result{Stdout: guestImageIdentityMarkerFromOwnership(
+							t,
+							ownershipRoot,
+							"lima",
+							"mds",
+							imageURL,
+							imageSHA,
+						)}
+					}
+					return transport.Result{}
+				},
 			}
-			return ""
-		},
-	}
-	observation, err := docker.Observe(context.Background(), dockerAction())
-	if err != nil {
-		t.Fatalf("Observe(): %v", err)
-	}
-	if observation.State != adapters.StateConflict ||
-		!strings.Contains(observation.Detail, "guest-local") {
-		t.Fatalf("observation = %+v, want guest-local conflict", observation)
-	}
+			runtime := hostadapter.GuestRuntime{
+				Architecture: test.architecture,
+				Port:         port,
+				Delegate:     readyComponent{},
+				Spec: guest.Spec{Images: map[string]guest.ImageSpec{
+					test.architecture: {URL: imageURL, SHA256: imageSHA},
+				}},
+				CLIRevision:     "cli",
+				CatalogRevision: "sha256:catalog",
+				OwnershipRoot:   ownershipRoot,
+			}
 
-	docker.Getenv = func(key string) string {
-		if key == "DOCKER_HOST" {
-			return "unix:///var/run/docker.sock"
-		}
-		return ""
-	}
-	observation, err = docker.Observe(context.Background(), dockerAction())
-	if err != nil {
-		t.Fatalf("Observe(guest-local): %v", err)
-	}
-	if observation.State != adapters.StateReady {
-		t.Fatalf("guest-local observation = %+v, want ready", observation)
+			err := runtime.Apply(context.Background(), planning.Action{
+				ID: "macos-host:local/lima", ComponentID: "lima",
+			})
+			if err != nil {
+				t.Fatalf("Apply(): %v", err)
+			}
+			var create transport.Command
+			for _, command := range port.commands {
+				if command.Executable == "limactl" &&
+					len(command.Arguments) > 0 &&
+					command.Arguments[0] == "create" {
+					create = command
+					break
+				}
+			}
+			if !reflect.DeepEqual(
+				create.Arguments,
+				[]string{"create", "--name", "mds", "-"},
+			) {
+				t.Fatalf("create arguments = %v, want stdin template", create.Arguments)
+			}
+			template := string(create.Stdin)
+			for _, expected := range []string{
+				"arch: " + test.limaArch,
+				"location: " + imageURL,
+				"arch: " + test.limaArch,
+				"digest: sha256:" + imageSHA,
+			} {
+				if !strings.Contains(template, expected) {
+					t.Fatalf("template does not contain %q:\n%s", expected, template)
+				}
+			}
+			if strings.Count(template, "location:") != 1 ||
+				strings.Contains(template, ".images[0]") ||
+				strings.Contains(strings.Join(create.Arguments, " "), "--set") {
+				t.Fatalf("template is not an exact single-image template: %+v\n%s", create, template)
+			}
+		})
 	}
 }
 
-func TestDockerPinsDaemonCommandsDespiteRemoteCurrentContext(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv("DOCKER_HOST", "")
-	configDirectory := filepath.Join(home, ".docker")
-	if err := os.MkdirAll(configDirectory, 0o700); err != nil {
-		t.Fatalf("create Docker config directory: %v", err)
-	}
-	if err := os.WriteFile(
-		filepath.Join(configDirectory, "config.json"),
-		[]byte(`{"currentContext":"review-remote"}`+"\n"),
-		0o600,
-	); err != nil {
-		t.Fatalf("write remote Docker context config: %v", err)
-	}
+func TestGuestRuntimeRefusesPreExistingGuestWithoutOwnership(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		action    planning.Action
+		spec      guest.Spec
+		inventory transport.Result
+	}{
+		{
+			name:   "Lima",
+			action: planning.Action{ID: "macos-host:local/lima", ComponentID: "lima"},
+			spec: guest.Spec{Images: map[string]guest.ImageSpec{
+				"arm64": {
+					URL: "https://example.invalid/lima.img", SHA256: strings.Repeat("a", 64),
+				},
+			}},
+			inventory: transport.Result{
+				Stdout: `{"name":"mds","status":"Running","arch":"aarch64","limaVersion":"2.1.1"}`,
+			},
+		},
+		{
+			name:   "WSL",
+			action: planning.Action{ID: "windows-host:local/wsl", ComponentID: "wsl"},
+			spec: guest.Spec{
+				WSLDistribution: "Ubuntu-26.04",
+				WSLImages: map[string]guest.ImageSpec{
+					"arm64": {
+						URL: "https://example.invalid/ubuntu.wsl", SHA256: strings.Repeat("b", 64),
+					},
+				},
+			},
+			inventory: transport.Result{Stdout: "Ubuntu-26.04\n"},
+		},
+	} {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			port := &recordingPort{
+				result: func(command transport.Command) transport.Result {
+					if command.Executable == "limactl" &&
+						reflect.DeepEqual(command.Arguments, []string{"list", "--json"}) {
+						return test.inventory
+					}
+					if command.Executable == "wsl.exe" &&
+						reflect.DeepEqual(command.Arguments, []string{"--list", "--quiet"}) {
+						return test.inventory
+					}
+					return transport.Result{}
+				},
+			}
+			runtime := hostadapter.GuestRuntime{
+				Architecture:    "arm64",
+				Port:            port,
+				Delegate:        readyComponent{},
+				Spec:            test.spec,
+				CLIRevision:     "cli",
+				CatalogRevision: "sha256:catalog",
+				OwnershipRoot:   t.TempDir(),
+			}
 
-	const localEndpoint = "unix:///var/run/docker.sock"
+			observation, err := runtime.Observe(context.Background(), test.action)
+			if err != nil {
+				t.Fatalf("Observe(): %v", err)
+			}
+			if observation.State != adapters.StateConflict ||
+				!strings.Contains(observation.Detail, "not owned by mds") {
+				t.Fatalf("observation = %+v, want ownership conflict", observation)
+			}
+			err = runtime.Apply(context.Background(), test.action)
+			var actionRequired *adapters.ActionRequiredError
+			if !errors.As(err, &actionRequired) ||
+				!strings.Contains(actionRequired.Reason, "not owned by mds") {
+				t.Fatalf("Apply() error = %v, want ownership action-required", err)
+			}
+			if len(port.commands) != 2 {
+				t.Fatalf("commands = %+v, want inventory reads only", port.commands)
+			}
+		})
+	}
+}
+
+func TestGuestRuntimeRefusesSameNameReplacementWithStaleOwnership(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		action    planning.Action
+		spec      guest.Spec
+		provider  string
+		guestName string
+		inventory string
+	}{
+		{
+			name: "Lima",
+			action: planning.Action{
+				ID: "macos-host:local/lima", ComponentID: "lima",
+			},
+			spec: guest.Spec{Images: map[string]guest.ImageSpec{
+				"arm64": {
+					URL:    "https://example.invalid/lima.img",
+					SHA256: strings.Repeat("a", 64),
+				},
+			}},
+			provider:  "lima",
+			guestName: "mds",
+			inventory: `{"name":"mds","status":"Running","arch":"aarch64","limaVersion":"2.1.1"}`,
+		},
+		{
+			name: "WSL",
+			action: planning.Action{
+				ID: "windows-host:local/wsl", ComponentID: "wsl",
+			},
+			spec: guest.Spec{
+				WSLDistribution: "Ubuntu-26.04",
+				WSLImages: map[string]guest.ImageSpec{
+					"arm64": {
+						URL:    "https://example.invalid/ubuntu.wsl",
+						SHA256: strings.Repeat("a", 64),
+					},
+				},
+			},
+			provider:  "wsl",
+			guestName: "Ubuntu-26.04",
+			inventory: "Ubuntu-26.04\n",
+		},
+	} {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			ownershipRoot := t.TempDir()
+			image := test.spec.Images["arm64"]
+			if test.provider == "wsl" {
+				image = test.spec.WSLImages["arm64"]
+			}
+			if err := guest.PublishOwnership(
+				ownershipRoot,
+				guest.Ownership{
+					Provider: test.provider, Name: test.guestName,
+					ImageURL: image.URL, ImageSHA256: image.SHA256,
+					CreationNonce: strings.Repeat("b", 64),
+				},
+			); err != nil {
+				t.Fatalf("PublishOwnership(): %v", err)
+			}
+			replacementMarker := "schema=mds.guest-image/v2\n" +
+				"image_revision=sha256:" + image.SHA256 + "\n" +
+				"image_provenance=" + image.URL + "\n" +
+				"creation_nonce=" + strings.Repeat("c", 64) + "\n"
+			port := &recordingPort{
+				result: func(command transport.Command) transport.Result {
+					if command.Executable == "limactl" &&
+						reflect.DeepEqual(
+							command.Arguments,
+							[]string{"list", "--json"},
+						) {
+						return transport.Result{Stdout: test.inventory}
+					}
+					if command.Executable == "wsl.exe" &&
+						len(command.Arguments) > 0 &&
+						command.Arguments[0] == "--list" {
+						return transport.Result{Stdout: test.inventory}
+					}
+					if isGuestImageIdentityReadCommand(command) {
+						return transport.Result{Stdout: replacementMarker}
+					}
+					return transport.Result{}
+				},
+			}
+			runtime := hostadapter.GuestRuntime{
+				Architecture: "arm64", Port: port,
+				Delegate: readyComponent{}, Spec: test.spec,
+				CLIRevision: "cli", CatalogRevision: "sha256:catalog",
+				OwnershipRoot: ownershipRoot,
+			}
+
+			observation, err := runtime.Observe(
+				context.Background(),
+				test.action,
+			)
+			if err != nil {
+				t.Fatalf("Observe(): %v", err)
+			}
+			if observation.State != adapters.StateConflict ||
+				!strings.Contains(
+					observation.Detail,
+					"creation identity does not match",
+				) {
+				t.Fatalf(
+					"observation = %+v, want replacement conflict",
+					observation,
+				)
+			}
+			err = runtime.Apply(context.Background(), test.action)
+			var actionRequired *adapters.ActionRequiredError
+			if !errors.As(err, &actionRequired) ||
+				!strings.Contains(
+					actionRequired.Reason,
+					"creation identity does not match",
+				) {
+				t.Fatalf(
+					"Apply() error = %v, want replacement action-required",
+					err,
+				)
+			}
+			joined := recordedArgv(port.commands)
+			for _, forbidden := range []string{
+				"limactl start",
+				"limactl create",
+				"mds.guest-bootstrap/v1",
+				" mds plan ",
+			} {
+				if strings.Contains(joined, forbidden) {
+					t.Fatalf(
+						"replacement guest received mutation %q:\n%s",
+						forbidden,
+						joined,
+					)
+				}
+			}
+		})
+	}
+}
+
+func TestGuestRuntimeDoesNotAdoptLateProviderGuestFromPreparingIntent(t *testing.T) {
+	const imageURL = "https://example.invalid/lima.img"
+	imageSHA := strings.Repeat("a", 64)
+	created := false
+	failCreate := true
+	ownershipRoot := t.TempDir()
 	port := &recordingPort{
-		err: func(command transport.Command) error {
-			if command.Executable != "docker" {
-				return nil
+		result: func(command transport.Command) transport.Result {
+			if command.Executable == "limactl" &&
+				reflect.DeepEqual(command.Arguments, []string{"list", "--json"}) {
+				if created {
+					return transport.Result{
+						Stdout: `{"name":"mds","status":"Running","arch":"aarch64","limaVersion":"2.1.1"}`,
+					}
+				}
+				return transport.Result{}
 			}
-			if len(command.Arguments) < 3 ||
-				command.Arguments[0] != "--host" ||
-				command.Arguments[1] != localEndpoint {
-				return errors.New("Docker command could reach configured remote context")
+			if strings.Contains(strings.Join(command.Arguments, " "), "mds plan") {
+				return transport.Result{Stdout: hostRuntimePlanIdentity(
+					"lima-guest:mds",
+					imageURL,
+					imageSHA,
+					ownershipNonce(
+						t,
+						ownershipRoot,
+						"lima",
+						"mds",
+					),
+				)}
+			}
+			return transport.Result{}
+		},
+		err: func(command transport.Command) error {
+			if command.Executable == "limactl" &&
+				len(command.Arguments) > 0 &&
+				command.Arguments[0] == "create" &&
+				failCreate {
+				created = true
+				failCreate = false
+				return errors.New("provider returned after late creation")
 			}
 			return nil
 		},
+	}
+	runtime := hostadapter.GuestRuntime{
+		Architecture: "arm64",
+		Port:         port,
+		Delegate:     readyComponent{},
+		Spec: guest.Spec{Images: map[string]guest.ImageSpec{
+			"arm64": {URL: imageURL, SHA256: imageSHA},
+		}},
+		CLIRevision:     hostRuntimeCLIRevision,
+		CatalogRevision: hostRuntimeCatalogRevision,
+		OwnershipRoot:   ownershipRoot,
+	}
+	action := planning.Action{
+		ID: "macos-host:local/lima", ComponentID: "lima",
+	}
+
+	if err := runtime.Apply(context.Background(), action); err == nil {
+		t.Fatal("Apply(first) succeeded, want simulated provider error")
+	}
+	record, exists, err := guest.LoadOwnership(
+		ownershipRoot,
+		"lima",
+		"mds",
+	)
+	if err != nil || !exists || record.Phase != guest.OwnershipPreparing {
+		t.Fatalf(
+			"ownership intent after provider error record=%+v exists=%t err=%v",
+			record,
+			exists,
+			err,
+		)
+	}
+	err = runtime.Apply(context.Background(), action)
+	var actionRequired *adapters.ActionRequiredError
+	if !errors.As(err, &actionRequired) ||
+		!strings.Contains(actionRequired.Reason, "uncommitted") {
+		t.Fatalf("Apply(resume) error = %v, want ownership conflict", err)
+	}
+	if got := strings.Count(recordedArgv(port.commands), "limactl create --name mds -"); got != 1 {
+		t.Fatalf("create command count = %d, want one late successful mutation", got)
+	}
+}
+
+func TestWSLRuntimeRequiresConfiguredNonRootDefaultUser(t *testing.T) {
+	const (
+		imageURL = "https://example.invalid/ubuntu.wsl"
+	)
+	imageSHA := strings.Repeat("a", 64)
+	ownershipRoot := t.TempDir()
+	if err := guest.PublishOwnership(
+		ownershipRoot,
+		guest.Ownership{
+			Provider: "wsl", Name: "Ubuntu-26.04",
+			ImageURL: imageURL, ImageSHA256: imageSHA,
+			CreationNonce: strings.Repeat("b", 64),
+		},
+	); err != nil {
+		t.Fatalf("PublishOwnership(): %v", err)
+	}
+	port := &recordingPort{
 		result: func(command transport.Command) transport.Result {
-			if command.Executable == "docker" {
-				return transport.Result{Stdout: "Docker version test\n"}
+			if command.Executable == "wsl.exe" &&
+				len(command.Arguments) > 0 &&
+				command.Arguments[0] == "--list" {
+				return transport.Result{Stdout: "Ubuntu-26.04\n"}
+			}
+			if isGuestImageIdentityReadCommand(command) {
+				return transport.Result{
+					Stdout: guestImageIdentityMarkerFromOwnership(
+						t,
+						ownershipRoot,
+						"wsl",
+						"Ubuntu-26.04",
+						imageURL,
+						imageSHA,
+					),
+				}
 			}
 			return transport.Result{}
 		},
-	}
-	delegate := packages.Adapter{
-		Home: home,
-		Port: port,
-		Environment: catalog.Environment{
-			Catalog: catalog.Catalog{Components: []catalog.Component{
-				{
-					ID:   "docker-engine",
-					Kind: "platform",
-					VersionPolicy: catalog.VersionPolicy{
-						Mode: "manager-owned",
-					},
-				},
-			}},
+		err: func(command transport.Command) error {
+			if strings.Contains(
+				strings.Join(command.Arguments, " "),
+				"mds-default-user",
+			) {
+				return errors.New("default WSL user is root")
+			}
+			return nil
 		},
 	}
-	docker := guestadapter.Docker{Port: port, Delegate: delegate}
+	runtime := hostadapter.GuestRuntime{
+		Architecture: "arm64", Port: port,
+		Delegate: readyComponent{}, OwnershipRoot: ownershipRoot,
+		Spec: guest.Spec{
+			WSLDistribution: "Ubuntu-26.04",
+			WSLImages: map[string]guest.ImageSpec{
+				"arm64": {URL: imageURL, SHA256: imageSHA},
+			},
+		},
+		CLIRevision: "cli", CatalogRevision: "sha256:catalog",
+	}
 
-	observation, err := docker.Observe(context.Background(), dockerAction())
+	err := runtime.Apply(context.Background(), planning.Action{
+		ID: "windows-host:local/wsl", ComponentID: "wsl",
+	})
+	var actionRequired *adapters.ActionRequiredError
+	if !errors.As(err, &actionRequired) ||
+		!strings.Contains(actionRequired.Reason, "create the Linux user") {
+		t.Fatalf("Apply() error = %v, want non-root user action-required", err)
+	}
+	if strings.Contains(recordedArgv(port.commands), "mds.guest-bootstrap/v1") {
+		t.Fatalf(
+			"root-default WSL reached guest bootstrap:\n%s",
+			recordedArgv(port.commands),
+		)
+	}
+}
+
+func TestGuestRuntimeDoesNotAdoptExternalGuestAfterFailedCreation(t *testing.T) {
+	const imageURL = "https://example.invalid/lima.img"
+	imageSHA := strings.Repeat("a", 64)
+	externalGuest := false
+	createAttempts := 0
+	port := &recordingPort{
+		result: func(command transport.Command) transport.Result {
+			if command.Executable == "limactl" &&
+				reflect.DeepEqual(command.Arguments, []string{"list", "--json"}) {
+				if externalGuest {
+					return transport.Result{
+						Stdout: `{"name":"mds","status":"Running","arch":"aarch64","limaVersion":"2.1.1"}`,
+					}
+				}
+			}
+			return transport.Result{}
+		},
+		err: func(command transport.Command) error {
+			if command.Executable == "limactl" &&
+				len(command.Arguments) > 0 &&
+				command.Arguments[0] == "create" {
+				createAttempts++
+				return errors.New("provider failed before creating a guest")
+			}
+			return nil
+		},
+	}
+	runtime := hostadapter.GuestRuntime{
+		Architecture: "arm64",
+		Port:         port,
+		Delegate:     readyComponent{},
+		Spec: guest.Spec{Images: map[string]guest.ImageSpec{
+			"arm64": {URL: imageURL, SHA256: imageSHA},
+		}},
+		CLIRevision:     "cli",
+		CatalogRevision: "sha256:catalog",
+		OwnershipRoot:   t.TempDir(),
+	}
+	action := planning.Action{
+		ID: "macos-host:local/lima", ComponentID: "lima",
+	}
+	if err := runtime.Apply(context.Background(), action); err == nil {
+		t.Fatal("Apply(first) succeeded, want provider failure")
+	}
+	externalGuest = true
+	err := runtime.Apply(context.Background(), action)
+	var actionRequired *adapters.ActionRequiredError
+	if !errors.As(err, &actionRequired) ||
+		!strings.Contains(actionRequired.Reason, "uncommitted") {
+		t.Fatalf("Apply(external guest) error = %v, want ownership conflict", err)
+	}
+	if createAttempts != 1 {
+		t.Fatalf("create attempts = %d, want no retry against external guest", createAttempts)
+	}
+}
+
+func TestGuestRuntimeRejectsOwnedGuestWithDifferentImageIdentity(t *testing.T) {
+	const imageURL = "https://example.invalid/current.img"
+	imageSHA := strings.Repeat("a", 64)
+	ownershipRoot := t.TempDir()
+	if err := guest.PublishOwnership(ownershipRoot, guest.Ownership{
+		Provider:    "lima",
+		Name:        "mds",
+		ImageURL:    "https://example.invalid/previous.img",
+		ImageSHA256: strings.Repeat("b", 64),
+	}); err != nil {
+		t.Fatalf("PublishOwnership(): %v", err)
+	}
+	port := &recordingPort{result: func(command transport.Command) transport.Result {
+		if command.Executable == "limactl" {
+			return transport.Result{
+				Stdout: `{"name":"mds","status":"Running","arch":"aarch64","limaVersion":"2.1.1"}`,
+			}
+		}
+		return transport.Result{}
+	}}
+	runtime := hostadapter.GuestRuntime{
+		Architecture: "arm64",
+		Port:         port,
+		Delegate:     readyComponent{},
+		Spec: guest.Spec{Images: map[string]guest.ImageSpec{
+			"arm64": {URL: imageURL, SHA256: imageSHA},
+		}},
+		CLIRevision:     "cli",
+		CatalogRevision: "sha256:catalog",
+		OwnershipRoot:   ownershipRoot,
+	}
+	action := planning.Action{
+		ID: "macos-host:local/lima", ComponentID: "lima",
+	}
+
+	observation, err := runtime.Observe(context.Background(), action)
 	if err != nil {
 		t.Fatalf("Observe(): %v", err)
 	}
-	if observation.State != adapters.StateReady {
-		t.Fatalf("observation = %+v, want ready", observation)
+	if observation.State != adapters.StateConflict ||
+		!strings.Contains(observation.Detail, "image provenance conflicts") {
+		t.Fatalf("observation = %+v, want image ownership conflict", observation)
 	}
-	if err := docker.Verify(context.Background(), dockerAction()); err != nil {
-		t.Fatalf("Verify(): %v", err)
-	}
-
-	var dockerCommands []transport.Command
-	for _, command := range port.commands {
-		if command.Executable == "docker" {
-			dockerCommands = append(dockerCommands, command)
-		}
-	}
-	if len(dockerCommands) != 4 {
-		t.Fatalf("Docker commands = %d, want observe + three verify commands", len(dockerCommands))
-	}
-	for _, command := range dockerCommands {
-		if len(command.Arguments) < 3 ||
-			command.Arguments[0] != "--host" ||
-			command.Arguments[1] != localEndpoint {
-			t.Fatalf("Docker command is not pinned guest-local: %+v", command)
-		}
-	}
-	joined := recordedArgv(dockerCommands)
-	for _, expected := range []string{
-		"docker --host " + localEndpoint + " version",
-		"docker --host " + localEndpoint + " info --format {{.ServerVersion}}",
-		"docker --host " + localEndpoint + " compose version",
-	} {
-		if !strings.Contains(joined, expected) {
-			t.Fatalf("commands do not contain %q:\n%s", expected, joined)
-		}
-	}
-	for _, forbidden := range []string{
-		"review-remote",
-		"docker login",
-		"docker --host " + localEndpoint + " run ",
-		" auth ",
-	} {
-		if strings.Contains(joined, forbidden) {
-			t.Fatalf("Docker commands contain forbidden %q:\n%s", forbidden, joined)
-		}
-	}
-}
-
-func TestDockerInstallsGuestEngineAndRequestsShellRestart(t *testing.T) {
-	key := []byte("reviewed Docker key fixture")
-	sum := sha256.Sum256(key)
-	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
-		_, _ = writer.Write(key)
-	}))
-	defer server.Close()
-
-	port := &recordingPort{
-		result: func(command transport.Command) transport.Result {
-			if command.Executable == "id" {
-				return transport.Result{Stdout: "gurumee sudo\n"}
-			}
-			return transport.Result{}
-		},
-	}
-	docker := guestadapter.Docker{
-		Facts: target.Facts{
-			OS: "linux", Architecture: "arm64",
-			SystemdSupported: true, SystemdActive: true,
-		},
-		Port:     port,
-		Client:   server.Client(),
-		KeyURL:   server.URL,
-		KeySHA:   hex.EncodeToString(sum[:]),
-		Username: func() (string, error) { return "gurumee", nil },
-	}
-	err := docker.Apply(context.Background(), dockerAction())
+	err = runtime.Apply(context.Background(), action)
 	var actionRequired *adapters.ActionRequiredError
 	if !errors.As(err, &actionRequired) ||
-		!strings.Contains(actionRequired.Reason, "root-equivalent daemon access") ||
-		!strings.Contains(actionRequired.Reason, "sudo usermod -aG docker gurumee") {
-		t.Fatalf("Apply() error = %v, want explicit privileged action", err)
+		!strings.Contains(actionRequired.Reason, "image provenance conflicts") {
+		t.Fatalf("Apply() error = %v, want image ownership action-required", err)
 	}
-	joined := recordedArgv(port.commands)
-	for _, expected := range []string{
-		"apt-get update",
-		"apt-get install -y --no-install-recommends docker-ce docker-ce-cli containerd.io docker-compose-plugin",
-		"systemctl enable --now docker",
-	} {
-		if !strings.Contains(joined, expected) {
-			t.Fatalf("commands do not contain %q:\n%s", expected, joined)
-		}
-	}
-	for _, forbidden := range []string{"docker login", "usermod -aG docker"} {
-		if strings.Contains(joined, forbidden) {
-			t.Fatalf("Docker installation attempted forbidden %q:\n%s", forbidden, joined)
-		}
-	}
-}
-
-func nvchadAction() planning.Action {
-	return planning.Action{
-		ID:          "lima-guest:mds/nvchad",
-		ComponentID: "nvchad",
-		Version:     "e3572e1f5e1c297212c3deeb17b7863139ce663e",
-		Verification: [][]string{
-			{"nvim", "--headless", "+checkhealth", "+quit"},
-		},
-	}
-}
-
-func dockerAction() planning.Action {
-	return planning.Action{
-		ID:          "lima-guest:mds/docker-engine",
-		ComponentID: "docker-engine",
-		Installer:   "docker-apt",
-		Package:     "docker-ce docker-ce-cli containerd.io docker-compose-plugin",
-		Version:     "manager-owned",
-		Verification: [][]string{
-			{"docker", "version"},
-			{"docker", "info", "--format", "{{.ServerVersion}}"},
-		},
+	if strings.Contains(recordedArgv(port.commands), " start ") ||
+		strings.Contains(recordedArgv(port.commands), " create ") {
+		t.Fatalf("mutation executed after image conflict: %+v", port.commands)
 	}
 }
 
@@ -543,4 +655,34 @@ func recordedArgv(commands []transport.Command) string {
 		), " "))
 	}
 	return strings.Join(lines, "\n")
+}
+
+func isGuestImageIdentityReadCommand(command transport.Command) bool {
+	joined := strings.Join(command.Arguments, " ")
+	return strings.Contains(joined, "/usr/bin/stat -c") &&
+		strings.Contains(joined, "/etc/mds/image-identity-v1")
+}
+
+func guestImageIdentityMarkerFromOwnership(
+	t *testing.T,
+	root,
+	provider,
+	name,
+	imageURL,
+	imageSHA string,
+) string {
+	t.Helper()
+	record, exists, err := guest.LoadOwnership(root, provider, name)
+	if err != nil || !exists {
+		t.Fatalf(
+			"LoadOwnership() record=%+v exists=%t error=%v",
+			record,
+			exists,
+			err,
+		)
+	}
+	return "schema=mds.guest-image/v2\n" +
+		"image_revision=sha256:" + imageSHA + "\n" +
+		"image_provenance=" + imageURL + "\n" +
+		"creation_nonce=" + record.CreationNonce + "\n"
 }

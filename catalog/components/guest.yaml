@@ -261,11 +261,11 @@ components:
       wsl-guest:
         status: supported
         installer: mise
-        package: flutter
+        package: http:flutter
       lima-guest:
         status: supported
         installer: mise
-        package: flutter
+        package: http:flutter
 
   - id: gradle
     name: Gradle
@@ -340,11 +340,11 @@ components:
       wsl-guest:
         status: supported
         installer: mise
-        package: neovim
+        package: http:neovim
       lima-guest:
         status: supported
         installer: mise
-        package: neovim
+        package: http:neovim
 
   - id: nvchad
     name: NvChad-derived Configuration

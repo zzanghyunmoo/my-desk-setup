@@ -11,13 +11,14 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"regexp"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
 
+	exactartifact "github.com/zzanghyunmoo/my-desk-setup/internal/artifact"
 	"github.com/zzanghyunmoo/my-desk-setup/internal/doctor"
+	"github.com/zzanghyunmoo/my-desk-setup/internal/durable"
 	"github.com/zzanghyunmoo/my-desk-setup/internal/planning"
 	"github.com/zzanghyunmoo/my-desk-setup/internal/target"
 )
@@ -25,7 +26,6 @@ import (
 const maxEvidenceFileSize = 4 << 20
 
 var (
-	sha256Pattern    = regexp.MustCompile(`^[0-9a-f]{64}$`)
 	checksummedFiles = []string{
 		DoctorFile,
 		ManifestFile,
@@ -90,8 +90,40 @@ func Verify(root string, options VerifyOptions) (Manifest, error) {
 	if manifest.PlanDigest != plan.Digest {
 		return Manifest{}, errors.New("manifest plan digest does not match plan")
 	}
+	if manifest.ApplyReceipt == nil {
+		return Manifest{}, errors.New("manifest is missing reviewed apply receipt")
+	}
+	if err := validateCertificationReceipt(
+		*manifest.ApplyReceipt,
+		plan,
+		!manifest.ApplyReceipt.Complete,
+		false,
+	); err != nil {
+		return Manifest{}, fmt.Errorf("validate manifest apply receipt: %w", err)
+	}
+	if manifest.ApplyReceipt.Complete {
+		if manifest.RepeatReceipt == nil {
+			return Manifest{}, errors.New(
+				"complete certification is missing repeat apply receipt",
+			)
+		}
+		if err := validateCertificationReceipt(
+			*manifest.RepeatReceipt,
+			plan,
+			false,
+			true,
+		); err != nil {
+			return Manifest{}, fmt.Errorf("validate manifest repeat receipt: %w", err)
+		}
+	} else if manifest.RepeatReceipt != nil {
+		return Manifest{}, errors.New(
+			"incomplete certification cannot contain repeat apply receipt",
+		)
+	}
 	expectedStatus := StatusVerified
 	if len(plan.Blockers) > 0 ||
+		!manifest.ApplyReceipt.Complete ||
+		manifest.RepeatReceipt == nil ||
 		!snapshot.Ready ||
 		!targetIdentityComplete(plan.Target) {
 		expectedStatus = StatusBlocked
@@ -132,7 +164,7 @@ func validateManifest(manifest Manifest, options VerifyOptions) error {
 			manifest.Status,
 		)
 	}
-	if !sha256Pattern.MatchString(manifest.BinarySHA256) {
+	if exactartifact.ValidateSHA256(manifest.BinarySHA256) != nil {
 		return errors.New(
 			"evidence binary_sha256 must be 64 lowercase hex characters",
 		)
@@ -552,7 +584,9 @@ func targetIdentityComplete(facts target.Facts) bool {
 	case target.KindWSLGuest, target.KindLimaGuest:
 		return facts.OS == "linux" &&
 			facts.RuntimeVersion != "" &&
-			facts.ImageRevision != ""
+			facts.ImageRevision != "" &&
+			facts.ImageProvenance != "" &&
+			facts.ImageCreationNonce != ""
 	default:
 		return false
 	}
@@ -722,7 +756,7 @@ func writeBundle(
 			return fmt.Errorf("write evidence file %s: %w", name, err)
 		}
 	}
-	if err := os.Rename(staging, outputDir); err != nil {
+	if err := durable.PublishDirectory(staging, outputDir); err != nil {
 		return fmt.Errorf("publish evidence directory: %w", err)
 	}
 	return nil

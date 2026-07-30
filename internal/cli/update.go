@@ -48,42 +48,93 @@ func newUpdateCommand(streams Streams, system Runtime) *cobra.Command {
 					"choose exactly one of --candidate or --component",
 				))
 			}
+			if err := updateflow.ValidateCatalogRoot(catalogPath); err != nil {
+				return updateError(err)
+			}
 			environment, err := loadEnvironment(catalogPath)
 			if err != nil {
 				return invalidInput(err)
 			}
 			facts, err := resolveTarget(command.Context(), targetID, system, true)
 			if err != nil {
-				return err
+				return updateError(err)
 			}
 			var candidate updateflow.Candidate
+			candidateLoaded := false
 			if candidatePath != "" {
 				candidate, err = readCandidate(candidatePath)
-			} else {
-				candidate, err = updateflow.Discover(
-					command.Context(),
-					environment,
-					catalog.TargetKind(facts.ID.Kind),
-					componentID,
-					&http.Client{Timeout: 30 * time.Second},
-					"",
-				)
-			}
-			if err != nil {
-				if candidatePath != "" {
+				if err != nil {
 					return invalidInput(err)
 				}
-				return unreachable(err)
+				candidateLoaded = true
 			}
-			beforeRevision, err := catalog.Revision(environment)
-			if err != nil {
-				return fmt.Errorf("catalog revision: %w", err)
+
+			var plan updateflow.Plan
+			var updated catalog.Environment
+			var home string
+			resumed := false
+			if expectedDigest != "" {
+				home, err = runtimeHome(system)
+				if err != nil {
+					return updateError(err)
+				}
+				if stateRoot == "" {
+					stateRoot = defaultStateRoot(home, system)
+				}
+				plan, updated, resumed, err = updateflow.ResumePlan(
+					catalogPath,
+					stateRoot,
+					expectedDigest,
+				)
+				if err != nil {
+					return updateError(err)
+				}
+				if resumed {
+					switch {
+					case candidateLoaded:
+						if err := updateflow.ValidateCandidateForPlan(
+							plan,
+							candidate,
+						); err != nil {
+							return updateError(err)
+						}
+					case componentID != plan.ComponentID:
+						return invalidInput(fmt.Errorf(
+							"component %q does not match resumable update component %q",
+							componentID,
+							plan.ComponentID,
+						))
+					}
+				}
 			}
-			facts.CLIRevision = version.String()
-			facts.CatalogRevision = beforeRevision
-			plan, updated, err := updateflow.Build(environment, facts, candidate)
-			if err != nil {
-				return invalidInput(err)
+			if !resumed {
+				if !candidateLoaded {
+					candidate, err = updateflow.Discover(
+						command.Context(),
+						environment,
+						catalog.TargetKind(facts.ID.Kind),
+						componentID,
+						&http.Client{Timeout: 30 * time.Second},
+						"",
+					)
+					if err != nil {
+						return updateError(err)
+					}
+				}
+				beforeRevision, err := catalog.Revision(environment)
+				if err != nil {
+					return fmt.Errorf("catalog revision: %w", err)
+				}
+				facts.CLIRevision = version.String()
+				facts.CatalogRevision = beforeRevision
+				plan, updated, err = updateflow.Build(
+					environment,
+					facts,
+					candidate,
+				)
+				if err != nil {
+					return updateError(err)
+				}
 			}
 			if expectedDigest == "" {
 				switch format {
@@ -96,11 +147,13 @@ func newUpdateCommand(streams Streams, system Runtime) *cobra.Command {
 				}
 			}
 			if err := updateflow.Verify(plan, expectedDigest); err != nil {
-				return stalePlan(err)
+				return updateError(err)
 			}
-			home, err := runtimeHome(system)
-			if err != nil {
-				return err
+			if home == "" {
+				home, err = runtimeHome(system)
+				if err != nil {
+					return updateError(err)
+				}
 			}
 			componentAdapter, err := currentAdapter(
 				updated,
@@ -110,10 +163,7 @@ func newUpdateCommand(streams Streams, system Runtime) *cobra.Command {
 				true,
 			)
 			if err != nil {
-				return err
-			}
-			if stateRoot == "" {
-				stateRoot = defaultStateRoot(home, system)
+				return updateError(err)
 			}
 			now := system.Now
 			if now == nil {
@@ -147,7 +197,7 @@ func newUpdateCommand(streams Streams, system Runtime) *cobra.Command {
 				runner,
 			)
 			if err != nil {
-				return err
+				return updateError(err)
 			}
 			switch format {
 			case "human":
@@ -163,7 +213,9 @@ func newUpdateCommand(streams Streams, system Runtime) *cobra.Command {
 			}
 			if !result.Receipt.Complete {
 				return actionRequired(
-					errors.New("update completed with unresolved component outcomes"),
+					errors.New(
+						"update is incomplete; resolve the reported component outcome and rerun the same mds update with the same --plan-digest and writable --catalog",
+					),
 				)
 			}
 			return nil

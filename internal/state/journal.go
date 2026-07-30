@@ -14,6 +14,7 @@ type JournalEvent struct {
 	PlanDigest    string    `json:"plan_digest"`
 	ActionID      string    `json:"action_id"`
 	Phase         string    `json:"phase"`
+	ReasonCode    string    `json:"reason_code,omitempty"`
 	Detail        string    `json:"detail,omitempty"`
 }
 

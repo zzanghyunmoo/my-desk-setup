@@ -41,7 +41,12 @@ func (adapter Adapter) Observe(
 		}, nil
 	}
 	command := adapter.verificationCommand(action.Verification[0])
-	result, err := adapter.Port.Run(ctx, command)
+	if err := ValidateCatalogVerificationCommand(action.ComponentID, command); err != nil {
+		return adapters.Observation{
+			State: adapters.StateConflict, Detail: err.Error(),
+		}, nil
+	}
+	result, err := adapter.execute(ctx, command)
 	if err != nil {
 		if errors.Is(err, exec.ErrNotFound) || errors.Is(err, os.ErrNotExist) {
 			return adapters.Observation{State: adapters.StateAbsent}, nil
@@ -122,6 +127,12 @@ func (adapter Adapter) Apply(
 		}
 		err = adapter.runAll(ctx, commands)
 	case "mise":
+		if err := validateMiseAction(action, lock); err != nil {
+			return err
+		}
+		if err := PublishMiseConfig(adapter.Home, adapter.Environment.Mise); err != nil {
+			return err
+		}
 		commands, buildErr := MiseInstall(action, adapter.environment())
 		if buildErr != nil {
 			return buildErr
@@ -162,6 +173,29 @@ func (adapter Adapter) Apply(
 	return publishLaunchers(specs)
 }
 
+func validateMiseAction(action planning.Action, lock catalog.LockEntry) error {
+	expectedRef := lock.InstallRef
+	if expectedRef == "" {
+		expectedRef = lock.Version
+	}
+	if action.Inputs["mise_ref"] != expectedRef {
+		return fmt.Errorf(
+			"mise action %s ref does not match the reviewed catalog",
+			action.ID,
+		)
+	}
+	for _, artifact := range lock.Artifacts {
+		if artifact.URL == action.Inputs["artifact_url"] &&
+			artifact.SHA256 == action.Inputs["artifact_sha256"] {
+			return nil
+		}
+	}
+	return fmt.Errorf(
+		"mise action %s artifact does not match the reviewed catalog",
+		action.ID,
+	)
+}
+
 func (adapter Adapter) Verify(
 	ctx context.Context,
 	action planning.Action,
@@ -173,11 +207,18 @@ func (adapter Adapter) Verify(
 		if len(argv) == 0 {
 			return fmt.Errorf("empty verification command for %s", action.ID)
 		}
-		if _, err := adapter.Port.Run(ctx, adapter.verificationCommand(argv)); err != nil {
+		command := adapter.verificationCommand(argv)
+		if err := ValidateCatalogVerificationCommand(
+			action.ComponentID,
+			command,
+		); err != nil {
+			return err
+		}
+		if _, err := adapter.execute(ctx, command); err != nil {
 			return fmt.Errorf("verify %s with %s: %w", action.ID, argv[0], err)
 		}
 	}
-	return nil
+	return adapter.verifyFunctionalToolchain(ctx, action)
 }
 
 func (adapter Adapter) componentAndLock(
@@ -197,8 +238,18 @@ func (adapter Adapter) componentAndLock(
 }
 
 func (adapter Adapter) run(ctx context.Context, command transport.Command) error {
-	_, err := adapter.Port.Run(ctx, command)
+	_, err := adapter.execute(ctx, command)
 	return err
+}
+
+func (adapter Adapter) execute(
+	ctx context.Context,
+	command transport.Command,
+) (transport.Result, error) {
+	if err := ValidatePrivilegedCommand(command); err != nil {
+		return transport.Result{}, err
+	}
+	return adapter.Port.Run(ctx, command)
 }
 
 func (adapter Adapter) runAll(ctx context.Context, commands []transport.Command) error {
@@ -240,6 +291,7 @@ func (adapter Adapter) environment() map[string]string {
 		"MISE_CONFIG_DIR":             filepath.Join(adapter.Home, ".config", "mise"),
 		"MISE_STATE_DIR":              filepath.Join(adapter.Home, ".local", "state", "mise"),
 		"MISE_CACHE_DIR":              filepath.Join(adapter.Home, ".cache", "mise"),
+		"GOTOOLCHAIN":                 "local",
 		"DISABLE_AUTOUPDATER":         "1",
 		"OPENCODE_DISABLE_AUTOUPDATE": "1",
 	}

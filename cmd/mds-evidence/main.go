@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -11,17 +12,30 @@ import (
 
 	"github.com/zzanghyunmoo/my-desk-setup/internal/evidence"
 	"github.com/zzanghyunmoo/my-desk-setup/internal/output"
+	"github.com/zzanghyunmoo/my-desk-setup/internal/shutdown"
 )
 
 func main() {
-	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
+	ctx, stop := shutdown.Notify()
+	code := runContext(ctx, os.Args[1:], os.Stdout, os.Stderr)
+	stop()
+	os.Exit(code)
 }
 
 func run(arguments []string, stdout, stderr io.Writer) int {
+	return runContext(context.Background(), arguments, stdout, stderr)
+}
+
+func runContext(
+	ctx context.Context,
+	arguments []string,
+	stdout,
+	stderr io.Writer,
+) int {
 	command := newRoot(stdout)
 	command.SetArgs(arguments)
 	command.SetErr(stderr)
-	if err := command.Execute(); err != nil {
+	if err := command.ExecuteContext(ctx); err != nil {
 		_, _ = fmt.Fprintln(stderr, err)
 		return 1
 	}
@@ -75,6 +89,12 @@ func newCertifyCommand(stdout io.Writer) *cobra.Command {
 		"expected-binary-sha256",
 		"",
 		"SHA-256 of the exact release mds binary being certified",
+	)
+	flags.StringVar(
+		&request.ExpectedGuestCreationNonce,
+		"expected-guest-creation-nonce",
+		"",
+		"guest creation nonce from the host committed ownership record",
 	)
 	flags.BoolVar(&request.All, "all", false, "certify every target-eligible component")
 	flags.StringVar(&request.Profile, "profile", "", "certify a named profile")

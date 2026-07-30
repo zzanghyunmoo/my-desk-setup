@@ -1,6 +1,7 @@
 package catalog
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -10,6 +11,7 @@ import (
 	"sort"
 	"strings"
 
+	jsonschema "github.com/santhosh-tekuri/jsonschema/v6"
 	"gopkg.in/yaml.v3"
 )
 
@@ -38,6 +40,13 @@ func LoadFS(filesystem fs.FS) (Environment, error) {
 		}
 		if document.SchemaVersion != 1 {
 			return Environment{}, fmt.Errorf("%s: unsupported schema_version %d", path, document.SchemaVersion)
+		}
+		if err := validatePublishedSchema(
+			filesystem,
+			"schema/environment.schema.json",
+			document,
+		); err != nil {
+			return Environment{}, fmt.Errorf("%s: %w", path, err)
 		}
 		environment.Catalog.Components = append(
 			environment.Catalog.Components,
@@ -106,10 +115,82 @@ func LoadFS(filesystem fs.FS) (Environment, error) {
 	if err := decodeStrictFS(filesystem, lockPath, &environment.Lock); err != nil {
 		return Environment{}, err
 	}
+	if err := validatePublishedSchema(
+		filesystem,
+		"schema/lock.schema.json",
+		environment.Lock,
+	); err != nil {
+		return Environment{}, fmt.Errorf("%s: %w", lockPath, err)
+	}
+	miseConfig, err := readBoundedFS(filesystem, "mise.toml", 1<<20)
+	if err != nil {
+		return Environment{}, err
+	}
+	miseLock, err := readBoundedFS(filesystem, "mise.lock", 4<<20)
+	if err != nil {
+		return Environment{}, err
+	}
+	environment.Mise = MiseFiles{
+		Config: string(miseConfig),
+		Lock:   string(miseLock),
+	}
 	if err := Validate(environment); err != nil {
 		return Environment{}, err
 	}
 	return environment, nil
+}
+
+func validatePublishedSchema(
+	filesystem fs.FS,
+	path string,
+	document any,
+) error {
+	content, err := readBoundedFS(filesystem, path, 1<<20)
+	if err != nil {
+		return fmt.Errorf("load published schema: %w", err)
+	}
+	var schemaDocument any
+	if err := json.Unmarshal(content, &schemaDocument); err != nil {
+		return fmt.Errorf("decode published schema %s: %w", path, err)
+	}
+	compiler := jsonschema.NewCompiler()
+	if err := compiler.AddResource(path, schemaDocument); err != nil {
+		return fmt.Errorf("register published schema %s: %w", path, err)
+	}
+	compiled, err := compiler.Compile(path)
+	if err != nil {
+		return fmt.Errorf("compile published schema %s: %w", path, err)
+	}
+	encoded, err := json.Marshal(document)
+	if err != nil {
+		return fmt.Errorf("encode catalog document for schema validation: %w", err)
+	}
+	var instance any
+	if err := json.Unmarshal(encoded, &instance); err != nil {
+		return fmt.Errorf("decode catalog document for schema validation: %w", err)
+	}
+	if err := compiled.Validate(instance); err != nil {
+		return fmt.Errorf("published schema %s rejected document: %w", path, err)
+	}
+	return nil
+}
+
+func readBoundedFS(filesystem fs.FS, path string, limit int64) ([]byte, error) {
+	file, err := filesystem.Open(path)
+	if err != nil {
+		return nil, fmt.Errorf("open %s: %w", path, err)
+	}
+	defer func() {
+		_ = file.Close()
+	}()
+	content, err := io.ReadAll(io.LimitReader(file, limit+1))
+	if err != nil {
+		return nil, fmt.Errorf("read %s: %w", path, err)
+	}
+	if int64(len(content)) > limit {
+		return nil, fmt.Errorf("%s exceeds %d bytes", path, limit)
+	}
+	return content, nil
 }
 
 func decodeStrictFS(

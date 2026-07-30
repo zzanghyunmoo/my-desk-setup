@@ -23,6 +23,18 @@ func Build(
 	facts target.Facts,
 	candidate Candidate,
 ) (Plan, catalog.Environment, error) {
+	plan, updated, err := build(environment, facts, candidate)
+	if err != nil {
+		return Plan{}, catalog.Environment{}, invalid(err)
+	}
+	return plan, updated, nil
+}
+
+func build(
+	environment catalog.Environment,
+	facts target.Facts,
+	candidate Candidate,
+) (Plan, catalog.Environment, error) {
 	if err := validateCandidate(candidate); err != nil {
 		return Plan{}, catalog.Environment{}, err
 	}
@@ -30,12 +42,14 @@ func Build(
 	if err != nil {
 		return Plan{}, catalog.Environment{}, err
 	}
-	old := environment.Lock.Versions[component.VersionPolicy.LockKey]
-	replacement := catalog.LockEntry{
-		Version: candidate.Version, Source: candidate.Source,
-		Provenance: candidate.Provenance, NPM: candidate.NPM,
-		Artifacts: candidate.Artifacts,
+	if usesInstaller(component, "mise") {
+		return Plan{}, catalog.Environment{}, fmt.Errorf(
+			"component %q is mise-managed; v1 update refuses to move it until a reviewed candidate can update versions.lock.yaml, mise.toml, and mise.lock as one transaction",
+			component.ID,
+		)
 	}
+	old := environment.Lock.Versions[component.VersionPolicy.LockKey]
+	replacement := candidateLockEntry(candidate)
 	if reflect.DeepEqual(old, replacement) {
 		return Plan{}, catalog.Environment{}, errors.New("candidate does not change the committed lock")
 	}
@@ -91,6 +105,37 @@ func Build(
 		return Plan{}, catalog.Environment{}, err
 	}
 	return plan, updated, nil
+}
+
+func usesInstaller(component catalog.Component, installer string) bool {
+	for _, support := range component.Targets {
+		if support.Status == catalog.StatusSupported &&
+			support.Installer == installer {
+			return true
+		}
+	}
+	return false
+}
+
+func ValidateCandidateForPlan(plan Plan, candidate Candidate) error {
+	if err := validateCandidate(candidate); err != nil {
+		return invalid(err)
+	}
+	if candidate.ComponentID != plan.ComponentID ||
+		!reflect.DeepEqual(candidateLockEntry(candidate), plan.New) {
+		return invalid(errors.New(
+			"candidate does not match the resumable reviewed update plan",
+		))
+	}
+	return nil
+}
+
+func candidateLockEntry(candidate Candidate) catalog.LockEntry {
+	return catalog.LockEntry{
+		Version: candidate.Version, Source: candidate.Source,
+		Provenance: candidate.Provenance, NPM: candidate.NPM,
+		Artifacts: candidate.Artifacts,
+	}
 }
 
 func buildCompatibilityMatrix(
@@ -232,11 +277,11 @@ func validateCandidate(candidate Candidate) error {
 		if err := requireHTTPSURL(artifact.URL); err != nil {
 			return fmt.Errorf("candidate artifact %q URL: %w", platform, err)
 		}
-		checksum, err := hex.DecodeString(artifact.SHA256)
-		if err != nil || len(checksum) != sha256.Size {
+		if err := exactartifact.ValidateSHA256(artifact.SHA256); err != nil {
 			return fmt.Errorf(
-				"candidate artifact %q requires a 64-character hexadecimal SHA-256",
+				"candidate artifact %q requires a canonical lowercase SHA-256: %w",
 				platform,
+				err,
 			)
 		}
 	}
@@ -245,8 +290,11 @@ func validateCandidate(candidate Candidate) error {
 
 func requireHTTPSURL(value string) error {
 	parsed, err := url.ParseRequestURI(value)
-	if err != nil || parsed.Scheme != "https" || parsed.Host == "" {
-		return errors.New("must be an absolute HTTPS URL")
+	if err != nil || parsed.Scheme != "https" || parsed.Host == "" ||
+		parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return errors.New(
+			"must be an absolute credential-free HTTPS URL without a query or fragment",
+		)
 	}
 	return nil
 }
@@ -262,6 +310,13 @@ func Digest(plan Plan) (string, error) {
 }
 
 func Verify(plan Plan, expected string) error {
+	if err := verify(plan, expected); err != nil {
+		return stale(err)
+	}
+	return nil
+}
+
+func verify(plan Plan, expected string) error {
 	if plan.SchemaVersion != PlanSchema {
 		return fmt.Errorf("unsupported update plan schema %q", plan.SchemaVersion)
 	}

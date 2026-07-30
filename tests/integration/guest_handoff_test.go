@@ -19,6 +19,9 @@ import (
 const (
 	testGuestCLIRevision     = "1.2.3 (commit=reviewed, date=2026-07-30T00:00:00Z)"
 	testGuestCatalogRevision = "sha256:reviewed-catalog"
+	testGuestImageURL        = "https://example.invalid/ubuntu-26.04.img"
+	testGuestImageSHA        = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	testGuestCreationNonce   = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
 )
 
 func TestGuestRuntimeHandoffUsesExactRevisionAndBoundedArgv(t *testing.T) {
@@ -42,6 +45,10 @@ func TestGuestRuntimeHandoffUsesExactRevisionAndBoundedArgv(t *testing.T) {
 			wantTarget: "lima-guest:mds",
 			wantArgv: []string{
 				"shell", "--tty=false", "mds", "--",
+				"env",
+				"MDS_IMAGE_CREATION_NONCE=" + testGuestCreationNonce,
+				"MDS_IMAGE_PROVENANCE=" + testGuestImageURL,
+				"MDS_IMAGE_REVISION=sha256:" + testGuestImageSHA,
 				"/bin/sh", "-c", `exec "$HOME/.local/bin/mds" "$@"`,
 				"mds", "plan", "--target", "lima-guest:mds",
 				"--all", "--format", "json",
@@ -57,7 +64,11 @@ func TestGuestRuntimeHandoffUsesExactRevisionAndBoundedArgv(t *testing.T) {
 			wantTarget: "wsl-guest:Ubuntu-26.04",
 			wantArgv: []string{
 				"--distribution", "Ubuntu-26.04",
-				"--exec", "/bin/sh", "-c",
+				"--exec", "env",
+				"MDS_IMAGE_CREATION_NONCE=" + testGuestCreationNonce,
+				"MDS_IMAGE_PROVENANCE=" + testGuestImageURL,
+				"MDS_IMAGE_REVISION=sha256:" + testGuestImageSHA,
+				"/bin/sh", "-c",
 				`exec "$HOME/.local/bin/mds" "$@"`, "mds", "plan",
 				"--target", "wsl-guest:Ubuntu-26.04",
 				"--all", "--format", "json",
@@ -68,6 +79,11 @@ func TestGuestRuntimeHandoffUsesExactRevisionAndBoundedArgv(t *testing.T) {
 	for _, test := range tests {
 		test := test
 		t.Run(test.name, func(t *testing.T) {
+			spec, ownershipRoot, marker := ownedGuestFixture(
+				t,
+				test.action,
+				test.spec,
+			)
 			port := &guestRuntimePort{}
 			port.result = func(command transport.Command) (transport.Result, error) {
 				switch {
@@ -75,8 +91,17 @@ func TestGuestRuntimeHandoffUsesExactRevisionAndBoundedArgv(t *testing.T) {
 					slices.Equal(command.Arguments, []string{"list", "--json"}):
 					return test.inventory, nil
 				case command.Executable == "wsl.exe" &&
-					slices.Equal(command.Arguments, []string{"--list", "--quiet"}):
+					len(command.Arguments) >= 2 &&
+					slices.Equal(command.Arguments[:2], []string{"--list", "--quiet"}):
 					return test.inventory, nil
+				case command.Executable == "wsl.exe" &&
+					slices.Equal(
+						command.Arguments,
+						[]string{"--list", "--running", "--quiet"},
+					):
+					return test.inventory, nil
+				case isGuestImageIdentityReadCommand(command):
+					return transport.Result{Stdout: marker}, nil
 				case isGuestMDSCommand(command):
 					return transport.Result{Stdout: guestPlanIdentityJSON(
 						test.wantTarget,
@@ -91,9 +116,10 @@ func TestGuestRuntimeHandoffUsesExactRevisionAndBoundedArgv(t *testing.T) {
 				Architecture:    "arm64",
 				Port:            port,
 				Delegate:        guestRuntimeDelegate{},
-				Spec:            test.spec,
+				Spec:            spec,
 				CLIRevision:     testGuestCLIRevision,
 				CatalogRevision: testGuestCatalogRevision,
+				OwnershipRoot:   ownershipRoot,
 			}
 
 			observation, err := runtime.Observe(context.Background(), test.action)
@@ -102,6 +128,18 @@ func TestGuestRuntimeHandoffUsesExactRevisionAndBoundedArgv(t *testing.T) {
 			}
 			if observation.State != adapters.StateReady {
 				t.Fatalf("observation = %+v, want ready", observation)
+			}
+			imageIdentityReads := 0
+			for _, command := range port.commands {
+				if isGuestImageIdentityReadCommand(command) {
+					imageIdentityReads++
+				}
+			}
+			if imageIdentityReads != 1 {
+				t.Fatalf(
+					"guest image identity reads = %d, want one authoritative probe",
+					imageIdentityReads,
+				)
 			}
 			handoff := findGuestMDSCommand(t, port.commands)
 			if !slices.Equal(handoff.Arguments, test.wantArgv) {
@@ -123,6 +161,104 @@ func TestGuestRuntimeHandoffUsesExactRevisionAndBoundedArgv(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestGuestRuntimeHandoffCarriesAndVerifiesPinnedImageIdentity(t *testing.T) {
+	const imageURL = "https://cloud-images.example/ubuntu-26.04-arm64.img"
+	imageSHA := strings.Repeat("a", 64)
+	action := planning.Action{
+		ID: "macos-host:local/lima", ComponentID: "lima",
+	}
+	spec, ownershipRoot, marker := ownedGuestFixture(
+		t,
+		action,
+		guest.Spec{Images: map[string]guest.ImageSpec{
+			"arm64": {URL: imageURL, SHA256: imageSHA},
+		}},
+	)
+	port := &guestRuntimePort{
+		result: func(command transport.Command) (transport.Result, error) {
+			switch {
+			case command.Executable == "limactl" &&
+				slices.Equal(command.Arguments, []string{"list", "--json"}):
+				return transport.Result{
+					Stdout: `{"name":"mds","status":"Running","arch":"aarch64","limaVersion":"2.1.1"}`,
+				}, nil
+			case isGuestImageIdentityReadCommand(command):
+				return transport.Result{Stdout: marker}, nil
+			case isGuestMDSCommand(command):
+				return transport.Result{Stdout: guestPlanIdentityJSONWithImage(
+					"lima-guest:mds",
+					testGuestCLIRevision,
+					testGuestCatalogRevision,
+					"sha256:"+imageSHA,
+					imageURL,
+					testGuestCreationNonce,
+				)}, nil
+			default:
+				return transport.Result{}, nil
+			}
+		},
+	}
+	runtime := hostadapter.GuestRuntime{
+		Architecture:    "arm64",
+		Port:            port,
+		Delegate:        guestRuntimeDelegate{},
+		Spec:            spec,
+		CLIRevision:     testGuestCLIRevision,
+		CatalogRevision: testGuestCatalogRevision,
+		OwnershipRoot:   ownershipRoot,
+	}
+
+	observation, err := runtime.Observe(context.Background(), action)
+	if err != nil {
+		t.Fatalf("Observe(): %v", err)
+	}
+	if observation.State != adapters.StateReady {
+		t.Fatalf("observation = %+v, want ready", observation)
+	}
+	handoff := findGuestMDSCommand(t, port.commands)
+	joined := strings.Join(handoff.Arguments, " ")
+	for _, expected := range []string{
+		"MDS_IMAGE_CREATION_NONCE=" + testGuestCreationNonce,
+		"MDS_IMAGE_REVISION=sha256:" + imageSHA,
+		"MDS_IMAGE_PROVENANCE=" + imageURL,
+	} {
+		if !strings.Contains(joined, expected) {
+			t.Fatalf("handoff argv = %q, want %q", joined, expected)
+		}
+	}
+
+	port.result = func(command transport.Command) (transport.Result, error) {
+		switch {
+		case command.Executable == "limactl" &&
+			slices.Equal(command.Arguments, []string{"list", "--json"}):
+			return transport.Result{
+				Stdout: `{"name":"mds","status":"Running","arch":"aarch64","limaVersion":"2.1.1"}`,
+			}, nil
+		case isGuestImageIdentityReadCommand(command):
+			return transport.Result{Stdout: marker}, nil
+		case isGuestMDSCommand(command):
+			return transport.Result{Stdout: guestPlanIdentityJSONWithImage(
+				"lima-guest:mds",
+				testGuestCLIRevision,
+				testGuestCatalogRevision,
+				"sha256:"+strings.Repeat("b", 64),
+				imageURL,
+				testGuestCreationNonce,
+			)}, nil
+		default:
+			return transport.Result{}, nil
+		}
+	}
+	observation, err = runtime.Observe(context.Background(), action)
+	if err != nil {
+		t.Fatalf("Observe(mismatch): %v", err)
+	}
+	if observation.State == adapters.StateReady ||
+		!strings.Contains(observation.Detail, "image revision mismatch") {
+		t.Fatalf("observation = %+v, want exact image mismatch", observation)
 	}
 }
 
@@ -166,6 +302,14 @@ func TestGuestRuntimeMissingOrStaleMDSWithoutReleaseMetadataRequiresAction(t *te
 	for _, test := range tests {
 		test := test
 		t.Run(test.name, func(t *testing.T) {
+			action := planning.Action{
+				ID: "macos-host:local/lima", ComponentID: "lima",
+			}
+			spec, ownershipRoot, marker := ownedGuestFixture(
+				t,
+				action,
+				guest.Spec{},
+			)
 			port := &guestRuntimePort{
 				result: func(command transport.Command) (transport.Result, error) {
 					switch {
@@ -174,6 +318,8 @@ func TestGuestRuntimeMissingOrStaleMDSWithoutReleaseMetadataRequiresAction(t *te
 						return transport.Result{
 							Stdout: `{"name":"mds","status":"Running","arch":"aarch64","limaVersion":"2.1.1"}`,
 						}, nil
+					case isGuestImageIdentityReadCommand(command):
+						return transport.Result{Stdout: marker}, nil
 					case isGuestMDSCommand(command):
 						return test.handoff()
 					default:
@@ -185,12 +331,10 @@ func TestGuestRuntimeMissingOrStaleMDSWithoutReleaseMetadataRequiresAction(t *te
 				Architecture:    "arm64",
 				Port:            port,
 				Delegate:        guestRuntimeDelegate{},
-				Spec:            guest.Spec{WSLDistribution: "Ubuntu-26.04"},
+				Spec:            spec,
 				CLIRevision:     testGuestCLIRevision,
 				CatalogRevision: testGuestCatalogRevision,
-			}
-			action := planning.Action{
-				ID: "macos-host:local/lima", ComponentID: "lima",
+				OwnershipRoot:   ownershipRoot,
 			}
 
 			observation, err := runtime.Observe(context.Background(), action)
@@ -227,6 +371,10 @@ func TestGuestRuntimeAutomaticallyBootstrapsReviewedLinuxArtifact(t *testing.T) 
 		artifactURL = "https://github.com/zzanghyunmoo/my-desk-setup/releases/download/v1.2.3/mds_1.2.3_linux_arm64.tar.gz"
 		artifactSHA = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 	)
+	action := planning.Action{
+		ID: "macos-host:local/lima", ComponentID: "lima",
+	}
+	spec, ownershipRoot, marker := ownedGuestFixture(t, action, guest.Spec{})
 	handoffAttempts := 0
 	port := &guestRuntimePort{
 		result: func(command transport.Command) (transport.Result, error) {
@@ -236,6 +384,8 @@ func TestGuestRuntimeAutomaticallyBootstrapsReviewedLinuxArtifact(t *testing.T) 
 				return transport.Result{
 					Stdout: `{"name":"mds","status":"Running","arch":"aarch64","limaVersion":"2.1.1"}`,
 				}, nil
+			case isGuestImageIdentityReadCommand(command):
+				return transport.Result{Stdout: marker}, nil
 			case isGuestBootstrapCommand(command):
 				return transport.Result{}, nil
 			case isGuestMDSCommand(command):
@@ -257,16 +407,15 @@ func TestGuestRuntimeAutomaticallyBootstrapsReviewedLinuxArtifact(t *testing.T) 
 		Architecture:    "arm64",
 		Port:            port,
 		Delegate:        guestRuntimeDelegate{},
-		Spec:            guest.Spec{WSLDistribution: "Ubuntu-26.04"},
+		Spec:            spec,
 		CLIRevision:     testGuestCLIRevision,
 		CatalogRevision: testGuestCatalogRevision,
+		OwnershipRoot:   ownershipRoot,
 		BootstrapArtifacts: map[string]hostadapter.GuestBootstrapArtifact{
 			"arm64": {URL: artifactURL, SHA256: artifactSHA},
 		},
 	}
-	if err := runtime.Apply(context.Background(), planning.Action{
-		ID: "macos-host:local/lima", ComponentID: "lima",
-	}); err != nil {
+	if err := runtime.Apply(context.Background(), action); err != nil {
 		t.Fatalf("Apply(): %v", err)
 	}
 	var bootstrap transport.Command
@@ -295,6 +444,10 @@ func TestGuestRuntimeAutomaticallyBootstrapsReviewedLinuxArtifact(t *testing.T) 
 
 func TestGuestRuntimeBootstrapPreservesUserOwnedMDS(t *testing.T) {
 	const artifactSHA = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	action := planning.Action{
+		ID: "macos-host:local/lima", ComponentID: "lima",
+	}
+	spec, ownershipRoot, marker := ownedGuestFixture(t, action, guest.Spec{})
 	port := &guestRuntimePort{
 		result: func(command transport.Command) (transport.Result, error) {
 			switch {
@@ -303,6 +456,8 @@ func TestGuestRuntimeBootstrapPreservesUserOwnedMDS(t *testing.T) {
 				return transport.Result{
 					Stdout: `{"name":"mds","status":"Running","arch":"aarch64","limaVersion":"2.1.1"}`,
 				}, nil
+			case isGuestImageIdentityReadCommand(command):
+				return transport.Result{Stdout: marker}, nil
 			case isGuestBootstrapCommand(command):
 				return transport.Result{
 					ExitCode: 73,
@@ -319,18 +474,17 @@ func TestGuestRuntimeBootstrapPreservesUserOwnedMDS(t *testing.T) {
 		Architecture:    "arm64",
 		Port:            port,
 		Delegate:        guestRuntimeDelegate{},
-		Spec:            guest.Spec{WSLDistribution: "Ubuntu-26.04"},
+		Spec:            spec,
 		CLIRevision:     testGuestCLIRevision,
 		CatalogRevision: testGuestCatalogRevision,
+		OwnershipRoot:   ownershipRoot,
 		BootstrapArtifacts: map[string]hostadapter.GuestBootstrapArtifact{
 			"arm64": {
 				URL: "https://example.invalid/mds.tar.gz", SHA256: artifactSHA,
 			},
 		},
 	}
-	err := runtime.Apply(context.Background(), planning.Action{
-		ID: "macos-host:local/lima", ComponentID: "lima",
-	})
+	err := runtime.Apply(context.Background(), action)
 	var actionRequired *adapters.ActionRequiredError
 	if !errors.As(err, &actionRequired) ||
 		!strings.Contains(actionRequired.Reason, "ownership marker") {
@@ -386,6 +540,72 @@ func isGuestBootstrapCommand(command transport.Command) bool {
 		strings.Contains(string(command.Stdin), "mds.guest-bootstrap/v1")
 }
 
+func isGuestImageIdentityReadCommand(command transport.Command) bool {
+	joined := strings.Join(command.Arguments, " ")
+	return strings.Contains(joined, "/usr/bin/stat -c") &&
+		strings.Contains(joined, "/etc/mds/image-identity-v1")
+}
+
+func ownedGuestFixture(
+	t *testing.T,
+	action planning.Action,
+	spec guest.Spec,
+) (guest.Spec, string, string) {
+	t.Helper()
+	if spec.WSLDistribution == "" {
+		spec.WSLDistribution = "Ubuntu-26.04"
+	}
+	provider := action.ComponentID
+	name := "mds"
+	imageURL := testGuestImageURL
+	imageSHA := testGuestImageSHA
+	switch provider {
+	case "lima":
+		if spec.Images == nil {
+			spec.Images = map[string]guest.ImageSpec{
+				"arm64": {URL: imageURL, SHA256: imageSHA},
+			}
+		} else {
+			imageURL = spec.Images["arm64"].URL
+			imageSHA = spec.Images["arm64"].SHA256
+		}
+	case "wsl":
+		name = spec.WSLDistribution
+		if spec.WSLImages == nil {
+			spec.WSLImages = map[string]guest.ImageSpec{
+				"arm64": {URL: imageURL, SHA256: imageSHA},
+			}
+		} else {
+			imageURL = spec.WSLImages["arm64"].URL
+			imageSHA = spec.WSLImages["arm64"].SHA256
+		}
+	default:
+		t.Fatalf("unsupported guest fixture provider %q", provider)
+	}
+	root := t.TempDir()
+	if err := guest.PublishOwnership(root, guest.Ownership{
+		Provider: provider, Name: name,
+		ImageURL: imageURL, ImageSHA256: imageSHA,
+		CreationNonce: testGuestCreationNonce,
+	}); err != nil {
+		t.Fatalf("PublishOwnership(): %v", err)
+	}
+	record, exists, err := guest.LoadOwnership(root, provider, name)
+	if err != nil || !exists {
+		t.Fatalf(
+			"LoadOwnership() record=%+v exists=%t error=%v",
+			record,
+			exists,
+			err,
+		)
+	}
+	marker := "schema=mds.guest-image/v2\n" +
+		"image_revision=sha256:" + imageSHA + "\n" +
+		"image_provenance=" + imageURL + "\n" +
+		"creation_nonce=" + record.CreationNonce + "\n"
+	return spec, root, marker
+}
+
 func findGuestMDSCommand(
 	t *testing.T,
 	commands []transport.Command,
@@ -405,6 +625,24 @@ func guestPlanIdentityJSON(
 	cliRevision,
 	catalogRevision string,
 ) string {
+	return guestPlanIdentityJSONWithImage(
+		targetID,
+		cliRevision,
+		catalogRevision,
+		"sha256:"+testGuestImageSHA,
+		testGuestImageURL,
+		testGuestCreationNonce,
+	)
+}
+
+func guestPlanIdentityJSONWithImage(
+	targetID,
+	cliRevision,
+	catalogRevision,
+	imageRevision,
+	imageProvenance,
+	imageCreationNonce string,
+) string {
 	id, _ := target.ParseID(targetID)
 	encoded, _ := json.Marshal(struct {
 		CatalogRevision string       `json:"catalog_revision"`
@@ -412,9 +650,9 @@ func guestPlanIdentityJSON(
 	}{
 		CatalogRevision: catalogRevision,
 		Target: target.Facts{
-			ID:              id,
-			CLIRevision:     cliRevision,
-			CatalogRevision: catalogRevision,
+			ID: id, CLIRevision: cliRevision, CatalogRevision: catalogRevision,
+			ImageRevision: imageRevision, ImageProvenance: imageProvenance,
+			ImageCreationNonce: imageCreationNonce,
 		},
 	})
 	return string(encoded)

@@ -33,6 +33,11 @@ metadata SRI를 검증한 뒤 exact SHA-256을 계산한다. rate limit, DNS fai
 metadata/content substitution, unsupported provider와 no-change candidate는
 lock/state를 바꾸지 않고 실패한다.
 
+모든 metadata/provenance/artifact URL은 userinfo·query·fragment가 없는
+absolute HTTPS여야 한다. redirect, timeout과 response-size cap 초과는 typed
+`unreachable`/`invalid` failure로 닫고 persisted diagnostic에는 credential
+형태의 값이나 raw URL을 남기지 않는다.
+
 ## Reviewed candidate
 
 재현 가능한 적용에는 exact candidate JSON을 권장한다.
@@ -108,8 +113,14 @@ target receipt를 제공한다. Git commit은 자동으로 만들지 않는다.
 
 update는 state root의 catalog-scoped writer lease를 먼저 획득하고 target writer
 lease를 다음에 획득한다. 두 lease 아래에서 catalog와 target preimage를 다시
-검증한 뒤 lock file 게시와 target reconcile을 수행하므로, 경쟁에서 진 update는
-catalog lock이나 target을 변경하지 않는다.
+검증한 뒤 old/new lock과 transaction intent를 기록한다. candidate target을
+먼저 reconcile·verify하고 new lock을 마지막에 atomic publish하므로 경쟁에서
+진 update는 catalog lock이나 target을 변경하지 않는다.
+
+mise-managed component는 v1 update 대상이 아니다. 해당 update는
+`versions.lock.yaml`, `mise.toml`, `mise.lock`의 3-file atomic transaction이
+구현되기 전까지 preview/apply 모두 fail closed한다. 새 버전은 세 파일을 함께
+리뷰해 수동 commit하고, 변경된 catalog revision으로 plan을 다시 만든다.
 
 전역 lock은 현재 머신 한 대만을 위한 상태가 아니다. preview와 apply는
 candidate component가 지원되는 macOS host, Windows host, WSL guest와 Lima
@@ -141,9 +152,9 @@ normal apply가 lock file을 쓰거나 upstream metadata를 조회하면 invaria
 위반이다.
 
 normal apply와 update apply는 committed/reviewed lock의 exact npm tarball을
-bounded download하고 SRI와 SHA-256을 모두 검증한다. 검증이 끝난 local `.tgz`
-경로만 `bun add --global`에 전달하며 `package@version`을 registry에서 다시
-resolve하지 않는다. 검증 실패 시 Bun은 실행되지 않는다.
+redirect 없이 bounded download하고 SRI와 SHA-256을 모두 검증한다. 검증이
+끝난 local `.tgz` 경로만 `bun add --global`에 전달하며 `package@version`을
+registry에서 다시 resolve하지 않는다. 검증 실패 시 Bun은 실행되지 않는다.
 
 ## 실패와 재개
 
@@ -153,9 +164,13 @@ update 실패 뒤에는 다음 세 identity를 따로 확인한다.
 2. target에서 관찰한 installed version
 3. receipt의 verified version
 
-기존 complete receipt를 삭제하지 않고 partial result와 함께 보존한다. 현재
-lock이 이미 변경됐다면 old preview digest를 재사용하지 말고 새 catalog
-preimage로 update plan을 다시 만든다.
+기존 complete receipt를 삭제하지 않고 partial result와 transaction intent를
+함께 보존한다. target mutation 뒤 lock publication 전에 중단되면 동일
+`--catalog`, component/candidate와 `--plan-digest`로 같은 command를 다시
+실행한다. 재실행은 old/new lock과 actual target을 관찰해 duplicate mutation
+없이 lock publication을 완료하거나 typed recovery action을 반환한다. intent와
+입력이 다르거나 catalog가 외부에서 바뀌었다면 old digest를 재사용하지 말고
+conflict를 해소한 뒤 새 preview를 만든다.
 
 user-owned NvChad config나 launcher는 explicit update에서도 자동 교체하지
 않는다. `mds` ownership marker가 있는 managed path만 replace 대상이다.

@@ -37,6 +37,122 @@ else {
 }
 $url = "$baseUrl/$archiveName"
 
+function Get-BoundedHttpsFile {
+    param(
+        [Parameter(Mandatory = $true)][string]$Uri,
+        [Parameter(Mandatory = $true)][string]$Destination,
+        [long]$MaximumBytes = 536870912,
+        [TimeSpan]$Timeout = [TimeSpan]::FromMinutes(10),
+        [object]$Handler = $null
+    )
+    if ($Timeout -le [TimeSpan]::Zero) {
+        throw "Release download timeout must be positive."
+    }
+    $parsed = [System.Uri]::new($Uri)
+    if ($parsed.Scheme -cne "https" -or
+        -not [string]::IsNullOrEmpty($parsed.UserInfo) -or
+        -not [string]::IsNullOrEmpty($parsed.Query) -or
+        -not [string]::IsNullOrEmpty($parsed.Fragment)) {
+        throw "Release URL must be credential-free HTTPS without query or fragment."
+    }
+    Add-Type -AssemblyName System.Net.Http
+    $ownsHandler = $null -eq $Handler
+    if ($ownsHandler) {
+        $Handler = [System.Net.Http.HttpClientHandler]::new()
+        $Handler.AllowAutoRedirect = $false
+    }
+    $client = [System.Net.Http.HttpClient]::new(
+        [System.Net.Http.HttpMessageHandler]$Handler,
+        $false
+    )
+    $client.Timeout = [System.Threading.Timeout]::InfiniteTimeSpan
+    $cancellation = [System.Threading.CancellationTokenSource]::new()
+    $cancellation.CancelAfter($Timeout)
+    try {
+        for ($redirectCount = 0; $redirectCount -le 3; $redirectCount++) {
+            $response = $client.GetAsync(
+                $parsed,
+                [System.Net.Http.HttpCompletionOption]::ResponseHeadersRead,
+                $cancellation.Token
+            ).GetAwaiter().GetResult()
+            try {
+                if ([int]$response.StatusCode -ge 300 -and
+                    [int]$response.StatusCode -lt 400) {
+                    if ($redirectCount -eq 3 -or
+                        $null -eq $response.Headers.Location) {
+                        throw "Release download exceeded the bounded redirect policy."
+                    }
+                    $next = if ($response.Headers.Location.IsAbsoluteUri) {
+                        $response.Headers.Location
+                    }
+                    else {
+                        [System.Uri]::new($parsed, $response.Headers.Location)
+                    }
+                    if ($next.Scheme -cne "https" -or
+                        -not [string]::IsNullOrEmpty($next.UserInfo) -or
+                        -not [string]::IsNullOrEmpty($next.Fragment)) {
+                        throw "Release redirect must remain credential-free HTTPS."
+                    }
+                    $parsed = $next
+                    continue
+                }
+                $response.EnsureSuccessStatusCode()
+                if ($response.Content.Headers.ContentLength -and
+                    $response.Content.Headers.ContentLength -gt $MaximumBytes) {
+                    throw "Release archive exceeds $MaximumBytes bytes."
+                }
+                $inputStream = $response.Content.ReadAsStreamAsync().GetAwaiter().GetResult()
+                try {
+                    $outputStream = [System.IO.File]::Open(
+                        $Destination,
+                        [System.IO.FileMode]::CreateNew,
+                        [System.IO.FileAccess]::Write,
+                        [System.IO.FileShare]::None
+                    )
+                    try {
+                        $buffer = New-Object byte[] 81920
+                        [long]$total = 0
+                        while (($read = $inputStream.ReadAsync(
+                            $buffer,
+                            0,
+                            $buffer.Length,
+                            $cancellation.Token
+                        ).GetAwaiter().GetResult()) -gt 0) {
+                            $total += $read
+                            if ($total -gt $MaximumBytes) {
+                                throw "Release archive exceeds $MaximumBytes bytes."
+                            }
+                            $outputStream.Write($buffer, 0, $read)
+                        }
+                        $outputStream.Flush($true)
+                    }
+                    finally {
+                        $outputStream.Dispose()
+                    }
+                }
+                finally {
+                    $inputStream.Dispose()
+                }
+                return
+            }
+            finally {
+                $response.Dispose()
+            }
+        }
+    }
+    finally {
+        $cancellation.Dispose()
+        $client.Dispose()
+        if ($ownsHandler) {
+            $Handler.Dispose()
+        }
+    }
+}
+
+if ($env:MDS_BOOTSTRAP_LIBRARY_ONLY -eq "1") {
+    return
+}
+
 try {
     New-Item -ItemType Directory -Path $temporary | Out-Null
     if ($env:MDS_ARCHIVE) {
@@ -48,7 +164,7 @@ try {
         Copy-Item -LiteralPath $sourceArchive.FullName -Destination $archive
     }
     else {
-        Invoke-WebRequest -UseBasicParsing -Uri $url -OutFile $archive
+        Get-BoundedHttpsFile -Uri $url -Destination $archive
     }
     $actual = (Get-FileHash -Algorithm SHA256 -Path $archive).Hash.ToLowerInvariant()
     if ($actual -ne $env:MDS_SHA256.ToLowerInvariant()) {

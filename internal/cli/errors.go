@@ -8,7 +8,10 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/zzanghyunmoo/my-desk-setup/internal/adapters"
+	"github.com/zzanghyunmoo/my-desk-setup/internal/execution"
 	"github.com/zzanghyunmoo/my-desk-setup/internal/output"
+	updateflow "github.com/zzanghyunmoo/my-desk-setup/internal/update"
 )
 
 const ErrorSchema = "mds.error/v1"
@@ -119,6 +122,23 @@ func unreachable(err error) error {
 	return classifiedError(unreachableClass, err)
 }
 
+func updateError(err error) error {
+	var existing *commandError
+	if errors.As(err, &existing) {
+		return err
+	}
+	switch updateflow.KindOf(err) {
+	case updateflow.ErrorInvalid:
+		return invalidInput(err)
+	case updateflow.ErrorStale:
+		return stalePlan(err)
+	case updateflow.ErrorUnreachable:
+		return unreachable(err)
+	default:
+		return err
+	}
+}
+
 func classifiedError(class errorClass, err error) error {
 	var existing *commandError
 	if errors.As(err, &existing) {
@@ -131,6 +151,13 @@ func classifyError(err error) *commandError {
 	var classified *commandError
 	if errors.As(err, &classified) {
 		return classified
+	}
+	var required *adapters.ActionRequiredError
+	if errors.As(err, &required) {
+		return &commandError{class: actionRequiredClass, cause: err}
+	}
+	if execution.IsStalePlan(err) {
+		return &commandError{class: stalePlanClass, cause: err}
 	}
 	return &commandError{class: internalClass, cause: err}
 }

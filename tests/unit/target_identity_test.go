@@ -2,8 +2,6 @@ package unit_test
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"os"
 	"path/filepath"
@@ -46,6 +44,35 @@ func TestTargetIdentityIsStableWhileFingerprintTracksFacts(t *testing.T) {
 	}
 }
 
+func TestTargetFingerprintExcludesVolatileReadinessFacts(t *testing.T) {
+	id, _ := target.NewID(target.KindLimaGuest, "dev")
+	before := target.Facts{
+		ID: id, OS: "linux", OSVersion: "26.04", Architecture: "arm64",
+		ImageRevision: "sha256:image", ImageProvenance: "https://example.invalid/image",
+		Reachable: true, SystemdSupported: true, SystemdActive: true,
+	}
+	after := before
+	after.Reachable = false
+	after.SystemdSupported = false
+	after.SystemdActive = false
+
+	beforeFingerprint, err := before.Fingerprint()
+	if err != nil {
+		t.Fatalf("before fingerprint: %v", err)
+	}
+	afterFingerprint, err := after.Fingerprint()
+	if err != nil {
+		t.Fatalf("after fingerprint: %v", err)
+	}
+	if beforeFingerprint != afterFingerprint {
+		t.Fatalf("volatile readiness changed stable fingerprint: %s != %s", beforeFingerprint, afterFingerprint)
+	}
+	if err := after.ApplyPreflight(); err == nil ||
+		!strings.Contains(err.Error(), "not reachable") {
+		t.Fatalf("ApplyPreflight() error = %v, want reachability failure", err)
+	}
+}
+
 func TestSelectRequiresExplicitTargetWhenMultipleExist(t *testing.T) {
 	firstID, _ := target.NewID(target.KindWSLGuest, "Ubuntu-26.04")
 	secondID, _ := target.NewID(target.KindWSLGuest, "work")
@@ -66,8 +93,15 @@ func TestSelectRequiresExplicitTargetWhenMultipleExist(t *testing.T) {
 
 func TestDiscoverLocalGuestDoesNotConfuseHost(t *testing.T) {
 	environment := target.GetenvFunc(func(key string) string {
-		if key == "WSL_DISTRO_NAME" {
+		switch key {
+		case "WSL_DISTRO_NAME":
 			return "Ubuntu-26.04"
+		case "MDS_IMAGE_REVISION":
+			return "sha256:reviewed"
+		case "MDS_IMAGE_PROVENANCE":
+			return "https://example.invalid/ubuntu.wsl"
+		case "MDS_IMAGE_CREATION_NONCE":
+			return strings.Repeat("b", 64)
 		}
 		return ""
 	})
@@ -77,6 +111,48 @@ func TestDiscoverLocalGuestDoesNotConfuseHost(t *testing.T) {
 	}
 	if facts.ID.Kind != target.KindWSLGuest || facts.ID.Name != "Ubuntu-26.04" {
 		t.Fatalf("facts ID = %v, want WSL guest", facts.ID)
+	}
+	if facts.ImageRevision != "sha256:reviewed" ||
+		facts.ImageProvenance != "https://example.invalid/ubuntu.wsl" ||
+		facts.ImageCreationNonce != strings.Repeat("b", 64) {
+		t.Fatalf("image identity = %+v, want host-verified provenance and nonce", facts)
+	}
+}
+
+func TestParseGuestImageIdentityRequiresExactPinnedIdentity(t *testing.T) {
+	digest := strings.Repeat("a", 64)
+	nonce := strings.Repeat("b", 64)
+	identity, err := target.ParseImageIdentity([]byte(
+		"schema=mds.guest-image/v2\n" +
+			"image_revision=sha256:" + digest + "\n" +
+			"image_provenance=https://cloud-images.example/ubuntu.img\n" +
+			"creation_nonce=" + nonce + "\n",
+	))
+	if err != nil {
+		t.Fatalf("ParseImageIdentity(): %v", err)
+	}
+	if identity.Revision != "sha256:"+digest ||
+		identity.Provenance != "https://cloud-images.example/ubuntu.img" ||
+		identity.CreationNonce != nonce {
+		t.Fatalf("image identity = %+v", identity)
+	}
+	for _, content := range []string{
+		"schema=mds.guest-image/v2\nimage_revision=sha256:" + digest +
+			"\nimage_provenance=https://user:secret@example.invalid/image\n" +
+			"creation_nonce=" + nonce + "\n",
+		"schema=mds.guest-image/v2\nimage_revision=sha256:short\n" +
+			"image_provenance=https://example.invalid/image\n" +
+			"creation_nonce=" + nonce + "\n",
+		"schema=mds.guest-image/v2\nimage_revision=sha256:" + digest +
+			"\nimage_provenance=https://example.invalid/image?moving=1\n" +
+			"creation_nonce=" + nonce + "\n",
+		"schema=mds.guest-image/v2\nimage_revision=sha256:" + digest +
+			"\nimage_provenance=https://example.invalid/image\n" +
+			"creation_nonce=short\n",
+	} {
+		if _, err := target.ParseImageIdentity([]byte(content)); err == nil {
+			t.Fatalf("ParseImageIdentity(%q) succeeded", content)
+		}
 	}
 }
 
@@ -160,17 +236,21 @@ func TestObserveLocalRequiresUbuntu2604AndDetectsSystemd(t *testing.T) {
 	id, _ := target.NewID(target.KindLimaGuest, "mds")
 	facts, err := target.ObserveLocal(
 		context.Background(),
-		target.Facts{ID: id, OS: "linux", Architecture: "arm64"},
+		target.Facts{
+			ID: id, OS: "linux", Architecture: "arm64",
+			ImageRevision:   "sha256:reviewed-image",
+			ImageProvenance: "https://example.invalid/ubuntu-26.04.img",
+		},
 		targetObservationPort{},
 		release,
 	)
 	if err != nil {
 		t.Fatalf("ObserveLocal(): %v", err)
 	}
-	imageSum := sha256.Sum256(releaseContent)
 	if facts.OSVersion != "26.04" ||
 		facts.RuntimeVersion != "6.17.0-mds" ||
-		facts.ImageRevision != "sha256:"+hex.EncodeToString(imageSum[:]) ||
+		facts.ImageRevision != "sha256:reviewed-image" ||
+		facts.ImageProvenance != "https://example.invalid/ubuntu-26.04.img" ||
 		!facts.SystemdSupported ||
 		!facts.SystemdActive {
 		t.Fatalf(

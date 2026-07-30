@@ -8,6 +8,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -66,6 +67,9 @@ func TestHostAllContainsNoGuestToolchainOrAuthCommand(t *testing.T) {
 }
 
 func TestLimaRuntimeCreatesPinnedUbuntuGuest(t *testing.T) {
+	imageURL := "https://cloud-images.example/ubuntu-26.04-arm64.img"
+	imageSHA256 := strings.Repeat("a", 64)
+	ownershipRoot := t.TempDir()
 	port := &recordingPort{
 		result: func(command transport.Command) transport.Result {
 			if command.Executable == "limactl" &&
@@ -76,6 +80,24 @@ func TestLimaRuntimeCreatesPinnedUbuntuGuest(t *testing.T) {
 			if isHostRuntimeMDSCommand(command) {
 				return transport.Result{Stdout: hostRuntimePlanIdentity(
 					"lima-guest:mds",
+					imageURL,
+					imageSHA256,
+					ownershipNonce(
+						t,
+						ownershipRoot,
+						"lima",
+						"mds",
+					),
+				)}
+			}
+			if isGuestImageIdentityReadCommand(command) {
+				return transport.Result{Stdout: guestImageIdentityMarkerFromOwnership(
+					t,
+					ownershipRoot,
+					"lima",
+					"mds",
+					imageURL,
+					imageSHA256,
 				)}
 			}
 			return transport.Result{}
@@ -88,12 +110,13 @@ func TestLimaRuntimeCreatesPinnedUbuntuGuest(t *testing.T) {
 		},
 		CLIRevision:     hostRuntimeCLIRevision,
 		CatalogRevision: hostRuntimeCatalogRevision,
+		OwnershipRoot:   ownershipRoot,
 		Spec: guest.Spec{
 			WSLDistribution: "Ubuntu-26.04",
 			Images: map[string]guest.ImageSpec{
 				"arm64": {
-					URL:    "https://cloud-images.example/ubuntu-26.04-arm64.img",
-					SHA256: strings.Repeat("a", 64),
+					URL:    imageURL,
+					SHA256: imageSHA256,
 				},
 			},
 		},
@@ -105,14 +128,30 @@ func TestLimaRuntimeCreatesPinnedUbuntuGuest(t *testing.T) {
 	}
 	joined := recordedArgv(port.commands)
 	for _, expected := range []string{
-		"limactl create --name mds",
-		".images[0].location=https://cloud-images.example/ubuntu-26.04-arm64.img",
-		".images[0].digest=sha256:" + strings.Repeat("a", 64),
+		"limactl create --name mds -",
 		"limactl start mds",
 	} {
 		if !strings.Contains(joined, expected) {
 			t.Fatalf("commands do not contain %q:\n%s", expected, joined)
 		}
+	}
+	var template string
+	for _, command := range port.commands {
+		if command.Executable == "limactl" &&
+			len(command.Arguments) > 0 &&
+			command.Arguments[0] == "create" {
+			template = string(command.Stdin)
+		}
+	}
+	if !strings.Contains(template, "location: "+imageURL) ||
+		!strings.Contains(template, "digest: sha256:"+imageSHA256) ||
+		!strings.Contains(template, "mode: system") ||
+		!strings.Contains(template, "schema=mds.guest-image/v2") ||
+		!strings.Contains(template, "image_revision=sha256:"+imageSHA256) ||
+		!strings.Contains(template, "image_provenance="+imageURL) ||
+		!strings.Contains(template, "creation_nonce=") ||
+		strings.Count(template, "- location:") != 1 {
+		t.Fatalf("Lima create template is not the reviewed one-image template:\n%s", template)
 	}
 }
 
@@ -126,6 +165,7 @@ func TestWSLRuntimeInstallsCanonicalGuestWithoutAuth(t *testing.T) {
 		_, _ = writer.Write(image)
 	}))
 	defer server.Close()
+	ownershipRoot := t.TempDir()
 	port := &recordingPort{
 		result: func(command transport.Command) transport.Result {
 			if command.Executable == "wsl.exe" &&
@@ -136,6 +176,24 @@ func TestWSLRuntimeInstallsCanonicalGuestWithoutAuth(t *testing.T) {
 			if isHostRuntimeMDSCommand(command) {
 				return transport.Result{Stdout: hostRuntimePlanIdentity(
 					"wsl-guest:Ubuntu-26.04",
+					server.URL+"/ubuntu-26.04.wsl",
+					hex.EncodeToString(imageSum[:]),
+					ownershipNonce(
+						t,
+						ownershipRoot,
+						"wsl",
+						"Ubuntu-26.04",
+					),
+				)}
+			}
+			if isGuestImageIdentityReadCommand(command) {
+				return transport.Result{Stdout: guestImageIdentityMarkerFromOwnership(
+					t,
+					ownershipRoot,
+					"wsl",
+					"Ubuntu-26.04",
+					server.URL+"/ubuntu-26.04.wsl",
+					hex.EncodeToString(imageSum[:]),
 				)}
 			}
 			return transport.Result{}
@@ -158,6 +216,7 @@ func TestWSLRuntimeInstallsCanonicalGuestWithoutAuth(t *testing.T) {
 		Client:          server.Client(),
 		CLIRevision:     hostRuntimeCLIRevision,
 		CatalogRevision: hostRuntimeCatalogRevision,
+		OwnershipRoot:   ownershipRoot,
 	}
 	if err := runtime.Apply(context.Background(), planning.Action{
 		ID: "windows-host:local/wsl", ComponentID: "wsl",
@@ -169,7 +228,14 @@ func TestWSLRuntimeInstallsCanonicalGuestWithoutAuth(t *testing.T) {
 		"wsl.exe --install --no-distribution",
 		"wsl.exe --install --from-file",
 		"--name Ubuntu-26.04 --no-launch",
-		"wsl.exe --distribution Ubuntu-26.04 --exec true",
+		"wsl.exe --distribution Ubuntu-26.04 --user root --exec /bin/sh",
+		"/etc/mds/image-identity-v1",
+		"sha256:" + hex.EncodeToString(imageSum[:]),
+		server.URL + "/ubuntu-26.04.wsl",
+		"wsl.exe --distribution Ubuntu-26.04 --exec /bin/sh -eu -c",
+		"/usr/bin/id -u",
+		"/usr/bin/cut -d: -f6",
+		`[ "$uid" -ne 0 ]`,
 	} {
 		if !strings.Contains(joined, expected) {
 			t.Fatalf("commands do not contain %q:\n%s", expected, joined)
@@ -193,6 +259,7 @@ func TestWSLRuntimeRejectsPinnedImageChecksumMismatchBeforeInstall(t *testing.T)
 		_, _ = writer.Write([]byte("tampered WSL image"))
 	}))
 	defer server.Close()
+	ownershipRoot := t.TempDir()
 	port := &recordingPort{
 		result: func(command transport.Command) transport.Result {
 			if command.Executable == "wsl.exe" &&
@@ -221,6 +288,7 @@ func TestWSLRuntimeRejectsPinnedImageChecksumMismatchBeforeInstall(t *testing.T)
 		Client:          server.Client(),
 		CLIRevision:     hostRuntimeCLIRevision,
 		CatalogRevision: hostRuntimeCatalogRevision,
+		OwnershipRoot:   ownershipRoot,
 	}
 	err := runtime.Apply(context.Background(), planning.Action{
 		ID: "windows-host:local/wsl", ComponentID: "wsl",
@@ -244,6 +312,24 @@ func TestProductionHostAdapterRequiresMatchingGuestRuntimeRevision(t *testing.T)
 	if err != nil {
 		t.Fatalf("Revision(): %v", err)
 	}
+	image := environment.Targets["ubuntu-26.04"].Images["arm64"]
+	home := t.TempDir()
+	ownershipRoot := filepath.Join(
+		home,
+		".local",
+		"state",
+		"my-desk-setup",
+		"guest-ownership",
+	)
+	if err := guest.PublishOwnership(
+		ownershipRoot,
+		guest.Ownership{
+			Provider: "lima", Name: "mds",
+			ImageURL: image.URL, ImageSHA256: image.SHA256,
+		},
+	); err != nil {
+		t.Fatalf("PublishOwnership(): %v", err)
+	}
 	port := &recordingPort{
 		result: func(command transport.Command) transport.Result {
 			switch {
@@ -258,6 +344,23 @@ func TestProductionHostAdapterRequiresMatchingGuestRuntimeRevision(t *testing.T)
 					"lima-guest:mds",
 					version.String(),
 					catalogRevision,
+					image.URL,
+					image.SHA256,
+					ownershipNonce(
+						t,
+						ownershipRoot,
+						"lima",
+						"mds",
+					),
+				)}
+			case isGuestImageIdentityReadCommand(command):
+				return transport.Result{Stdout: guestImageIdentityMarkerFromOwnership(
+					t,
+					ownershipRoot,
+					"lima",
+					"mds",
+					image.URL,
+					image.SHA256,
 				)}
 			default:
 				return transport.Result{Stdout: "limactl version 2.1.1\n"}
@@ -267,7 +370,7 @@ func TestProductionHostAdapterRequiresMatchingGuestRuntimeRevision(t *testing.T)
 	component, err := hostadapter.New(
 		environment,
 		port,
-		t.TempDir(),
+		home,
 		"darwin",
 		"arm64",
 		false,
@@ -290,6 +393,19 @@ func TestProductionHostAdapterRequiresMatchingGuestRuntimeRevision(t *testing.T)
 	if observation.State != adapters.StateReady {
 		t.Fatalf("observation = %+v, want matching production handoff ready", observation)
 	}
+	identityReads := 0
+	for _, command := range port.commands {
+		if isGuestImageIdentityReadCommand(command) {
+			identityReads++
+		}
+	}
+	if identityReads != 1 {
+		t.Fatalf(
+			"guest image identity marker reads = %d, want exactly one: %+v",
+			identityReads,
+			port.commands,
+		)
+	}
 	if !isHostRuntimeMDSCommand(port.commands[len(port.commands)-1]) {
 		t.Fatalf("production adapter did not execute guest-local mds: %+v", port.commands)
 	}
@@ -305,18 +421,29 @@ func isHostRuntimeMDSCommand(command transport.Command) bool {
 	return false
 }
 
-func hostRuntimePlanIdentity(targetID string) string {
+func hostRuntimePlanIdentity(
+	targetID,
+	imageURL,
+	imageSHA256,
+	imageCreationNonce string,
+) string {
 	return hostRuntimePlanIdentityWithRevisions(
 		targetID,
 		hostRuntimeCLIRevision,
 		hostRuntimeCatalogRevision,
+		imageURL,
+		imageSHA256,
+		imageCreationNonce,
 	)
 }
 
 func hostRuntimePlanIdentityWithRevisions(
 	targetID,
 	cliRevision,
-	catalogRevision string,
+	catalogRevision,
+	imageURL,
+	imageSHA256,
+	imageCreationNonce string,
 ) string {
 	id, _ := target.ParseID(targetID)
 	encoded, _ := json.Marshal(struct {
@@ -325,12 +452,34 @@ func hostRuntimePlanIdentityWithRevisions(
 	}{
 		CatalogRevision: catalogRevision,
 		Target: target.Facts{
-			ID:              id,
-			CLIRevision:     cliRevision,
-			CatalogRevision: catalogRevision,
+			ID:                 id,
+			CLIRevision:        cliRevision,
+			CatalogRevision:    catalogRevision,
+			ImageRevision:      "sha256:" + imageSHA256,
+			ImageProvenance:    imageURL,
+			ImageCreationNonce: imageCreationNonce,
 		},
 	})
 	return string(encoded)
+}
+
+func ownershipNonce(
+	t *testing.T,
+	root,
+	provider,
+	name string,
+) string {
+	t.Helper()
+	record, exists, err := guest.LoadOwnership(root, provider, name)
+	if err != nil || !exists {
+		t.Fatalf(
+			"LoadOwnership() record=%+v exists=%t error=%v",
+			record,
+			exists,
+			err,
+		)
+	}
+	return record.CreationNonce
 }
 
 func TestWindowsDesktopUsesWinGetInventoryWithoutLaunchingApp(t *testing.T) {
