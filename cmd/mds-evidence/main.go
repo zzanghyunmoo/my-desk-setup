@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -11,6 +10,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/zzanghyunmoo/my-desk-setup/internal/evidence"
+	"github.com/zzanghyunmoo/my-desk-setup/internal/output"
 )
 
 func main() {
@@ -167,8 +167,5 @@ func writeJSON(writer io.Writer, value any) error {
 	if writer == nil {
 		return errors.New("output writer is required")
 	}
-	encoder := json.NewEncoder(writer)
-	encoder.SetEscapeHTML(false)
-	encoder.SetIndent("", "  ")
-	return encoder.Encode(value)
+	return output.JSON(writer, value)
 }

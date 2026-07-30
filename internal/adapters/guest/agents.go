@@ -149,7 +149,7 @@ func (agent Agent) launcher(action planning.Action) (string, string, error) {
 		return "", "", errors.New("agent verification command is required")
 	}
 	executable := action.Verification[0][0]
-	if strings.ContainsAny(executable, `/\`) || executable == "." || executable == ".." {
+	if !adapters.ValidExecutableName(executable) {
 		return "", "", fmt.Errorf("invalid agent executable %q", executable)
 	}
 	underlying := filepath.Join(agent.Home, ".local", "share", "bun", "bin", executable)
@@ -158,12 +158,8 @@ func (agent Agent) launcher(action planning.Action) (string, string, error) {
 		"# Managed by my-desk-setup. Authentication remains user-owned.",
 		"export DISABLE_AUTOUPDATER=1",
 		"export OPENCODE_DISABLE_AUTOUPDATE=1",
-		"exec " + shellSingleQuote(underlying) + ` "$@"`,
+		"exec " + adapters.ShellSingleQuote(underlying) + ` "$@"`,
 		"",
 	}, "\n")
 	return filepath.Join(agent.Home, ".local", "bin", executable), content, nil
-}
-
-func shellSingleQuote(value string) string {
-	return "'" + strings.ReplaceAll(value, "'", `'"'"'`) + "'"
 }

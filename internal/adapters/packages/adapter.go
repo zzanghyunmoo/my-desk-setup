@@ -224,8 +224,6 @@ func (adapter Adapter) environment() map[string]string {
 }
 
 func firstLine(value string) string {
-	if newline := strings.IndexByte(value, '\n'); newline >= 0 {
-		return strings.TrimSpace(value[:newline])
-	}
-	return strings.TrimSpace(value)
+	line, _, _ := strings.Cut(value, "\n")
+	return strings.TrimSpace(line)
 }

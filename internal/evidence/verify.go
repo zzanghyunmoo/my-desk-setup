@@ -24,17 +24,12 @@ import (
 const maxEvidenceFileSize = 4 << 20
 
 var (
-	expectedFiles = []string{
-		ChecksumsFile,
-		DoctorFile,
-		ManifestFile,
-		PlanFile,
-	}
 	checksummedFiles = []string{
 		DoctorFile,
 		ManifestFile,
 		PlanFile,
 	}
+	expectedFiles = append([]string{ChecksumsFile}, checksummedFiles...)
 )
 
 func Verify(root string, options VerifyOptions) (Manifest, error) {

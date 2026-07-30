@@ -38,9 +38,7 @@ func (adapter Adapter) launcherSpecs(
 		if executable == "bun" || executable == "mise" || seen[executable] {
 			continue
 		}
-		if strings.ContainsAny(executable, `/\`) ||
-			executable == "." ||
-			executable == ".." {
+		if !adapters.ValidExecutableName(executable) {
 			return nil, fmt.Errorf("invalid managed executable %q", executable)
 		}
 		seen[executable] = true
@@ -62,7 +60,7 @@ func (adapter Adapter) launcherSpecs(
 			content: strings.Join([]string{
 				"#!/bin/sh",
 				"# Managed by my-desk-setup.",
-				"exec " + shellSingleQuote(source) + ` "$@"`,
+				"exec " + adapters.ShellSingleQuote(source) + ` "$@"`,
 				"",
 			}, "\n"),
 		})
@@ -145,8 +143,4 @@ func publishLaunchers(specs []launcherSpec) error {
 		}
 	}
 	return nil
-}
-
-func shellSingleQuote(value string) string {
-	return "'" + strings.ReplaceAll(value, "'", `'"'"'`) + "'"
 }

@@ -32,6 +32,15 @@ func ResolveSelection(
 		return nil, fmt.Errorf("unknown target %q", target)
 	}
 	components, capabilities := index(environment)
+	return resolveSelection(components, capabilities, selection, target)
+}
+
+func resolveSelection(
+	components map[string]Component,
+	capabilities map[string]string,
+	selection []string,
+	target TargetKind,
+) ([]ResolvedComponent, error) {
 	selected := make(map[string]bool)
 	visiting := make(map[string]bool)
 	var ordered []string
@@ -77,15 +86,14 @@ func ResolveSelection(
 }
 
 func resolveAll(environment Environment, target TargetKind) []ResolvedComponent {
-	components, _ := index(environment)
+	components, capabilities := index(environment)
 	ids := make([]string, 0, len(components))
 	for id, component := range components {
 		if component.Targets[target].Status != StatusUnsupported {
 			ids = append(ids, id)
 		}
 	}
-	sort.Strings(ids)
-	resolved, err := ResolveSelection(environment, ids, target)
+	resolved, err := resolveSelection(components, capabilities, ids, target)
 	if err != nil {
 		return nil
 	}

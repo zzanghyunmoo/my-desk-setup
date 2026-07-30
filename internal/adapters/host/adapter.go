@@ -32,8 +32,8 @@ func New(
 		return nil, err
 	}
 	runtime := GuestRuntime{
-		HostOS: platform, Architecture: architecture,
-		Port: port, Delegate: packagesAdapter, Spec: spec,
+		Architecture: architecture,
+		Port:         port, Delegate: packagesAdapter, Spec: spec,
 	}
 	byID := map[string]adapters.Component{
 		"lima": runtime,

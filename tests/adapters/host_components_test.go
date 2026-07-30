@@ -56,7 +56,7 @@ func TestLimaRuntimeCreatesPinnedUbuntuGuest(t *testing.T) {
 		},
 	}
 	runtime := hostadapter.GuestRuntime{
-		HostOS: "darwin", Architecture: "arm64", Port: port,
+		Architecture: "arm64", Port: port,
 		Delegate: readyComponent{
 			observation: adapters.Observation{State: adapters.StateReady},
 		},
@@ -100,7 +100,7 @@ func TestWSLRuntimeInstallsCanonicalGuestWithoutAuth(t *testing.T) {
 		},
 	}
 	runtime := hostadapter.GuestRuntime{
-		HostOS: "windows", Architecture: "amd64", Port: port,
+		Architecture: "amd64", Port: port,
 		Delegate: readyComponent{
 			observation: adapters.Observation{State: adapters.StateAbsent},
 		},

@@ -17,7 +17,6 @@ const defaultGuestName = "mds"
 // GuestRuntime owns only host-side WSL/Lima lifecycle. Linux component
 // reconciliation still runs through mds inside the guest.
 type GuestRuntime struct {
-	HostOS       string
 	Architecture string
 	Port         transport.Port
 	Delegate     adapters.Component

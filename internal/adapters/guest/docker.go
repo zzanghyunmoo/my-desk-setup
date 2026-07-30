@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/user"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -227,10 +228,5 @@ func dockerArchitecture(architecture string) (string, error) {
 }
 
 func containsWord(value, wanted string) bool {
-	for _, word := range strings.Fields(value) {
-		if word == wanted {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(strings.Fields(value), wanted)
 }
