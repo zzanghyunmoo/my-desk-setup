@@ -20,8 +20,9 @@ target-ineligible dependency, invalid installer와 missing lock을 fail closed�
 Bun-managed pinned lock은 package/version에 대응하는 official npm canonical
 tarball URL, canonical SHA-512 SRI와 lowercase SHA-256을 모두 요구한다.
 component와 capability는 단일 owner를 가진다. catalog와 lock의 canonical JSON
-SHA-256뿐 아니라 `mise.toml`과 `mise.lock`의 exact byte content도 plan의
-catalog revision에 포함된다. 둘 중 하나만 바뀐 plan digest는 재사용할 수 없다.
+SHA-256뿐 아니라 `mise.toml`과 `mise.lock`을 LF로 정규화한 exact content도
+plan의 catalog revision에 포함된다. checkout의 CRLF 또는 단독 CR은 loader에서
+LF로 정규화되며, 의미 있는 content가 바뀐 plan digest는 재사용할 수 없다.
 
 `catalog/mise.toml`은 strict lock mode를 사용하고 `catalog/mise.lock`은 각
 tool의 eligible `linux-x64`/`linux-arm64` cell마다 exact artifact URL과

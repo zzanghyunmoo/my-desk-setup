@@ -111,8 +111,8 @@ func TestPullRequestCIRunsWindowsBuildAndTests(t *testing.T) {
 func TestWorkflowsPinReviewedActionCommits(t *testing.T) {
 	root := repositoryRoot(t)
 	expected := []string{
-		"actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
-		"actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff",
+		"actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+		"actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e",
 		"actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02",
 		"actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093",
 	}

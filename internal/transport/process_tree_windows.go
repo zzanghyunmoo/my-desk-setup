@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"os/exec"
+	"sync/atomic"
 	"syscall"
 	"unsafe"
 
@@ -13,8 +14,9 @@ import (
 )
 
 type windowsProcessTree struct {
-	command *exec.Cmd
-	job     windows.Handle
+	command  *exec.Cmd
+	job      windows.Handle
+	attached atomic.Bool
 }
 
 func newProcessTree(command *exec.Cmd) (*windowsProcessTree, error) {
@@ -59,12 +61,16 @@ func (tree *windowsProcessTree) Attach() error {
 	if err := windows.AssignProcessToJobObject(tree.job, process); err != nil {
 		return err
 	}
+	tree.attached.Store(true)
 	return resumeWindowsProcess(uint32(tree.command.Process.Pid))
 }
 
 func (tree *windowsProcessTree) Terminate() error {
 	if tree == nil || tree.job == 0 {
 		return nil
+	}
+	if !tree.attached.Load() {
+		return tree.terminateRootProcess()
 	}
 	active, queryErr := tree.activeProcessCount()
 	if queryErr == nil && active == 0 {
@@ -81,14 +87,7 @@ func (tree *windowsProcessTree) Terminate() error {
 			errors.Is(jobErr, os.ErrProcessDone)) {
 		return nil
 	}
-	if tree.command == nil || tree.command.Process == nil ||
-		(tree.command.ProcessState != nil && tree.command.ProcessState.Exited()) {
-		return errors.Join(queryErr, jobErr, retryErr)
-	}
-	processErr := tree.command.Process.Kill()
-	if errors.Is(processErr, os.ErrProcessDone) {
-		processErr = nil
-	}
+	processErr := tree.terminateRootProcess()
 	return errors.Join(queryErr, jobErr, retryErr, processErr)
 }
 
@@ -115,6 +114,18 @@ func (tree *windowsProcessTree) activeProcessCount() (uint32, error) {
 		return 0, err
 	}
 	return information.ActiveProcesses, nil
+}
+
+func (tree *windowsProcessTree) terminateRootProcess() error {
+	if tree.command == nil || tree.command.Process == nil ||
+		(tree.command.ProcessState != nil && tree.command.ProcessState.Exited()) {
+		return nil
+	}
+	err := tree.command.Process.Kill()
+	if errors.Is(err, os.ErrProcessDone) {
+		return nil
+	}
+	return err
 }
 
 // jobObjectBasicAccountingInformation mirrors the Windows
