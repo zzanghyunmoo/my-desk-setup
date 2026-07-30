@@ -121,7 +121,11 @@ func (tree *windowsProcessTree) terminateRootProcess() error {
 		return nil
 	}
 	err := tree.command.Process.Kill()
+	// Windows os.Process returns syscall.EINVAL after Wait releases its handle;
+	// TerminateProcess may separately report ERROR_INVALID_PARAMETER if the
+	// process exits between handle duplication and termination.
 	if errors.Is(err, os.ErrProcessDone) ||
+		errors.Is(err, syscall.EINVAL) ||
 		errors.Is(err, windows.ERROR_INVALID_PARAMETER) {
 		return nil
 	}
