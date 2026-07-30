@@ -117,12 +117,12 @@ func (tree *windowsProcessTree) activeProcessCount() (uint32, error) {
 }
 
 func (tree *windowsProcessTree) terminateRootProcess() error {
-	if tree.command == nil || tree.command.Process == nil ||
-		(tree.command.ProcessState != nil && tree.command.ProcessState.Exited()) {
+	if tree.command == nil || tree.command.Process == nil {
 		return nil
 	}
 	err := tree.command.Process.Kill()
-	if errors.Is(err, os.ErrProcessDone) {
+	if errors.Is(err, os.ErrProcessDone) ||
+		errors.Is(err, windows.ERROR_INVALID_PARAMETER) {
 		return nil
 	}
 	return err

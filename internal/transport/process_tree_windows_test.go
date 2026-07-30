@@ -49,3 +49,19 @@ func TestWindowsProcessTreeUnattachedHelper(t *testing.T) {
 	}
 	time.Sleep(30 * time.Second)
 }
+
+func TestWindowsProcessTreeTreatsReleasedRootAsTerminated(t *testing.T) {
+	command := exec.Command(
+		os.Args[0],
+		"-test.run=TestWindowsProcessTreeReleasedHelper",
+	)
+	if err := command.Run(); err != nil {
+		t.Fatalf("Run(): %v", err)
+	}
+	tree := &windowsProcessTree{command: command}
+	if err := tree.terminateRootProcess(); err != nil {
+		t.Fatalf("terminateRootProcess(released): %v", err)
+	}
+}
+
+func TestWindowsProcessTreeReleasedHelper(t *testing.T) {}
