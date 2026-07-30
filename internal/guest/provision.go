@@ -7,24 +7,12 @@ import (
 	"io/fs"
 	"os"
 
+	"github.com/zzanghyunmoo/my-desk-setup/internal/catalog"
 	"gopkg.in/yaml.v3"
 )
 
-type Spec struct {
-	SchemaVersion   int                  `yaml:"schema_version"`
-	ID              string               `yaml:"id"`
-	Distribution    string               `yaml:"distribution"`
-	Release         string               `yaml:"release"`
-	SystemdRequired bool                 `yaml:"systemd_required"`
-	WSLDistribution string               `yaml:"wsl_distribution"`
-	Images          map[string]ImageSpec `yaml:"images"`
-	WSLImages       map[string]ImageSpec `yaml:"wsl_images"`
-}
-
-type ImageSpec struct {
-	URL    string `yaml:"url"`
-	SHA256 string `yaml:"sha256"`
-}
+type Spec = catalog.TargetSpec
+type ImageSpec = catalog.ImageSpec
 
 func LoadSpec(path string) (spec Spec, resultErr error) {
 	file, err := os.Open(path)

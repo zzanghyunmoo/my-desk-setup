@@ -21,6 +21,7 @@ func LoadFS(filesystem fs.FS) (Environment, error) {
 	var environment Environment
 	environment.Catalog.SchemaVersion = 1
 	environment.Profiles = make(map[string]Profile)
+	environment.Targets = make(map[string]TargetSpec)
 
 	componentPaths, err := fs.Glob(filesystem, "components/*.yaml")
 	if err != nil {
@@ -69,6 +70,36 @@ func LoadFS(filesystem fs.FS) (Environment, error) {
 			return Environment{}, fmt.Errorf("duplicate profile id %q", profile.ID)
 		}
 		environment.Profiles[profile.ID] = profile
+	}
+
+	targetPaths, err := fs.Glob(filesystem, "targets/*.yaml")
+	if err != nil {
+		return Environment{}, fmt.Errorf("find target documents: %w", err)
+	}
+	sort.Strings(targetPaths)
+	for _, path := range targetPaths {
+		var specification TargetSpec
+		if err := decodeStrictFS(filesystem, path, &specification); err != nil {
+			return Environment{}, err
+		}
+		if specification.ID == "" {
+			return Environment{}, fmt.Errorf("%s: target id is required", path)
+		}
+		if expected := profileIDFromPath(path); specification.ID != expected {
+			return Environment{}, fmt.Errorf(
+				"%s: target id %q must match filename %q",
+				path,
+				specification.ID,
+				expected,
+			)
+		}
+		if _, exists := environment.Targets[specification.ID]; exists {
+			return Environment{}, fmt.Errorf(
+				"duplicate target id %q",
+				specification.ID,
+			)
+		}
+		environment.Targets[specification.ID] = specification
 	}
 
 	lockPath := "locks/versions.lock.yaml"

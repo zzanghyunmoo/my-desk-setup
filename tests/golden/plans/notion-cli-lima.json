@@ -1,6 +1,6 @@
 {
   "schema_version": "mds.plan/v1",
-  "catalog_revision": "sha256:98f3989c245a3a311bb8bb0dfe49329b583ef022f75103ce7742416e4488afc0",
+  "catalog_revision": "sha256:20ace324d143c47fd8dfe1f079c7d31c21dfabb295aedb476910faeaa30574dd",
   "target": {
     "id": {
       "kind": "lima-guest",
@@ -13,7 +13,7 @@
     "systemd_active": false,
     "reachable": true,
     "cli_revision": "dev",
-    "catalog_revision": "sha256:98f3989c245a3a311bb8bb0dfe49329b583ef022f75103ce7742416e4488afc0"
+    "catalog_revision": "sha256:20ace324d143c47fd8dfe1f079c7d31c21dfabb295aedb476910faeaa30574dd"
   },
   "selection": [
     "bun",
@@ -61,5 +61,5 @@
     }
   ],
   "blockers": null,
-  "digest": "sha256:22c8200fe59d2910fb736a41c74167e12177ac95335e11811f4767a68c0ca65c"
+  "digest": "sha256:d4cda1d392b5ec9af365c5e72c57f18c71958c81af7de6c2b5fb3c5c7431d59e"
 }

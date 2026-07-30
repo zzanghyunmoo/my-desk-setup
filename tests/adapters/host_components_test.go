@@ -53,6 +53,15 @@ func TestHostAllContainsNoGuestToolchainOrAuthCommand(t *testing.T) {
 				}
 			}
 		}
+		if action.ComponentID == "lima" {
+			for _, key := range []string{
+				"guest_distribution", "image_kind", "image_sha256", "image_url",
+			} {
+				if action.Inputs[key] == "" {
+					t.Fatalf("Lima plan action is missing reviewed input %q: %+v", key, action)
+				}
+			}
+		}
 	}
 }
 

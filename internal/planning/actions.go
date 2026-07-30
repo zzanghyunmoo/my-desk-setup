@@ -23,16 +23,17 @@ type Plan struct {
 }
 
 type Action struct {
-	ID           string       `json:"id"`
-	ComponentID  string       `json:"component_id"`
-	TargetID     string       `json:"target_id"`
-	Status       ActionStatus `json:"status"`
-	Installer    string       `json:"installer,omitempty"`
-	Package      string       `json:"package,omitempty"`
-	Version      string       `json:"version"`
-	Dependencies []string     `json:"dependencies"`
-	Verification [][]string   `json:"verification"`
-	Reason       string       `json:"reason,omitempty"`
+	ID           string            `json:"id"`
+	ComponentID  string            `json:"component_id"`
+	TargetID     string            `json:"target_id"`
+	Status       ActionStatus      `json:"status"`
+	Installer    string            `json:"installer,omitempty"`
+	Package      string            `json:"package,omitempty"`
+	Version      string            `json:"version"`
+	Dependencies []string          `json:"dependencies"`
+	Verification [][]string        `json:"verification"`
+	Inputs       map[string]string `json:"inputs,omitempty"`
+	Reason       string            `json:"reason,omitempty"`
 }
 
 type Blocker struct {

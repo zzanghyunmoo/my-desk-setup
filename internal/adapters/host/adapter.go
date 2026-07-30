@@ -1,12 +1,12 @@
 package host
 
 import (
-	catalogdata "github.com/zzanghyunmoo/my-desk-setup/catalog"
+	"fmt"
+
 	"github.com/zzanghyunmoo/my-desk-setup/internal/adapters"
 	guestadapter "github.com/zzanghyunmoo/my-desk-setup/internal/adapters/guest"
 	"github.com/zzanghyunmoo/my-desk-setup/internal/adapters/packages"
 	"github.com/zzanghyunmoo/my-desk-setup/internal/catalog"
-	"github.com/zzanghyunmoo/my-desk-setup/internal/guest"
 	"github.com/zzanghyunmoo/my-desk-setup/internal/transport"
 	"github.com/zzanghyunmoo/my-desk-setup/internal/version"
 )
@@ -28,9 +28,9 @@ func New(
 			Home: home, Platform: platform, Arch: architecture,
 		},
 	}
-	spec, err := guest.LoadSpecFS(catalogdata.FS, "targets/ubuntu-26.04.yaml")
-	if err != nil {
-		return nil, err
+	spec, exists := environment.Targets["ubuntu-26.04"]
+	if !exists {
+		return nil, fmt.Errorf("catalog target %q is required", "ubuntu-26.04")
 	}
 	catalogRevision, err := catalog.Revision(environment)
 	if err != nil {

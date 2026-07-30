@@ -12,6 +12,7 @@ import (
 var credentialValuePattern = regexp.MustCompile(
 	`(?i)(api[_-]?key|bearer|credential|password|secret|token)\s*[:=]\s*\S+`,
 )
+var sha256Pattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
 
 func Validate(environment Environment) error {
 	var problems []string
@@ -20,6 +21,12 @@ func Validate(environment Environment) error {
 	}
 	if environment.Lock.SchemaVersion != 1 {
 		problems = append(problems, "lock schema_version must be 1")
+	}
+	for id, specification := range environment.Targets {
+		problems = append(
+			problems,
+			validateTargetSpec(id, specification)...,
+		)
 	}
 
 	components := make(map[string]Component, len(environment.Catalog.Components))
@@ -132,6 +139,45 @@ func Validate(environment Environment) error {
 	}
 	sort.Strings(problems)
 	return errors.New(strings.Join(problems, "; "))
+}
+
+func validateTargetSpec(id string, specification TargetSpec) []string {
+	var problems []string
+	if specification.SchemaVersion != 1 ||
+		specification.ID != id ||
+		specification.Distribution == "" ||
+		specification.Release == "" ||
+		specification.WSLDistribution == "" {
+		problems = append(
+			problems,
+			fmt.Sprintf(
+				"target %q requires schema_version 1, matching id, distribution, release, and WSL distribution",
+				id,
+			),
+		)
+	}
+	for label, images := range map[string]map[string]ImageSpec{
+		"Lima": specification.Images,
+		"WSL":  specification.WSLImages,
+	} {
+		for _, architecture := range []string{"amd64", "arm64"} {
+			image, exists := images[architecture]
+			if !exists ||
+				!strings.HasPrefix(image.URL, "https://") ||
+				!sha256Pattern.MatchString(image.SHA256) {
+				problems = append(
+					problems,
+					fmt.Sprintf(
+						"target %q %s/%s image requires an HTTPS URL and lowercase SHA-256",
+						id,
+						label,
+						architecture,
+					),
+				)
+			}
+		}
+	}
+	return problems
 }
 
 func duplicateValues(scope string, values []string) []string {

@@ -3,6 +3,7 @@ package output
 import (
 	"fmt"
 	"io"
+	"sort"
 	"strings"
 
 	"github.com/zzanghyunmoo/my-desk-setup/internal/planning"
@@ -33,6 +34,21 @@ func Human(writer io.Writer, plan planning.Plan) error {
 			detail,
 		); err != nil {
 			return err
+		}
+		keys := make([]string, 0, len(action.Inputs))
+		for key := range action.Inputs {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		for _, key := range keys {
+			if _, err := fmt.Fprintf(
+				writer,
+				"  %s=%s\n",
+				key,
+				action.Inputs[key],
+			); err != nil {
+				return err
+			}
 		}
 	}
 	if len(plan.Blockers) == 0 {

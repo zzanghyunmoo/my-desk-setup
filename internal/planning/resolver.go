@@ -42,7 +42,7 @@ func Build(
 		Target:          facts,
 	}
 	for _, item := range resolved {
-		action := actionFor(environment, facts.ID, item)
+		action := actionFor(environment, facts, item)
 		plan.Selection = append(plan.Selection, item.Component.ID)
 		plan.Actions = append(plan.Actions, action)
 		if action.Status != ActionPlanned {
@@ -67,10 +67,11 @@ func Build(
 
 func actionFor(
 	environment catalog.Environment,
-	targetID target.ID,
+	facts target.Facts,
 	item catalog.ResolvedComponent,
 ) Action {
 	component := item.Component
+	targetID := facts.ID
 	action := Action{
 		ID:           targetID.String() + "/" + component.ID,
 		ComponentID:  component.ID,
@@ -97,6 +98,22 @@ func actionFor(
 		)
 	}
 	sort.Strings(action.Dependencies)
+	if component.ID == "lima" || component.ID == "wsl" {
+		if specification, exists := environment.Targets["ubuntu-26.04"]; exists {
+			image := specification.Images[facts.Architecture]
+			imageKind := "lima"
+			if component.ID == "wsl" {
+				image = specification.WSLImages[facts.Architecture]
+				imageKind = "wsl"
+			}
+			action.Inputs = map[string]string{
+				"guest_distribution": specification.WSLDistribution,
+				"image_kind":         imageKind,
+				"image_sha256":       image.SHA256,
+				"image_url":          image.URL,
+			}
+		}
+	}
 
 	switch item.Support.Status {
 	case catalog.StatusUnsupported:

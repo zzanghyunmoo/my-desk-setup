@@ -28,6 +28,13 @@ checksum이 맞지 않는 archive를 bootstrap 또는 target certification에 �
 않는다. 정식 tag release에는 같은 identity에 묶인
 `release-promotion.json`도 영구 asset으로 포함된다.
 
+embedded catalog revision은 component/profile/version lock뿐 아니라
+`catalog/targets/ubuntu-26.04.yaml`의 Lima와 WSL image URL/SHA-256도 포함한다.
+따라서 target image가 바뀌면 release catalog revision과 관련 plan digest가
+함께 바뀐다. host의 `lima`/`wsl` plan action은 선택된 architecture의
+`image_url`, `image_sha256`, `image_kind`, `guest_distribution`을 명시해
+사용자가 mutation 전에 확인할 수 있게 한다.
+
 macOS와 Windows host binary에는 같은 release의 Linux `amd64`/`arm64`
 archive URL과 SHA-256이 함께 embed된다. guest bootstrap은 이 exact identity만
 사용하며 `latest`나 별도 moving catalog를 조회하지 않는다.

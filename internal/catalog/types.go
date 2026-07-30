@@ -91,9 +91,26 @@ type Artifact struct {
 }
 
 type Environment struct {
-	Catalog  Catalog            `json:"catalog"`
-	Profiles map[string]Profile `json:"profiles"`
-	Lock     VersionLock        `json:"lock"`
+	Catalog  Catalog               `json:"catalog"`
+	Profiles map[string]Profile    `json:"profiles"`
+	Targets  map[string]TargetSpec `json:"targets"`
+	Lock     VersionLock           `json:"lock"`
+}
+
+type TargetSpec struct {
+	SchemaVersion   int                  `yaml:"schema_version" json:"schema_version"`
+	ID              string               `yaml:"id" json:"id"`
+	Distribution    string               `yaml:"distribution" json:"distribution"`
+	Release         string               `yaml:"release" json:"release"`
+	SystemdRequired bool                 `yaml:"systemd_required" json:"systemd_required"`
+	WSLDistribution string               `yaml:"wsl_distribution" json:"wsl_distribution"`
+	Images          map[string]ImageSpec `yaml:"images" json:"images"`
+	WSLImages       map[string]ImageSpec `yaml:"wsl_images" json:"wsl_images"`
+}
+
+type ImageSpec struct {
+	URL    string `yaml:"url" json:"url"`
+	SHA256 string `yaml:"sha256" json:"sha256"`
 }
 
 type ResolvedComponent struct {

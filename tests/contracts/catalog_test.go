@@ -45,6 +45,32 @@ func TestCatalogLoadsAndRevisionIsCanonical(t *testing.T) {
 	}
 }
 
+func TestCatalogRevisionBindsGuestImageIdentity(t *testing.T) {
+	environment := loadCatalog(t)
+	before, err := catalog.Revision(environment)
+	if err != nil {
+		t.Fatalf("Revision(before): %v", err)
+	}
+	specification := environment.Targets["ubuntu-26.04"]
+	specification.WSLImages = map[string]catalog.ImageSpec{
+		"amd64": specification.WSLImages["amd64"],
+		"arm64": specification.WSLImages["arm64"],
+	}
+	arm64 := specification.WSLImages["arm64"]
+	arm64.SHA256 = strings.Repeat("0", 64)
+	specification.WSLImages["arm64"] = arm64
+	environment.Targets = map[string]catalog.TargetSpec{
+		"ubuntu-26.04": specification,
+	}
+	after, err := catalog.Revision(environment)
+	if err != nil {
+		t.Fatalf("Revision(after): %v", err)
+	}
+	if before == after {
+		t.Fatal("catalog revision did not bind changed WSL image digest")
+	}
+}
+
 func TestStrictYAMLRejectsUnknownField(t *testing.T) {
 	fixture := filepath.Join(repositoryRoot(t), "tests", "fixtures", "catalog", "unknown-field")
 	_, err := catalog.Load(fixture)

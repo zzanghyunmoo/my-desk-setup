@@ -108,8 +108,11 @@ stable file의 OS advisory lease이며 process 종료 시 OS가 자동 해제한
   실패한다.
 - receipt 없는 config나 launcher는 user-owned다. 명시적 managed ownership
   없이 덮어쓰거나 자동 backup/삭제하지 않는다.
-- command runner는 executable과 argv를 분리한다. shell string, unbounded
-  stdout/stderr와 inherited credential environment를 사용하지 않는다.
+- command runner는 executable과 argv를 분리한다. 동적 값을 조합한 shell
+  string, unbounded stdout/stderr와 inherited credential environment를
+  사용하지 않는다. guest home의 고정 경로 해석과 checksum installer처럼
+  review된 고정 shell program이 필요한 경우에도 URL·digest·selection은 별도
+  argv/stdin으로 전달한다.
 - command, probe와 evidence는 timeout과 bounded output을 사용한다.
 - plan, journal, receipt, log와 evidence에는 token, cookie, password,
   auth 상태와 개인 absolute path가 없어야 한다.
