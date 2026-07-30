@@ -1,0 +1,102 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/zzanghyunmoo/my-desk-setup/catalog/schema/lock.schema.json",
+  "title": "My Desk Setup Version Lock",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "versions"],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "versions": {
+      "type": "object",
+      "propertyNames": {
+        "pattern": "^[a-z0-9][a-z0-9-]*$"
+      },
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["version", "source", "provenance"],
+        "properties": {
+          "version": {
+            "type": "string",
+            "minLength": 1
+          },
+          "source": {
+            "type": "string",
+            "minLength": 1
+          },
+          "provenance": {
+            "type": "string",
+            "format": "uri",
+            "pattern": "^https://[^/@?#\\s]+(?::[0-9]+)?(?:/[^?#\\s]*)?$"
+          },
+          "install_ref": {
+            "type": "string",
+            "minLength": 1
+          },
+          "npm": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["tarball", "integrity", "sha256"],
+            "properties": {
+              "tarball": {
+                "type": "string",
+                "format": "uri",
+                "pattern": "^https://registry\\.npmjs\\.org/.+\\.tgz$"
+              },
+              "integrity": {
+                "type": "string",
+                "pattern": "^sha512-[A-Za-z0-9+/]{86}==$"
+              },
+              "sha256": {
+                "type": "string",
+                "pattern": "^[a-f0-9]{64}$"
+              }
+            }
+          },
+          "artifacts": {
+            "type": "object",
+            "propertyNames": {
+              "pattern": "^[a-z0-9][a-z0-9-]*$"
+            },
+            "additionalProperties": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["url", "sha256", "format", "executable"],
+              "properties": {
+                "url": {
+                  "type": "string",
+                  "format": "uri",
+                  "pattern": "^https://[^/@?#\\s]+(?::[0-9]+)?(?:/[^?#\\s]*)?$"
+                },
+                "sha256": {
+                  "type": "string",
+                  "pattern": "^[a-f0-9]{64}$"
+                },
+                "format": {
+                  "enum": ["binary", "zip", "tar.gz", "tar.xz"]
+                },
+                "executable": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            }
+          },
+          "unavailable_platforms": {
+            "type": "object",
+            "propertyNames": {
+              "pattern": "^[a-z0-9][a-z0-9-]*$"
+            },
+            "additionalProperties": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        }
+      }
+    }
+  }
+}

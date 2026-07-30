@@ -1,0 +1,36 @@
+schema_version: 1
+id: owner
+description: Complete owner environment; target-ineligible components remain explicit.
+selection:
+  - atlassian-cli
+  - bun
+  - c-toolchain
+  - chrome
+  - claude-code
+  - codex
+  - docker-engine
+  - flutter
+  - gh
+  - glab
+  - go
+  - gradle
+  - herdr
+  - java
+  - kakaotalk
+  - kotlin
+  - lima
+  - linear-cli
+  - linear-desktop
+  - mise
+  - neovim
+  - notion-cli
+  - notion-desktop
+  - nvchad
+  - opencode
+  - python
+  - slack
+  - typescript
+  - uv
+  - wezterm
+  - wsl
+  - xcode

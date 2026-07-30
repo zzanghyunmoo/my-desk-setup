@@ -1,0 +1,149 @@
+schema_version: 1
+components:
+  - id: wezterm
+    name: WezTerm
+    kind: terminal
+    provides: [wezterm, host-terminal]
+    dependencies: []
+    version_policy:
+      mode: manager
+    verification:
+      command: [wezterm, --version]
+    targets:
+      macos-host:
+        status: supported
+        installer: brew
+        package: wezterm
+      windows-host:
+        status: supported
+        installer: winget
+        package: wez.wezterm
+      wsl-guest:
+        status: unsupported
+        reason: Terminal GUI belongs to the Windows host.
+      lima-guest:
+        status: unsupported
+        reason: Terminal GUI belongs to the macOS host.
+
+  - id: notion-desktop
+    name: Notion Desktop
+    kind: gui
+    provides: [notion-desktop]
+    dependencies: []
+    version_policy:
+      mode: manager
+    verification:
+      command: [open, -Ra, Notion]
+    targets:
+      macos-host:
+        status: supported
+        installer: brew
+        package: notion
+      windows-host:
+        status: supported
+        installer: winget
+        package: Notion.Notion
+      wsl-guest:
+        status: unsupported
+        reason: Guest all excludes desktop applications.
+      lima-guest:
+        status: unsupported
+        reason: Guest all excludes desktop applications.
+
+  - id: linear-desktop
+    name: Linear Desktop
+    kind: gui
+    provides: [linear-desktop]
+    dependencies: []
+    version_policy:
+      mode: manager
+    verification:
+      command: [open, -Ra, Linear]
+    targets:
+      macos-host:
+        status: supported
+        installer: brew
+        package: linear-linear
+      windows-host:
+        status: action-required
+        reason: No verified Windows package identifier is committed yet.
+      wsl-guest:
+        status: unsupported
+        reason: Guest all excludes desktop applications.
+      lima-guest:
+        status: unsupported
+        reason: Guest all excludes desktop applications.
+
+  - id: slack
+    name: Slack
+    kind: gui
+    provides: [slack]
+    dependencies: []
+    version_policy:
+      mode: manager
+    verification:
+      command: [open, -Ra, Slack]
+    targets:
+      macos-host:
+        status: supported
+        installer: brew
+        package: slack
+      windows-host:
+        status: supported
+        installer: winget
+        package: SlackTechnologies.Slack
+      wsl-guest:
+        status: unsupported
+        reason: Guest all excludes desktop applications.
+      lima-guest:
+        status: unsupported
+        reason: Guest all excludes desktop applications.
+
+  - id: kakaotalk
+    name: KakaoTalk
+    kind: gui
+    provides: [kakaotalk]
+    dependencies: []
+    version_policy:
+      mode: manager
+    verification:
+      command: [open, -Ra, KakaoTalk]
+    targets:
+      macos-host:
+        status: supported
+        installer: brew
+        package: kakaotalk
+      windows-host:
+        status: action-required
+        reason: No verified unattended Windows package identifier is committed yet.
+      wsl-guest:
+        status: unsupported
+        reason: Guest all excludes desktop applications.
+      lima-guest:
+        status: unsupported
+        reason: Guest all excludes desktop applications.
+
+  - id: chrome
+    name: Google Chrome
+    kind: gui
+    provides: [chrome, web-browser]
+    dependencies: []
+    version_policy:
+      mode: manager
+    verification:
+      command: [google-chrome, --version]
+    targets:
+      macos-host:
+        status: supported
+        installer: brew
+        package: google-chrome
+      windows-host:
+        status: supported
+        installer: winget
+        package: Google.Chrome
+      wsl-guest:
+        status: unsupported
+        reason: Guest all excludes desktop applications.
+      lima-guest:
+        status: unsupported
+        reason: Guest all excludes desktop applications.

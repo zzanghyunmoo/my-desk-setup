@@ -1,0 +1,259 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Exact version without a v prefix
+        required: true
+        type: string
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.identity.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Resolve immutable release identity
+        id: identity
+        shell: bash
+        env:
+          REQUESTED_VERSION: ${{ inputs.version }}
+        run: |
+          if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
+            version="$REQUESTED_VERSION"
+          else
+            version="${GITHUB_REF_NAME#v}"
+          fi
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?$ ]]; then
+            echo "release tag must be vMAJOR.MINOR.PATCH[-PRERELEASE]" >&2
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "date=$(git show -s --format=%cI "$GITHUB_SHA")" >> "$GITHUB_OUTPUT"
+      - name: Test release code
+        run: go test ./...
+      - name: Vet release code
+        run: go vet ./...
+      - name: Build release once
+        env:
+          MDS_VERSION: ${{ steps.identity.outputs.version }}
+          MDS_COMMIT: ${{ github.sha }}
+          MDS_DATE: ${{ steps.identity.outputs.date }}
+        run: scripts/build-release.sh "$GITHUB_WORKSPACE/release-dist"
+      - name: Verify exact release
+        run: scripts/verify-release.sh "$GITHUB_WORKSPACE/release-dist"
+      - name: Install pinned Gitleaks
+        run: scripts/install-gitleaks.sh "$RUNNER_TEMP/mds-tools"
+      - name: Scan source history
+        run: >-
+          "$RUNNER_TEMP/mds-tools/gitleaks" git
+          --no-banner --redact --config .gitleaks.toml .
+      - name: Scan release artifacts
+        run: >-
+          "$RUNNER_TEMP/mds-tools/gitleaks" dir
+          --no-banner --redact --config .gitleaks.toml release-dist
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-dist
+          path: release-dist
+          if-no-files-found: error
+          retention-days: 7
+
+  smoke-linux:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: release-dist
+          path: release-dist
+      - name: Run published Linux archive
+        env:
+          MDS_VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          archive="mds_${MDS_VERSION}_linux_amd64.tar.gz"
+          checksum=$(awk -v name="$archive" '$2 == name { print $1 }' release-dist/checksums.txt)
+          test -n "$checksum"
+          printf '%s  %s\n' "$checksum" "release-dist/$archive" | sha256sum -c -
+          mkdir smoke
+          tar -xzf "release-dist/$archive" -C smoke mds
+          smoke/mds --version
+          smoke/mds plan \
+            --target lima-guest:release-smoke \
+            --profile owner \
+            --format json > plan.json
+          jq -e '.schema_version == "mds.plan/v1"' plan.json
+
+  smoke-macos:
+    needs: build
+    runs-on: macos-latest
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: release-dist
+          path: release-dist
+      - name: Install and run published macOS archive
+        env:
+          MDS_VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          architecture=$(uname -m)
+          case "$architecture" in
+            arm64) release_arch=arm64 ;;
+            x86_64) release_arch=amd64 ;;
+            *) exit 2 ;;
+          esac
+          archive="mds_${MDS_VERSION}_darwin_${release_arch}.tar.gz"
+          checksum=$(awk -v name="$archive" '$2 == name { print $1 }' release-dist/checksums.txt)
+          test -n "$checksum"
+          MDS_SHA256="$checksum" \
+          MDS_ARCHIVE="$GITHUB_WORKSPACE/release-dist/$archive" \
+          MDS_INSTALL_DIR="$RUNNER_TEMP/mds-bin" \
+            sh release-dist/macos.sh
+          "$RUNNER_TEMP/mds-bin/mds" plan \
+            --target macos-host:local \
+            --profile owner \
+            --format json > plan.json
+          jq -e '.schema_version == "mds.plan/v1"' plan.json
+
+  smoke-windows:
+    needs: build
+    runs-on: windows-latest
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: release-dist
+          path: release-dist
+      - name: Install and run published Windows archive
+        shell: pwsh
+        env:
+          MDS_VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          $releaseArch = switch ($env:PROCESSOR_ARCHITECTURE) {
+              "AMD64" { "amd64" }
+              "ARM64" { "arm64" }
+              default { throw "Unsupported runner architecture." }
+          }
+          $archive = "mds_$($env:MDS_VERSION)_windows_$releaseArch.zip"
+          $checksumLine = Get-Content release-dist/checksums.txt |
+              Where-Object { $_ -match "^[0-9a-f]{64}  $([regex]::Escape($archive))$" }
+          if (@($checksumLine).Count -ne 1) {
+              throw "Expected one checksum for $archive."
+          }
+          $env:MDS_SHA256 = ($checksumLine -split "  ")[0]
+          $env:MDS_ARCHIVE = Join-Path $env:GITHUB_WORKSPACE "release-dist\$archive"
+          $env:MDS_INSTALL_DIR = Join-Path $env:RUNNER_TEMP "mds-bin"
+          & release-dist/windows.ps1
+          & "$env:MDS_INSTALL_DIR/mds.exe" plan `
+              --target windows-host:local `
+              --profile owner `
+              --format json | Set-Content plan.json
+          $plan = Get-Content plan.json -Raw | ConvertFrom-Json
+          if ($plan.schema_version -ne "mds.plan/v1") {
+              throw "Unexpected plan schema $($plan.schema_version)."
+          }
+
+  promotion:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs:
+      - build
+      - smoke-linux
+      - smoke-macos
+      - smoke-windows
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: release-dist
+          path: release-dist
+      - name: Discover exact-commit actual-target evidence
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MDS_COMMIT: ${{ github.sha }}
+          MDS_EVIDENCE_ROOT: ${{ runner.temp }}/target-evidence
+        run: scripts/download-target-evidence.sh
+      - name: Install pinned Gitleaks
+        run: scripts/install-gitleaks.sh "$RUNNER_TEMP/mds-tools"
+      - name: Scan downloaded actual-target evidence
+        run: >-
+          "$RUNNER_TEMP/mds-tools/gitleaks" dir
+          --no-banner --redact --config .gitleaks.toml
+          "$RUNNER_TEMP/target-evidence"
+      - name: Promote exact release
+        env:
+          MDS_RELEASE_DIR: ${{ github.workspace }}/release-dist
+          MDS_EVIDENCE_ROOT: ${{ runner.temp }}/target-evidence
+          MDS_COMMIT: ${{ github.sha }}
+          MDS_EVIDENCE_MAX_AGE: 24h
+          MDS_PROMOTION_REPORT: ${{ runner.temp }}/promotion-report.json
+        run: scripts/promote-release.sh
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-promotion-${{ github.sha }}
+          path: ${{ runner.temp }}/promotion-report.json
+          if-no-files-found: error
+          retention-days: 30
+
+  publish:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs:
+      - build
+      - promotion
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: release-dist
+          path: release-dist
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: release-promotion-${{ github.sha }}
+          path: promotion-report
+      - name: Stabilize and reverify promotion report
+        env:
+          MDS_RELEASE_DIR: ${{ github.workspace }}/release-dist
+          MDS_PROMOTION_REPORT: ${{ github.workspace }}/release-promotion.json
+          MDS_COMMIT: ${{ github.sha }}
+        run: |
+          cp promotion-report/promotion-report.json "$MDS_PROMOTION_REPORT"
+          scripts/verify-promotion-report.sh
+      - name: Recheck downloaded artifact checksums
+        working-directory: release-dist
+        run: sha256sum -c checksums.txt
+      - name: Publish exact verified artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          gh release create "$GITHUB_REF_NAME"
+          release-dist/*
+          release-promotion.json
+          --verify-tag
+          --generate-notes

@@ -1,0 +1,230 @@
+name: Target certification
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/target-certification.yml"
+      - "cmd/mds-evidence/**"
+      - "internal/evidence/**"
+      - "scripts/certify-target.sh"
+      - "scripts/verify-target-evidence.sh"
+      - "tests/target-evidence/**"
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/target-certification.yml"
+      - "cmd/mds-evidence/**"
+      - "internal/evidence/**"
+      - "scripts/certify-target.sh"
+      - "scripts/verify-target-evidence.sh"
+      - "tests/target-evidence/**"
+  workflow_dispatch:
+    inputs:
+      mds_path:
+        description: Absolute path to the production mds binary on the target
+        required: true
+        type: string
+      target_id:
+        description: Explicit target ID, for example lima-guest:mds
+        required: true
+        type: string
+      expected_cli_revision:
+        description: Exact reviewed CLI revision from the release
+        required: true
+        type: string
+      expected_catalog_revision:
+        description: Exact reviewed catalog revision from the release
+        required: true
+        type: string
+      expected_plan_digest:
+        description: Exact reviewed target-eligible all-plan digest for this target
+        required: true
+        type: string
+      expected_binary_sha256:
+        description: SHA-256 of the exact release mds binary on this target
+        required: true
+        type: string
+      runner_label:
+        description: Target-specific self-hosted runner label
+        required: true
+        default: mds-lima-guest
+        type: choice
+        options:
+          - mds-macos-host
+          - mds-windows-host
+          - mds-wsl-guest
+          - mds-lima-guest
+
+permissions:
+  contents: read
+
+concurrency:
+  group: target-certification-${{ github.sha }}-${{ inputs.target_id || 'contract' }}
+  cancel-in-progress: false
+
+jobs:
+  fixture-contract:
+    name: Fixture contract (implemented only)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Verify evidence contract and tamper fixtures
+        run: go test ./internal/evidence ./cmd/mds-evidence
+      - name: Record non-target status
+        run: |
+          {
+            echo "## Target certification"
+            echo
+            echo "Hosted fixture status: \`implemented\`."
+            echo "No actual target was certified and this job must not be read as \`verified\`."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  actual-target:
+    name: Actual target
+    # The protected GitHub ref is the certification authority. The dispatcher
+    # cannot substitute a commit, and fork/PR events never reach self-hosted
+    # target runners. Runner labels must be dedicated and credential-free.
+    if: >-
+      ${{
+        github.event_name == 'workflow_dispatch' &&
+        github.event.repository.fork == false &&
+        github.ref_protected == true
+      }}
+    runs-on:
+      - self-hosted
+      - ${{ inputs.runner_label }}
+    environment: target-certification
+    permissions:
+      contents: read
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+          clean: true
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Validate immutable certification identity
+        id: certification-identity
+        shell: bash
+        env:
+          EXPECTED_COMMIT: ${{ github.sha }}
+          RUNNER_LABEL: ${{ inputs.runner_label }}
+          TARGET_ID: ${{ inputs.target_id }}
+        run: |
+          if [[ ! "$EXPECTED_COMMIT" =~ ^[0-9a-f]{40}$|^[0-9a-f]{64}$ ]]; then
+            echo "expected_commit must be a full lowercase commit SHA" >&2
+            exit 2
+          fi
+          test "$(git rev-parse HEAD)" = "$EXPECTED_COMMIT"
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+          case "$TARGET_ID" in
+            macos-host:local)
+              target_kind=macos-host
+              expected_runner_label=mds-macos-host
+              ;;
+            windows-host:local)
+              target_kind=windows-host
+              expected_runner_label=mds-windows-host
+              ;;
+            wsl-guest:Ubuntu-26.04)
+              target_kind=wsl-guest
+              expected_runner_label=mds-wsl-guest
+              ;;
+            lima-guest:mds)
+              target_kind=lima-guest
+              expected_runner_label=mds-lima-guest
+              ;;
+            *)
+              echo "unsupported promotion target ID: $TARGET_ID" >&2
+              exit 2
+              ;;
+          esac
+          test "$RUNNER_LABEL" = "$expected_runner_label"
+          echo "target_kind=$target_kind" >> "$GITHUB_OUTPUT"
+      - name: Prepare target-local evidence path
+        shell: bash
+        run: |
+          echo "EVIDENCE_OUTPUT=$RUNNER_TEMP/mds-target-evidence/run-$GITHUB_RUN_ID-attempt-$GITHUB_RUN_ATTEMPT" >> "$GITHUB_ENV"
+      - name: Capture actual target evidence
+        continue-on-error: true
+        shell: bash
+        env:
+          MDS_PATH: ${{ inputs.mds_path }}
+          TARGET_ID: ${{ inputs.target_id }}
+          EXPECTED_BINARY_SHA256: ${{ inputs.expected_binary_sha256 }}
+        run: |
+          nonce_args=()
+          case "$TARGET_ID" in
+            wsl-guest:*|lima-guest:*)
+              if [[ ! "${MDS_EXPECTED_GUEST_CREATION_NONCE:-}" =~ ^[0-9a-f]{64}$ ]]; then
+                echo "guest runner service must provide a 64-character lowercase MDS_EXPECTED_GUEST_CREATION_NONCE" >&2
+                exit 2
+              fi
+              nonce_args=(
+                --expected-guest-creation-nonce
+                "$MDS_EXPECTED_GUEST_CREATION_NONCE"
+              )
+              ;;
+            *)
+              if test -n "${MDS_EXPECTED_GUEST_CREATION_NONCE:-}"; then
+                echo "host runner service must not provide MDS_EXPECTED_GUEST_CREATION_NONCE" >&2
+                exit 2
+              fi
+              ;;
+          esac
+          scripts/certify-target.sh \
+            --mds "$MDS_PATH" \
+            --target "$TARGET_ID" \
+            --output "$EVIDENCE_OUTPUT" \
+            --expected-binary-sha256 "$EXPECTED_BINARY_SHA256" \
+            "${nonce_args[@]}" \
+            --all
+      - name: Verify against reviewed release and plan
+        if: always()
+        shell: bash
+        env:
+          EXPECTED_CLI_REVISION: ${{ inputs.expected_cli_revision }}
+          EXPECTED_CATALOG_REVISION: ${{ inputs.expected_catalog_revision }}
+          EXPECTED_PLAN_DIGEST: ${{ inputs.expected_plan_digest }}
+          EXPECTED_BINARY_SHA256: ${{ inputs.expected_binary_sha256 }}
+          TARGET_ID: ${{ inputs.target_id }}
+        run: |
+          scripts/verify-target-evidence.sh \
+            --bundle "$EVIDENCE_OUTPUT" \
+            --expected-cli-revision "$EXPECTED_CLI_REVISION" \
+            --expected-catalog-revision "$EXPECTED_CATALOG_REVISION" \
+            --expected-plan-digest "$EXPECTED_PLAN_DIGEST" \
+            --expected-target "$TARGET_ID" \
+            --expected-binary-sha256 "$EXPECTED_BINARY_SHA256" \
+            --max-age 45m \
+            --require-publication-acceptable
+      - name: Verify runner workspace remained pristine
+        if: always()
+        shell: bash
+        run: |
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          if test -n "$(git status --porcelain=v1 --untracked-files=all)"; then
+            git status --short
+            echo "certification modified the checked-out runner workspace" >&2
+            exit 1
+          fi
+      - name: Preserve honest certification output
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: target-evidence-${{ steps.certification-identity.outputs.target_kind }}-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ env.EVIDENCE_OUTPUT }}
+          if-no-files-found: warn
+          retention-days: 30

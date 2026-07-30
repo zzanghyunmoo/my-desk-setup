@@ -1,0 +1,295 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/zzanghyunmoo/my-desk-setup/catalog/schema/environment.schema.json",
+  "title": "My Desk Setup Environment Intent Catalog",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "components"],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "components": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/component"
+      }
+    }
+  },
+  "$defs": {
+    "component": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "name",
+        "kind",
+        "provides",
+        "dependencies",
+        "version_policy",
+        "verification",
+        "targets"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9-]*$"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "kind": {
+          "enum": [
+            "agent",
+            "build",
+            "cli",
+            "container",
+            "editor",
+            "gui",
+            "language",
+            "platform",
+            "terminal"
+          ]
+        },
+        "provides": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9-]*$"
+          }
+        },
+        "dependencies": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9-]*$"
+          }
+        },
+        "version_policy": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["mode"],
+          "allOf": [
+            {
+              "if": {
+                "properties": {
+                  "mode": {
+                    "const": "pinned"
+                  }
+                },
+                "required": ["mode"]
+              },
+              "then": {
+                "required": ["lock_key"]
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "mode": {
+                    "enum": ["manager", "manual"]
+                  }
+                },
+                "required": ["mode"]
+              },
+              "then": {
+                "not": {
+                  "required": ["lock_key"]
+                }
+              }
+            }
+          ],
+          "properties": {
+            "mode": {
+              "enum": ["pinned", "manager", "manual"]
+            },
+            "lock_key": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9-]*$"
+            }
+          }
+        },
+        "verification": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["command"],
+          "properties": {
+            "command": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "functional": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          }
+        },
+        "targets": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "macos-host",
+            "windows-host",
+            "wsl-guest",
+            "lima-guest"
+          ],
+          "properties": {
+            "macos-host": {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/target"
+                },
+                {
+                  "$ref": "#/$defs/macos-target"
+                }
+              ]
+            },
+            "windows-host": {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/target"
+                },
+                {
+                  "$ref": "#/$defs/windows-target"
+                }
+              ]
+            },
+            "wsl-guest": {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/target"
+                },
+                {
+                  "$ref": "#/$defs/linux-guest-target"
+                }
+              ]
+            },
+            "lima-guest": {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/target"
+                },
+                {
+                  "$ref": "#/$defs/linux-guest-target"
+                }
+              ]
+            }
+          }
+        }
+      }
+    },
+    "target": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status"],
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "supported"
+              }
+            },
+            "required": ["status"]
+          },
+          "then": {
+            "required": ["installer", "package"]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "enum": ["unsupported", "action-required"]
+              }
+            },
+            "required": ["status"]
+          },
+          "then": {
+            "required": ["reason"]
+          }
+        }
+      ],
+      "properties": {
+        "status": {
+          "enum": ["supported", "unsupported", "action-required"]
+        },
+        "installer": {
+          "type": "string",
+          "minLength": 1
+        },
+        "package": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "macos-target": {
+      "if": {
+        "properties": {
+          "status": {
+            "const": "supported"
+          }
+        },
+        "required": ["status"]
+      },
+      "then": {
+        "properties": {
+          "installer": {
+            "enum": ["brew", "bun", "mise", "script", "vendor", "manual", "system"]
+          }
+        }
+      }
+    },
+    "windows-target": {
+      "if": {
+        "properties": {
+          "status": {
+            "const": "supported"
+          }
+        },
+        "required": ["status"]
+      },
+      "then": {
+        "properties": {
+          "installer": {
+            "enum": ["winget", "bun", "mise", "script", "vendor", "manual", "system"]
+          }
+        }
+      }
+    },
+    "linux-guest-target": {
+      "if": {
+        "properties": {
+          "status": {
+            "const": "supported"
+          }
+        },
+        "required": ["status"]
+      },
+      "then": {
+        "properties": {
+          "installer": {
+            "enum": ["apt", "bun", "mise", "script", "vendor", "manual", "docker-apt", "system"]
+          }
+        }
+      }
+    }
+  }
+}

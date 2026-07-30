@@ -34,9 +34,46 @@ func TestRepositoryIdentity(t *testing.T) {
 		return
 	}
 	actualRemote := strings.TrimSpace(git(t, root, "remote", "get-url", "origin"))
-	if actualRemote != expectedRemote {
+	if normalizeRepositoryURL(actualRemote) !=
+		normalizeRepositoryURL(expectedRemote) {
 		t.Fatalf("origin URL = %q, want %q", actualRemote, expectedRemote)
 	}
+}
+
+func TestNormalizeRepositoryURL(t *testing.T) {
+	t.Parallel()
+
+	const canonical = "https://github.com/zzanghyunmoo/my-desk-setup"
+	for _, candidate := range []string{
+		canonical,
+		canonical + "/",
+		canonical + "///",
+		canonical + ".git",
+		canonical + ".git/",
+	} {
+		candidate := candidate
+		t.Run(candidate, func(t *testing.T) {
+			t.Parallel()
+			if got := normalizeRepositoryURL(candidate); got != canonical {
+				t.Fatalf("normalizeRepositoryURL(%q) = %q, want %q", candidate, got, canonical)
+			}
+		})
+	}
+
+	for _, different := range []string{
+		"https://github.com/another-owner/my-desk-setup",
+		"https://github.com/zzanghyunmoo/my-desk-setup-fork",
+		"https://github.com/zzanghyunmoo/My-Desk-Setup",
+	} {
+		if normalizeRepositoryURL(different) == canonical {
+			t.Fatalf("normalizeRepositoryURL(%q) lost exact owner/repo identity", different)
+		}
+	}
+}
+
+func normalizeRepositoryURL(value string) string {
+	normalized := strings.TrimRight(strings.TrimSpace(value), "/")
+	return strings.TrimSuffix(normalized, ".git")
 }
 
 func repositoryRoot(t *testing.T) string {

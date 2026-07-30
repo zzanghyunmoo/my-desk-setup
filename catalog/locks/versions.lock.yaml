@@ -1,0 +1,252 @@
+schema_version: 1
+versions:
+  atlassian-cli:
+    version: 1.3.22-stable
+    source: Atlassian versioned release
+    provenance: https://developer.atlassian.com/cloud/acli/guides/download-supported-packages/
+    artifacts:
+      linux-arm64:
+        url: https://acli.atlassian.com/linux/1.3.22-stable/acli_1.3.22-stable_linux_arm64.tar.gz
+        sha256: 1a9e86d0b46a62a8f1992c1ef98b3af7e9a9ee3f76d0efa215fe1f2d1b2fd139
+        format: tar.gz
+        executable: acli_1.3.22-stable_linux_arm64/acli
+      linux-amd64:
+        url: https://acli.atlassian.com/linux/1.3.22-stable/acli_1.3.22-stable_linux_amd64.tar.gz
+        sha256: de9e0a60a556e4119428b9072f6ca787e75b9f9a538aa71ebcc8084deb8ca1a6
+        format: tar.gz
+        executable: acli_1.3.22-stable_linux_amd64/acli
+  bun:
+    version: 1.3.14
+    source: GitHub release
+    provenance: https://github.com/oven-sh/bun/releases/tag/bun-v1.3.14
+    artifacts:
+      darwin-arm64:
+        url: https://github.com/oven-sh/bun/releases/download/bun-v1.3.14/bun-darwin-aarch64.zip
+        sha256: d8b96221828ad6f97ac7ac0ab7e95872341af763001e8803e8267652c2652620
+        format: zip
+        executable: bun-darwin-aarch64/bun
+      darwin-amd64:
+        url: https://github.com/oven-sh/bun/releases/download/bun-v1.3.14/bun-darwin-x64.zip
+        sha256: 4183df3374623e5bab315c547cfa0974533cd457d86b73b639f7a87974cd6633
+        format: zip
+        executable: bun-darwin-x64/bun
+      linux-arm64:
+        url: https://github.com/oven-sh/bun/releases/download/bun-v1.3.14/bun-linux-aarch64.zip
+        sha256: a27ffb63a8310375836e0d6f668ae17fa8d8d18b88c37c821c65331973a19a3b
+        format: zip
+        executable: bun-linux-aarch64/bun
+      linux-amd64:
+        url: https://github.com/oven-sh/bun/releases/download/bun-v1.3.14/bun-linux-x64-baseline.zip
+        sha256: a063908ae08b7852ca10939bbdc6ceed3ddabce8fb9402dce83d65d73b36e6c7
+        format: zip
+        executable: bun-linux-x64-baseline/bun
+      windows-arm64:
+        url: https://github.com/oven-sh/bun/releases/download/bun-v1.3.14/bun-windows-aarch64.zip
+        sha256: 89841f5a57f2348b67ec0839b718f4bf4ea7d07c371c9ba4b77b6c790f918953
+        format: zip
+        executable: bun-windows-aarch64/bun.exe
+      windows-amd64:
+        url: https://github.com/oven-sh/bun/releases/download/bun-v1.3.14/bun-windows-x64-baseline.zip
+        sha256: 538f9c846355d9e847b2671bc00c47da4229a0befb24df3282b739770f3b475f
+        format: zip
+        executable: bun-windows-x64-baseline/bun.exe
+  claude-code:
+    version: 2.1.212
+    source: npm registry
+    provenance: https://www.npmjs.com/package/@anthropic-ai/claude-code
+    npm:
+      tarball: https://registry.npmjs.org/@anthropic-ai/claude-code/-/claude-code-2.1.212.tgz
+      integrity: sha512-MEasj1oaoARRKEWU7eHJ6DWC2TC8ogml9QUDihbmxYI2Ij5Ol1leW90DIj8/a0xX3lfHZOwT3gJr0JxVKa8Sxw==
+      sha256: 2162841dd793d21671eccb7fe76fe9c3da6816adf447ba3890a4871b7e5f4e69
+  codex:
+    version: 0.144.6
+    source: GitHub release
+    provenance: https://github.com/openai/codex/releases
+    npm:
+      tarball: https://registry.npmjs.org/@openai/codex/-/codex-0.144.6.tgz
+      integrity: sha512-wk+2CWiBNXiJLBoN2D08N9RceWkSBnlgk5g2K1a4CXrP/C0gdlHyRUG7RFzm9y41DCK/7tvCct233JVxyFmznw==
+      sha256: 779eab25aa8473583b3d1d6f9316a0ab8d0643fdfd0bfef80ce76cc8cf85e401
+  flutter:
+    version: 3.44.4
+    source: Flutter stable archive
+    provenance: https://docs.flutter.dev/install/archive
+    artifacts:
+      linux-amd64:
+        url: https://storage.googleapis.com/flutter_infra_release/releases/stable/linux/flutter_linux_3.44.4-stable.tar.xz
+        sha256: c853cda0312a162854c481fe6a1bc286d84fbb74bfab7037c39750061dc9b466
+        format: tar.xz
+        executable: flutter/bin/flutter
+    unavailable_platforms:
+      linux-arm64: Flutter stable does not publish a reviewed Linux arm64 SDK archive.
+  go:
+    version: 1.26.5
+    source: Go release history
+    provenance: https://go.dev/doc/devel/release
+    artifacts:
+      linux-arm64:
+        url: https://dl.google.com/go/go1.26.5.linux-arm64.tar.gz
+        sha256: fe4789e92b1f33358680864bbe8704289e7bb5fc207d80623c308935bd696d49
+        format: tar.gz
+        executable: go/bin/go
+      linux-amd64:
+        url: https://dl.google.com/go/go1.26.5.linux-amd64.tar.gz
+        sha256: 5c2c3b16caefa1d968a94c1daca04a7ca301a496d9b086e17ad77bb81393f053
+        format: tar.gz
+        executable: go/bin/go
+  gradle:
+    version: 9.6.1
+    source: Gradle release notes
+    provenance: https://docs.gradle.org/9.6.1/release-notes.html
+    artifacts:
+      linux-arm64:
+        url: https://github.com/gradle/gradle-distributions/releases/download/v9.6.1/gradle-9.6.1-bin.zip
+        sha256: 9c0f7faeeb306cb14e4279a3e084ca6b596894089a0638e68a07c945a32c9e14
+        format: zip
+        executable: gradle-9.6.1/bin/gradle
+      linux-amd64:
+        url: https://github.com/gradle/gradle-distributions/releases/download/v9.6.1/gradle-9.6.1-bin.zip
+        sha256: 9c0f7faeeb306cb14e4279a3e084ca6b596894089a0638e68a07c945a32c9e14
+        format: zip
+        executable: gradle-9.6.1/bin/gradle
+  herdr:
+    version: 0.7.5
+    source: GitHub release
+    provenance: https://github.com/ogulcancelik/herdr/releases/tag/v0.7.5
+    artifacts:
+      linux-arm64:
+        url: https://github.com/ogulcancelik/herdr/releases/download/v0.7.5/herdr-linux-aarch64
+        sha256: 32e763a1499a6b694b1d708e4f062b743be1da9f34fcfa4d212d6db6fe09a8b9
+        format: binary
+        executable: herdr
+      linux-amd64:
+        url: https://github.com/ogulcancelik/herdr/releases/download/v0.7.5/herdr-linux-x86_64
+        sha256: 3dc83288073e4c2d3c679a30e7be97bcca9141c6fd17dbbb9219142e95c59253
+        format: binary
+        executable: herdr
+  java:
+    version: 25.0.4
+    source: Oracle Java LTS release
+    provenance: https://www.oracle.com/java/technologies/java-se-glance.html
+    install_ref: temurin-25.0.4+7.0.LTS
+    artifacts:
+      linux-arm64:
+        url: https://github.com/adoptium/temurin25-binaries/releases/download/jdk-25.0.4%2B7/OpenJDK25U-jdk_aarch64_linux_hotspot_25.0.4_7.tar.gz
+        sha256: 621f7196f0b682fb557da58bec89bd7dfe5419811fe1c0ba75c9cc8432f084c7
+        format: tar.gz
+        executable: bin/java
+      linux-amd64:
+        url: https://github.com/adoptium/temurin25-binaries/releases/download/jdk-25.0.4%2B7/OpenJDK25U-jdk_x64_linux_hotspot_25.0.4_7.tar.gz
+        sha256: e58fcdcd637b25c03ca84cbbcefc70d11efb8f4b4cbd05decc9f661769d77f94
+        format: tar.gz
+        executable: bin/java
+  kotlin:
+    version: 2.3.20
+    source: Kotlin release history
+    provenance: https://kotlinlang.org/docs/releases.html
+    artifacts:
+      linux-arm64:
+        url: https://github.com/JetBrains/kotlin/releases/download/v2.3.20/kotlin-compiler-2.3.20.zip
+        sha256: 222ba516cdc4052ce0be9d2ec6adf3c5c64fc53156d7dd91d1f5317809431b98
+        format: zip
+        executable: kotlinc/bin/kotlinc
+      linux-amd64:
+        url: https://github.com/JetBrains/kotlin/releases/download/v2.3.20/kotlin-compiler-2.3.20.zip
+        sha256: 222ba516cdc4052ce0be9d2ec6adf3c5c64fc53156d7dd91d1f5317809431b98
+        format: zip
+        executable: kotlinc/bin/kotlinc
+  mise:
+    version: 2026.7.15
+    source: GitHub release
+    provenance: https://github.com/jdx/mise/releases/tag/v2026.7.15
+    artifacts:
+      linux-arm64:
+        url: https://github.com/jdx/mise/releases/download/v2026.7.15/mise-v2026.7.15-linux-arm64
+        sha256: a2e291cec627d2e7aa352f451317e12fc84125d7fe817f0ab9bfe619b1c1d7dd
+        format: binary
+        executable: mise
+      linux-amd64:
+        url: https://github.com/jdx/mise/releases/download/v2026.7.15/mise-v2026.7.15-linux-x64
+        sha256: 9a729bbe121135da0c717d86d3328f21de5efcc6fa27ac8487ef481e428008d3
+        format: binary
+        executable: mise
+  neovim:
+    version: 0.11.5
+    source: GitHub release
+    provenance: https://github.com/neovim/neovim/releases
+    artifacts:
+      linux-arm64:
+        url: https://github.com/neovim/neovim/releases/download/v0.11.5/nvim-linux-arm64.tar.gz
+        sha256: ea4f9a31b11cc1477ff014aebb7b207684e7280f94ffa97abdab6cacd9b98519
+        format: tar.gz
+        executable: nvim-linux-arm64/bin/nvim
+      linux-amd64:
+        url: https://github.com/neovim/neovim/releases/download/v0.11.5/nvim-linux-x86_64.tar.gz
+        sha256: b2f91117be5b5ea39edd7297156dc2a4a8df4add6c95a90809a8df19e7ab6f52
+        format: tar.gz
+        executable: nvim-linux-x86_64/bin/nvim
+  nvchad:
+    version: e3572e1f5e1c297212c3deeb17b7863139ce663e
+    source: NvChad starter commit
+    provenance: https://github.com/NvChad/starter/commit/e3572e1f5e1c297212c3deeb17b7863139ce663e
+  notion-cli:
+    version: 0.21.5
+    source: npm registry
+    provenance: https://www.npmjs.com/package/ntn/v/0.21.5
+    npm:
+      tarball: https://registry.npmjs.org/ntn/-/ntn-0.21.5.tgz
+      integrity: sha512-GxSo9x8nuarbx1haWL5Ue1hl+3i5iF+BtGwVJhf8bx8SRat6OkwD8Jf+MEB42sqk7PoePDpGQPh8mih0sSFwTw==
+      sha256: 884d6518ed7a457925e2980b6386055a49f9dc09cb960428db35b3fd377f5025
+  opencode:
+    version: 1.17.7
+    source: GitHub release
+    provenance: https://github.com/anomalyco/opencode/releases
+    npm:
+      tarball: https://registry.npmjs.org/opencode-ai/-/opencode-ai-1.17.7.tgz
+      integrity: sha512-5oMjuqlVL78JhvXshwp2NCXCI+CHr24wWi7/5aI0CZoHnI44qTqssWOBUW59dPTpRGSOQmXTDTOOsPVYW38JPg==
+      sha256: 1642eca13464b2616a786c5a860edfc7daf1c40dc9cfb880d27a37a5d1c04e1a
+  linear-cli:
+    version: 2.3.0
+    source: npm registry
+    provenance: https://www.npmjs.com/package/@schpet/linear-cli/v/2.3.0
+    npm:
+      tarball: https://registry.npmjs.org/@schpet/linear-cli/-/linear-cli-2.3.0.tgz
+      integrity: sha512-HzmiYMxOVTxo1HfmDB9BSMtXhBFBhglL9ZwYIZofOi5xWSbfbGyGXgeLop/bvpWRwLxMgG+JxvGJ+Y1Un0lPDw==
+      sha256: e813a3b92a84c2f1a8625b4c96891eccf08162d80b30f1dd4e9d32868649b602
+  python:
+    version: 3.14.6
+    source: Python release page
+    provenance: https://www.python.org/downloads/release/python-3146/
+    artifacts:
+      linux-arm64:
+        url: https://github.com/astral-sh/python-build-standalone/releases/download/20260728/cpython-3.14.6+20260728-aarch64-unknown-linux-gnu-install_only_stripped.tar.gz
+        sha256: 44f86d58f3bbc1aa6c95ee90f03226e0fdbd22475a98c4410e5a20042b7f40d3
+        format: tar.gz
+        executable: bin/python3
+      linux-amd64:
+        url: https://github.com/astral-sh/python-build-standalone/releases/download/20260728/cpython-3.14.6+20260728-x86_64-unknown-linux-gnu-install_only_stripped.tar.gz
+        sha256: d6254462d5fe066810a472d286861f6a18f66400008bfa9688e202a5672e88cb
+        format: tar.gz
+        executable: bin/python3
+  typescript:
+    version: 6.0.2
+    source: npm registry
+    provenance: https://www.npmjs.com/package/typescript
+    npm:
+      tarball: https://registry.npmjs.org/typescript/-/typescript-6.0.2.tgz
+      integrity: sha512-bGdAIrZ0wiGDo5l8c++HWtbaNCWTS4UTv7RaTH/ThVIgjkveJt83m74bBHMJkuCbslY8ixgLBVZJIOiQlQTjfQ==
+      sha256: 0ae5c188a2f5db22df72fe5e74dcbc122afb52031a86dbac33e78a86db39c65e
+  uv:
+    version: 0.11.7
+    source: GitHub changelog
+    provenance: https://github.com/astral-sh/uv/blob/main/CHANGELOG.md
+    artifacts:
+      linux-arm64:
+        url: https://github.com/astral-sh/uv/releases/download/0.11.7/uv-aarch64-unknown-linux-musl.tar.gz
+        sha256: 46647dc16cbb7d6700f762fdd7a67d220abe18570914732bc310adc91308d272
+        format: tar.gz
+        executable: uv-aarch64-unknown-linux-musl/uv
+      linux-amd64:
+        url: https://github.com/astral-sh/uv/releases/download/0.11.7/uv-x86_64-unknown-linux-musl.tar.gz
+        sha256: 64ddb5f1087649e3f75aa50d139aa4f36ddde728a5295a141e0fa9697bfb7b0f
+        format: tar.gz
+        executable: uv-x86_64-unknown-linux-musl/uv

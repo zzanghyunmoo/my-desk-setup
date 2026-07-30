@@ -1,0 +1,20 @@
+schema_version: 1
+id: ubuntu-26.04
+distribution: ubuntu
+release: "26.04"
+systemd_required: true
+wsl_distribution: Ubuntu-26.04
+wsl_images:
+  amd64:
+    url: https://releases.ubuntu.com/26.04/ubuntu-26.04-wsl-amd64.wsl
+    sha256: 96c7f5fb28a7fe28245331f9bfbe4375f18dd29a4850116ad3c4f60f6700c55c
+  arm64:
+    url: https://cdimages.ubuntu.com/releases/26.04/release/ubuntu-26.04-wsl-arm64.wsl
+    sha256: 9fae7b65ac7be0ebb019987c922f1f1f1aaffb061834eb22e76a5e2a958dd3f6
+images:
+  amd64:
+    url: https://cloud-images.ubuntu.com/releases/26.04/release/ubuntu-26.04-server-cloudimg-amd64.img
+    sha256: 117816726abbdefc5ef3e38902e81a76f1c76c3610e709999d0885f9d5d9b477
+  arm64:
+    url: https://cloud-images.ubuntu.com/releases/26.04/release/ubuntu-26.04-server-cloudimg-arm64.img
+    sha256: 7bcf159e29ad0000bfed9c57875908c39268f5ed1257f4958fa6a9f5f60edd54
