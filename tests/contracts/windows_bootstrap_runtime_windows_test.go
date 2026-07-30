@@ -89,8 +89,16 @@ try {
     throw "stalled response body unexpectedly completed"
 }
 catch {
-    $type = $_.Exception.GetType().FullName
-    if ($type -notmatch "TaskCanceledException|OperationCanceledException") {
+    $exception = $_.Exception
+    $canceled = $false
+    while ($null -ne $exception) {
+        if ($exception -is [System.OperationCanceledException]) {
+            $canceled = $true
+            break
+        }
+        $exception = $exception.InnerException
+    }
+    if (-not $canceled) {
         throw
     }
 }

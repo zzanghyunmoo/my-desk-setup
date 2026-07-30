@@ -2,7 +2,22 @@
 
 package durable
 
-import "golang.org/x/sys/windows"
+import (
+	"errors"
+	"os"
+
+	"golang.org/x/sys/windows"
+)
+
+func syncRegularFile(path string) error {
+	// FlushFileBuffers requires a handle with write access on Windows. os.Open
+	// creates a read-only handle, which makes File.Sync report access denied.
+	file, err := os.OpenFile(path, os.O_WRONLY, 0)
+	if err != nil {
+		return err
+	}
+	return errors.Join(file.Sync(), file.Close())
+}
 
 func renameDurably(source, destination string) error {
 	return moveFileDurably(source, destination, windows.MOVEFILE_WRITE_THROUGH)

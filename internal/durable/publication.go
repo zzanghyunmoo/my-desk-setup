@@ -122,20 +122,8 @@ func SyncTree(root string) error {
 		case entry.IsDir():
 			directories = append(directories, path)
 		case entry.Type().IsRegular():
-			file, err := os.Open(path)
-			if err != nil {
-				return fmt.Errorf("open durable file %s: %w", path, err)
-			}
-			syncErr := file.Sync()
-			closeErr := file.Close()
-			if syncErr != nil {
-				return errors.Join(
-					fmt.Errorf("sync durable file %s: %w", path, syncErr),
-					closeErr,
-				)
-			}
-			if closeErr != nil {
-				return fmt.Errorf("close durable file %s: %w", path, closeErr)
+			if err := syncRegularFile(path); err != nil {
+				return fmt.Errorf("sync durable file %s: %w", path, err)
 			}
 		default:
 			return fmt.Errorf("durable publication refuses non-regular path %s", path)

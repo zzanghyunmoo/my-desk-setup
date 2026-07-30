@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"sync"
 	"testing"
@@ -108,7 +109,8 @@ func TestPublishCreatesExecutableAndPreservesExistingOwnership(t *testing.T) {
 	if err != nil {
 		t.Fatalf("lstat published file: %v", err)
 	}
-	if !info.Mode().IsRegular() || info.Mode().Perm() != 0o700 {
+	if !info.Mode().IsRegular() ||
+		(runtime.GOOS != "windows" && info.Mode().Perm() != 0o700) {
 		t.Fatalf("published mode = %v, want regular 0700", info.Mode())
 	}
 

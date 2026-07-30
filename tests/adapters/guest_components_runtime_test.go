@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -203,7 +204,7 @@ func TestAgentPublishesNoAutoUpdateLauncherWithoutAuth(t *testing.T) {
 	if err != nil {
 		t.Fatalf("stat launcher: %v", err)
 	}
-	if info.Mode().Perm() != 0o700 {
+	if runtime.GOOS != "windows" && info.Mode().Perm() != 0o700 {
 		t.Fatalf("launcher mode = %o, want 700", info.Mode().Perm())
 	}
 }

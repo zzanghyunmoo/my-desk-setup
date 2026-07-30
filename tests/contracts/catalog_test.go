@@ -124,6 +124,51 @@ func TestCatalogRevisionBindsExactMiseInputs(t *testing.T) {
 	}
 }
 
+func TestCatalogLoadNormalizesMiseLineEndings(t *testing.T) {
+	source := filepath.Join(repositoryRoot(t), "catalog")
+	fixture := t.TempDir()
+	if err := os.CopyFS(fixture, os.DirFS(source)); err != nil {
+		t.Fatalf("CopyFS(catalog): %v", err)
+	}
+	for _, name := range []string{"mise.toml", "mise.lock"} {
+		path := filepath.Join(fixture, name)
+		content, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("ReadFile(%s): %v", name, err)
+		}
+		normalized := strings.ReplaceAll(string(content), "\r\n", "\n")
+		crlf := strings.ReplaceAll(normalized, "\n", "\r\n")
+		if err := os.WriteFile(path, []byte(crlf), 0o600); err != nil {
+			t.Fatalf("WriteFile(%s): %v", name, err)
+		}
+	}
+
+	lfEnvironment := loadCatalog(t)
+	crlfEnvironment, err := catalog.Load(fixture)
+	if err != nil {
+		t.Fatalf("Load(CRLF catalog): %v", err)
+	}
+	if strings.Contains(crlfEnvironment.Mise.Config, "\r") ||
+		strings.Contains(crlfEnvironment.Mise.Lock, "\r") {
+		t.Fatal("loaded mise inputs retained checkout-specific CR characters")
+	}
+	lfRevision, err := catalog.Revision(lfEnvironment)
+	if err != nil {
+		t.Fatalf("Revision(LF): %v", err)
+	}
+	crlfRevision, err := catalog.Revision(crlfEnvironment)
+	if err != nil {
+		t.Fatalf("Revision(CRLF): %v", err)
+	}
+	if crlfRevision != lfRevision {
+		t.Fatalf(
+			"checkout line endings changed catalog revision: %s != %s",
+			crlfRevision,
+			lfRevision,
+		)
+	}
+}
+
 func TestValidationRejectsMiseLockArtifactDrift(t *testing.T) {
 	environment := loadCatalog(t)
 	environment.Mise.Lock = strings.Replace(

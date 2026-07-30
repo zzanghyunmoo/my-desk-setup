@@ -131,13 +131,18 @@ func LoadFS(filesystem fs.FS) (Environment, error) {
 		return Environment{}, err
 	}
 	environment.Mise = MiseFiles{
-		Config: string(miseConfig),
-		Lock:   string(miseLock),
+		Config: normalizeTextLineEndings(string(miseConfig)),
+		Lock:   normalizeTextLineEndings(string(miseLock)),
 	}
 	if err := Validate(environment); err != nil {
 		return Environment{}, err
 	}
 	return environment, nil
+}
+
+func normalizeTextLineEndings(content string) string {
+	content = strings.ReplaceAll(content, "\r\n", "\n")
+	return strings.ReplaceAll(content, "\r", "\n")
 }
 
 func validatePublishedSchema(

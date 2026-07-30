@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -97,14 +98,15 @@ func TestAPTRequiresUserManagedSudoCredentialRefresh(t *testing.T) {
 }
 
 func TestBunUsesVerifiedLocalArtifact(t *testing.T) {
+	artifact := filepath.Join(t.TempDir(), "reviewed-codex.tgz")
 	command, err := packages.BunInstall(planning.Action{
 		ID: "lima-guest:mds/codex", Package: "@openai/codex", Version: "0.144.6",
-	}, "/tmp/reviewed-codex.tgz", map[string]string{"BUN_INSTALL": "/tmp/bun"})
+	}, artifact, map[string]string{"BUN_INSTALL": filepath.Join(t.TempDir(), "bun")})
 	if err != nil {
 		t.Fatalf("BunInstall(): %v", err)
 	}
 	if got, want := command.Arguments, []string{
-		"add", "--global", "/tmp/reviewed-codex.tgz",
+		"add", "--global", artifact,
 	}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("arguments = %v, want %v", got, want)
 	}
@@ -285,7 +287,7 @@ func TestVendorInstallVerifiesChecksumAndPublishesAtomically(t *testing.T) {
 	if err != nil {
 		t.Fatalf("stat installed tool: %v", err)
 	}
-	if info.Mode().Perm() != 0o700 {
+	if runtime.GOOS != "windows" && info.Mode().Perm() != 0o700 {
 		t.Fatalf("installed mode = %o, want 700", info.Mode().Perm())
 	}
 }

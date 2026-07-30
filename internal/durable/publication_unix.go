@@ -3,9 +3,18 @@
 package durable
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 )
+
+func syncRegularFile(path string) error {
+	file, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	return errors.Join(file.Sync(), file.Close())
+}
 
 func renameDurably(source, destination string) error {
 	if err := os.Rename(source, destination); err != nil {

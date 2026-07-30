@@ -155,6 +155,10 @@ func commandEnvironment(overrides map[string]string) ([]string, error) {
 	for _, key := range keys {
 		environment = append(environment, key+"="+values[key])
 	}
+	// Sort the final entries, not only their keys. A key that is the prefix of
+	// another key (for example ProgramFiles and ProgramFiles(x86)) changes
+	// ordering after the '=' delimiter is appended.
+	sort.Strings(environment)
 	return environment, nil
 }
 

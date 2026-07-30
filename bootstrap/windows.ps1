@@ -96,7 +96,7 @@ function Get-BoundedHttpsFile {
                     $parsed = $next
                     continue
                 }
-                $response.EnsureSuccessStatusCode()
+                [void]$response.EnsureSuccessStatusCode()
                 if ($response.Content.Headers.ContentLength -and
                     $response.Content.Headers.ContentLength -gt $MaximumBytes) {
                     throw "Release archive exceeds $MaximumBytes bytes."

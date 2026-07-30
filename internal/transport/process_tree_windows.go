@@ -66,15 +66,30 @@ func (tree *windowsProcessTree) Terminate() error {
 	if tree == nil || tree.job == 0 {
 		return nil
 	}
+	active, queryErr := tree.activeProcessCount()
+	if queryErr == nil && active == 0 {
+		return nil
+	}
 	jobErr := windows.TerminateJobObject(tree.job, 1)
-	if errors.Is(jobErr, os.ErrProcessDone) {
-		jobErr = nil
+	if jobErr == nil {
+		return nil
+	}
+	remaining, retryErr := tree.activeProcessCount()
+	if retryErr == nil &&
+		remaining == 0 &&
+		(errors.Is(jobErr, windows.ERROR_INVALID_PARAMETER) ||
+			errors.Is(jobErr, os.ErrProcessDone)) {
+		return nil
+	}
+	if tree.command == nil || tree.command.Process == nil ||
+		(tree.command.ProcessState != nil && tree.command.ProcessState.Exited()) {
+		return errors.Join(queryErr, jobErr, retryErr)
 	}
 	processErr := tree.command.Process.Kill()
 	if errors.Is(processErr, os.ErrProcessDone) {
 		processErr = nil
 	}
-	return errors.Join(jobErr, processErr)
+	return errors.Join(queryErr, jobErr, retryErr, processErr)
 }
 
 func (tree *windowsProcessTree) Close() error {
@@ -84,6 +99,35 @@ func (tree *windowsProcessTree) Close() error {
 	err := windows.CloseHandle(tree.job)
 	tree.job = 0
 	return err
+}
+
+func (tree *windowsProcessTree) activeProcessCount() (uint32, error) {
+	information := jobObjectBasicAccountingInformation{}
+	var returned uint32
+	err := windows.QueryInformationJobObject(
+		tree.job,
+		windows.JobObjectBasicAccountingInformation,
+		uintptr(unsafe.Pointer(&information)),
+		uint32(unsafe.Sizeof(information)),
+		&returned,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return information.ActiveProcesses, nil
+}
+
+// jobObjectBasicAccountingInformation mirrors the Windows
+// JOBOBJECT_BASIC_ACCOUNTING_INFORMATION layout.
+type jobObjectBasicAccountingInformation struct {
+	TotalUserTime             int64
+	TotalKernelTime           int64
+	ThisPeriodTotalUserTime   int64
+	ThisPeriodTotalKernelTime int64
+	TotalPageFaultCount       uint32
+	TotalProcesses            uint32
+	ActiveProcesses           uint32
+	TotalTerminatedProcesses  uint32
 }
 
 func resumeWindowsProcess(pid uint32) error {

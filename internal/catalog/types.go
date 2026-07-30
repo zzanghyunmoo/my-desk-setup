@@ -100,9 +100,10 @@ type Environment struct {
 	Mise     MiseFiles             `json:"mise"`
 }
 
-// MiseFiles are the exact strict-mode inputs consumed by `mise install
-// --locked`. Keeping them in Environment binds those installer inputs to the
-// canonical catalog revision and every plan digest derived from it.
+// MiseFiles are the exact, LF-normalized strict-mode inputs consumed by
+// `mise install --locked`. Keeping them in Environment binds those installer
+// inputs to the canonical catalog revision and every plan digest derived from
+// it without making checkout line-ending policy part of the identity.
 type MiseFiles struct {
 	Config string `json:"config"`
 	Lock   string `json:"lock"`
