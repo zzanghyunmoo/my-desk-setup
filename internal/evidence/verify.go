@@ -35,6 +35,11 @@ var (
 )
 
 func Verify(root string, options VerifyOptions) (Manifest, error) {
+	if options.RequireVerified && options.RequirePublicationAcceptable {
+		return Manifest{}, errors.New(
+			"verified-only and publication-acceptable verification are mutually exclusive",
+		)
+	}
 	files, err := readBundleFiles(root)
 	if err != nil {
 		return Manifest{}, err
@@ -67,6 +72,12 @@ func Verify(root string, options VerifyOptions) (Manifest, error) {
 	cli, err := parseCLIIdentity(manifest.CLI)
 	if err != nil {
 		return Manifest{}, err
+	}
+	cohortCommitPrefix, err := CertificationCohortCommitPrefix(manifest.Cohort)
+	if err != nil || cohortCommitPrefix != cli.Commit[:8] {
+		return Manifest{}, errors.New(
+			"certification cohort does not match the production CLI commit",
+		)
 	}
 	components, err := validatePlanDoctor(plan, snapshot, cli, manifest.Target.ID)
 	if err != nil {
@@ -140,6 +151,12 @@ func Verify(root string, options VerifyOptions) (Manifest, error) {
 			return Manifest{}, err
 		}
 	}
+	if options.RequireVerified && manifest.Status != StatusVerified {
+		return Manifest{}, fmt.Errorf(
+			"actual target evidence status is %s, not verified",
+			manifest.Status,
+		)
+	}
 	return manifest, nil
 }
 
@@ -163,6 +180,9 @@ func validateManifest(manifest Manifest, options VerifyOptions) error {
 			"actual target evidence cannot claim status %q",
 			manifest.Status,
 		)
+	}
+	if err := ValidateCertificationCohort(manifest.Cohort); err != nil {
+		return err
 	}
 	if exactartifact.ValidateSHA256(manifest.BinarySHA256) != nil {
 		return errors.New(
@@ -223,6 +243,13 @@ func validateManifest(manifest Manifest, options VerifyOptions) error {
 			"wrong release binary: evidence=%q expected=%q",
 			manifest.BinarySHA256,
 			options.ExpectedBinarySHA256,
+		)
+	}
+	if options.ExpectedCohort != "" && manifest.Cohort != options.ExpectedCohort {
+		return fmt.Errorf(
+			"wrong certification cohort: evidence=%q expected=%q",
+			manifest.Cohort,
+			options.ExpectedCohort,
 		)
 	}
 	return nil

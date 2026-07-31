@@ -85,6 +85,12 @@ func newCertifyCommand(stdout io.Writer) *cobra.Command {
 	flags.StringVar(&request.TargetID, "target", "", "explicit actual target ID")
 	flags.StringVar(&request.OutputDir, "output", "", "new evidence bundle directory")
 	flags.StringVar(
+		&request.Cohort,
+		"cohort",
+		"",
+		"immutable certification cohort shared by all four targets",
+	)
+	flags.StringVar(
 		&request.ExpectedBinarySHA256,
 		"expected-binary-sha256",
 		"",
@@ -101,6 +107,7 @@ func newCertifyCommand(stdout io.Writer) *cobra.Command {
 	_ = command.MarkFlagRequired("mds")
 	_ = command.MarkFlagRequired("target")
 	_ = command.MarkFlagRequired("output")
+	_ = command.MarkFlagRequired("cohort")
 	return command
 }
 
@@ -124,11 +131,13 @@ func newVerifyCommand(stdout io.Writer) *cobra.Command {
 					options.ExpectedCatalogRevision == "" ||
 					options.ExpectedPlanDigest == "" ||
 					options.ExpectedTargetID == "" ||
-					options.ExpectedBinarySHA256 == "") {
+					options.ExpectedBinarySHA256 == "" ||
+					options.ExpectedCohort == "") {
 				return errors.New(
-					"strict publication verification requires expected CLI, catalog, plan digest, target, and binary SHA-256",
+					"strict publication verification requires expected CLI, catalog, plan digest, target, binary SHA-256, and cohort",
 				)
 			}
+			options.RequireVerified = requireVerified
 			options.RequirePublicationAcceptable = requirePublicationAcceptable
 			if options.MaxAge > 0 {
 				options.Now = time.Now().UTC()
@@ -139,12 +148,6 @@ func newVerifyCommand(stdout io.Writer) *cobra.Command {
 			}
 			if err := writeJSON(stdout, manifest); err != nil {
 				return err
-			}
-			if requireVerified && manifest.Status != evidence.StatusVerified {
-				return fmt.Errorf(
-					"actual target evidence status is %s, not verified",
-					manifest.Status,
-				)
 			}
 			return nil
 		},
@@ -180,6 +183,12 @@ func newVerifyCommand(stdout io.Writer) *cobra.Command {
 		"expected-binary-sha256",
 		"",
 		"exact release binary SHA-256 expected by the publication lane",
+	)
+	flags.StringVar(
+		&options.ExpectedCohort,
+		"expected-cohort",
+		"",
+		"immutable certification cohort expected by the publication lane",
 	)
 	flags.DurationVar(
 		&options.MaxAge,

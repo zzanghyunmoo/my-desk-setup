@@ -84,3 +84,21 @@ func TestCertifyHelpDoesNotExposeRawNonceFlag(t *testing.T) {
 		t.Fatalf("certify help exposes removed raw nonce flag:\n%s", stdout.String())
 	}
 }
+
+func TestCertifyRequiresImmutableCohort(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	exitCode := run(
+		[]string{
+			"certify",
+			"--mds", "/unused/mds",
+			"--target", "macos-host:local",
+			"--output", "/unused/evidence",
+			"--all",
+		},
+		&stdout,
+		&stderr,
+	)
+	if exitCode == 0 || !strings.Contains(stderr.String(), "cohort") {
+		t.Fatalf("exit=%d stderr=%q, want cohort failure", exitCode, stderr.String())
+	}
+}

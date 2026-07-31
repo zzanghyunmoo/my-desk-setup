@@ -23,7 +23,8 @@ func TestCertifyRejectsUnexpectedBinarySHA256BeforeExecution(t *testing.T) {
 	output := filepath.Join(root, "evidence")
 	_, err := Certify(context.Background(), CertifyRequest{
 		MDSPath: binary, TargetID: "lima-guest:mds", OutputDir: output,
-		All: true, ExpectedBinarySHA256: strings.Repeat("f", 64),
+		Cohort: fixtureCohort, All: true,
+		ExpectedBinarySHA256: strings.Repeat("f", 64),
 		Getenv: func(key string) string {
 			if key == "MDS_EXPECTED_GUEST_CREATION_NONCE" {
 				return strings.Repeat("a", 64)

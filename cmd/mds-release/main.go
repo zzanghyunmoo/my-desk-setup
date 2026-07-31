@@ -105,6 +105,11 @@ func runPromote(arguments []string, stderr io.Writer) error {
 		"",
 		"exact full release commit SHA",
 	)
+	cohort := flags.String(
+		"cohort",
+		"",
+		"immutable certification cohort shared by all four targets",
+	)
 	maxAge := flags.Duration(
 		"max-age",
 		24*time.Hour,
@@ -121,9 +126,9 @@ func runPromote(arguments []string, stderr io.Writer) error {
 	if flags.NArg() != 0 {
 		return errors.New("mds-release promote does not accept positional arguments")
 	}
-	if *evidenceRoot == "" || *commit == "" || *reportPath == "" {
+	if *evidenceRoot == "" || *commit == "" || *cohort == "" || *reportPath == "" {
 		return errors.New(
-			"mds-release promote requires --evidence-root, --commit, and --report",
+			"mds-release promote requires --evidence-root, --commit, --cohort, and --report",
 		)
 	}
 	if _, err := os.Lstat(*reportPath); err == nil {
@@ -133,7 +138,8 @@ func runPromote(arguments []string, stderr io.Writer) error {
 	}
 	report, err := release.Promote(release.PromotionOptions{
 		ReleaseDir: *directory, EvidenceRoot: *evidenceRoot,
-		ExpectedCommit: *commit, Now: time.Now().UTC(), MaxAge: *maxAge,
+		ExpectedCommit: *commit, ExpectedCohort: *cohort,
+		Now: time.Now().UTC(), MaxAge: *maxAge,
 	})
 	if err != nil {
 		return err
@@ -162,6 +168,11 @@ func runVerifyPromotion(arguments []string, stderr io.Writer) error {
 		"",
 		"exact full release commit SHA",
 	)
+	cohort := flags.String(
+		"cohort",
+		"",
+		"immutable certification cohort bound to the release report",
+	)
 	if err := flags.Parse(arguments); err != nil {
 		return err
 	}
@@ -170,10 +181,17 @@ func runVerifyPromotion(arguments []string, stderr io.Writer) error {
 			"mds-release verify-promotion does not accept positional arguments",
 		)
 	}
-	if *commit == "" {
-		return errors.New("mds-release verify-promotion requires --commit")
+	if *commit == "" || *cohort == "" {
+		return errors.New(
+			"mds-release verify-promotion requires --commit and --cohort",
+		)
 	}
-	_, err := release.VerifyPromotionReport(*directory, *report, *commit)
+	_, err := release.VerifyPromotionReport(
+		*directory,
+		*report,
+		*commit,
+		*cohort,
+	)
 	return err
 }
 

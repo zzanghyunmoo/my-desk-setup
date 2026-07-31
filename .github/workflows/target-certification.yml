@@ -6,7 +6,9 @@ on:
       - ".github/workflows/target-certification.yml"
       - "cmd/mds-evidence/**"
       - "internal/evidence/**"
+      - ".gitleaks.toml"
       - "scripts/certify-target.sh"
+      - "scripts/install-gitleaks.sh"
       - "scripts/verify-target-evidence.sh"
       - "tests/target-evidence/**"
   push:
@@ -16,7 +18,9 @@ on:
       - ".github/workflows/target-certification.yml"
       - "cmd/mds-evidence/**"
       - "internal/evidence/**"
+      - ".gitleaks.toml"
       - "scripts/certify-target.sh"
+      - "scripts/install-gitleaks.sh"
       - "scripts/verify-target-evidence.sh"
       - "tests/target-evidence/**"
   workflow_dispatch:
@@ -27,6 +31,10 @@ on:
         type: string
       target_id:
         description: Explicit target ID, for example lima-guest:mds
+        required: true
+        type: string
+      cohort:
+        description: Immutable cohort cert-YYYYMMDDThhmmssZ-commit8 shared by all four targets
         required: true
         type: string
       expected_cli_revision:
@@ -60,7 +68,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: target-certification-${{ github.sha }}-${{ inputs.target_id || 'contract' }}
+  group: target-certification-${{ github.sha }}-${{ inputs.cohort || 'contract' }}-${{ inputs.target_id || 'contract' }}
   cancel-in-progress: false
 
 jobs:
@@ -122,6 +130,7 @@ jobs:
           EXPECTED_COMMIT: ${{ github.sha }}
           RUNNER_LABEL: ${{ inputs.runner_label }}
           TARGET_ID: ${{ inputs.target_id }}
+          CERTIFICATION_COHORT: ${{ inputs.cohort }}
         run: |
           if [[ ! "$EXPECTED_COMMIT" =~ ^[0-9a-f]{40}$|^[0-9a-f]{64}$ ]]; then
             echo "expected_commit must be a full lowercase commit SHA" >&2
@@ -129,6 +138,11 @@ jobs:
           fi
           test "$(git rev-parse HEAD)" = "$EXPECTED_COMMIT"
           test -z "$(git status --porcelain=v1 --untracked-files=all)"
+          if [[ ! "$CERTIFICATION_COHORT" =~ ^cert-[0-9]{8}T[0-9]{6}Z-[0-9a-f]{8}$ ]] ||
+            [[ "${CERTIFICATION_COHORT##*-}" != "${EXPECTED_COMMIT:0:8}" ]]; then
+            echo "certification cohort must be canonical and match the protected commit" >&2
+            exit 2
+          fi
           case "$TARGET_ID" in
             macos-host:local)
               target_kind=macos-host
@@ -156,8 +170,11 @@ jobs:
               ;;
           esac
           test "$RUNNER_LABEL" = "$expected_runner_label"
-          echo "target_kind=$target_kind" >> "$GITHUB_OUTPUT"
-          echo "certification_profile=$certification_profile" >> "$GITHUB_OUTPUT"
+          {
+            echo "target_kind=$target_kind"
+            echo "certification_profile=$certification_profile"
+            echo "cohort=$CERTIFICATION_COHORT"
+          } >> "$GITHUB_OUTPUT"
       - name: Prepare target-local evidence path
         shell: bash
         run: |
@@ -170,6 +187,7 @@ jobs:
           TARGET_ID: ${{ inputs.target_id }}
           EXPECTED_BINARY_SHA256: ${{ inputs.expected_binary_sha256 }}
           CERTIFICATION_PROFILE: ${{ steps.certification-identity.outputs.certification_profile }}
+          CERTIFICATION_COHORT: ${{ steps.certification-identity.outputs.cohort }}
         run: |
           case "$TARGET_ID" in
             wsl-guest:*|lima-guest:*)
@@ -189,6 +207,7 @@ jobs:
             --mds "$MDS_PATH" \
             --target "$TARGET_ID" \
             --output "$EVIDENCE_OUTPUT" \
+            --cohort "$CERTIFICATION_COHORT" \
             --expected-binary-sha256 "$EXPECTED_BINARY_SHA256" \
             --profile "$CERTIFICATION_PROFILE"
       - name: Verify against reviewed release and plan
@@ -200,6 +219,7 @@ jobs:
           EXPECTED_PLAN_DIGEST: ${{ inputs.expected_plan_digest }}
           EXPECTED_BINARY_SHA256: ${{ inputs.expected_binary_sha256 }}
           TARGET_ID: ${{ inputs.target_id }}
+          CERTIFICATION_COHORT: ${{ steps.certification-identity.outputs.cohort }}
         run: |
           scripts/verify-target-evidence.sh \
             --bundle "$EVIDENCE_OUTPUT" \
@@ -208,6 +228,7 @@ jobs:
             --expected-plan-digest "$EXPECTED_PLAN_DIGEST" \
             --expected-target "$TARGET_ID" \
             --expected-binary-sha256 "$EXPECTED_BINARY_SHA256" \
+            --expected-cohort "$CERTIFICATION_COHORT" \
             --max-age 45m \
             --require-verified
       - name: Verify runner workspace remained pristine
@@ -220,11 +241,24 @@ jobs:
             echo "certification modified the checked-out runner workspace" >&2
             exit 1
           fi
+      - name: Install pinned Gitleaks
+        run: scripts/install-gitleaks.sh "$RUNNER_TEMP/mds-tools"
+      - name: Scan verified evidence before upload
+        shell: bash
+        run: |
+          "$RUNNER_TEMP/mds-tools/gitleaks" dir \
+            --no-banner --redact --config .gitleaks.toml \
+            "$EVIDENCE_OUTPUT"
+          if grep -R -q -E '"(image_)?creation_nonce"[[:space:]]*:' \
+            "$EVIDENCE_OUTPUT"; then
+            echo "verified evidence contains a raw guest creation nonce field" >&2
+            exit 1
+          fi
       - name: Upload verified certification output
         if: success()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: target-evidence-${{ steps.certification-identity.outputs.target_kind }}-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          name: target-evidence-${{ steps.certification-identity.outputs.target_kind }}-${{ github.sha }}-${{ steps.certification-identity.outputs.cohort }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ env.EVIDENCE_OUTPUT }}
           if-no-files-found: error
           retention-days: 30

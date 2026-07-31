@@ -312,6 +312,7 @@ scripts/certify-target.sh \
   --mds "$HOME/.local/bin/mds" \
   --target macos-host:local \
   --output ./target-evidence/macos-host \
+  --cohort 'cert-20260731T120000Z-<commit8>' \
   --expected-binary-sha256 '<release-binary-sha256>' \
   --all
 ```
@@ -327,6 +328,7 @@ scripts/certify-target.sh \
   --mds "$HOME/.local/bin/mds" \
   --target lima-guest:mds \
   --output ./target-evidence/lima-guest \
+  --cohort 'cert-20260731T120000Z-<commit8>' \
   --expected-binary-sha256 '<release-binary-sha256>' \
   --all
 unset MDS_EXPECTED_GUEST_CREATION_NONCE
@@ -351,8 +353,9 @@ scripts/verify-target-evidence.sh \
   --expected-plan-digest 'sha256:<reviewed-plan-digest>' \
   --expected-target macos-host:local \
   --expected-binary-sha256 '<release-binary-sha256>' \
+  --expected-cohort 'cert-20260731T120000Z-<commit8>' \
   --max-age 24h \
-  --require-publication-acceptable
+  --require-verified
 ```
 
 `<exact-cli-revision>`은 production `mds --version`의 `mds version ` 뒤에
@@ -362,18 +365,20 @@ identity, on-disk binary SHA-256과 recomputed status를 확인한다.
 manifest에 포함된 first/repeat receipt도 reviewed action 순서·version·target·
 catalog·plan digest 및 complete/no-op 의미와 다시 대조한다.
 
-`--require-publication-acceptable`은 `blocked`를 `verified`로 바꾸지 않는다.
-완전한 표준 target에서 모든 남은 결과가 사용자가 직접 해결해야 하는
-`action-required`일 때만 정직한 manual exception으로 허용한다. planned
-`unready`/`conflict`, `unsupported`, 불완전 target은 거부한다. 모든 component의
-완전한 실제 검증이 필요한 별도 검사에서는 `--require-verified`를 사용한다.
+Release promotion은 manual exception 없이 `--require-verified`만 사용한다.
+`blocked`, planned `unready`/`conflict`, `unsupported`와 불완전 target은 모두
+승격을 차단하고 runner-local 진단으로만 남긴다.
 
 tag workflow는 exact commit의 성공한 target-certification run만 GitHub Actions
-API로 조회한다. artifact 이름은
-`target-evidence-<kind>-<commit>-<run-id>-<attempt>`이며 네 표준 target별로
-정확히 하나여야 한다. 다운로드한 bundle은 Gitleaks 검사를 거친 뒤 release와
-재결합해 promotion한다. promotion report는 publish 단계에서 한 번 더 검증해
-stable `release-promotion.json` asset으로 게시한다.
+API로 조회한다. 한 번의 네-target 시도는
+`cert-<UTC YYYYMMDDThhmmssZ>-<commit8>` cohort를 공유한다. Artifact 이름은
+`target-evidence-<kind>-<commit>-<cohort>-<run-id>-<attempt>`이며 선택한
+commit+cohort 안에서 네 표준 target별로 정확히 하나여야 한다. 다운로드한
+bundle은 Gitleaks와 raw-nonce-field 검사를 거친 뒤 release와 재결합해
+promotion한다. Protected annotated tag message에는 정확히 한 줄의
+`Certification-Cohort: <cohort>`를 넣는다. Tag workflow는 같은 tag의 draft
+release를 재사용하고 모든 remote asset bytes를 다시 비교한 뒤에만 publish한다.
+Promotion report는 stable `release-promotion.json` asset으로 게시한다.
 
 actual-target job은 `target-certification` 보호 environment와 다음 네
 allowlisted label만 사용한다.
@@ -388,19 +393,20 @@ self-hosted guest certifier는 WSL의 exact distribution 환경과 Microsoft ker
 또는 Lima의 exact instance 환경과 root-owned runtime marker를 확인한다. 두 guest
 모두 생성 시 provision된 root-owned `/etc/mds/image-identity-v1`을 독립적으로
 읽어 embedded catalog의 URL·SHA-256과 host ownership record의 creation
-nonce를 runner service의 `MDS_EXPECTED_GUEST_CREATION_NONCE`와 대조한 뒤 그
-관측 identity를 자식 `mds` process에
-전달한다. nonce는 guest plan target fingerprint에도 포함된다. 일반
+nonce를 one-job runner process의 `MDS_EXPECTED_GUEST_CREATION_NONCE`와 대조한 뒤 그
+관측 identity의 domain-separated nonce commitment만 자식 `mds` process에
+전달한다. Commitment는 guest plan target fingerprint에도 포함되지만 raw
+nonce는 argv, plan과 evidence에 포함되지 않는다. 일반
 handoff와 certification 모두 catalog 값만으로 실제 image identity를 합성하지
 않는다.
 self-hosted runner는 target별 전용 OS 계정과 전용 작업 디렉터리에서 실행하고,
 저장된 API key, browser session, SSH agent, cloud credential 또는 repository
 secret을 두지 않는다. workflow의 자동 `GITHUB_TOKEN`은 `contents: read`로만
-제한하고 environment에는 secret을 등록하지 않는다. guest runner service는
+제한하고 environment에는 secret을 등록하지 않는다. guest one-job runner는
 host의 committed ownership record에서 읽은 nonce를 root-owned service
 configuration에 target별로 고정한다. workflow dispatcher input으로 nonce를
 받지 않으며, 값이 없거나 형식이 틀리면 guest certification을 실행하지 않는다.
-host runner service에는 이 환경값을 두지 않는다. 보호 environment reviewer는
+host runner process에는 이 환경값을 두지 않는다. 보호 environment reviewer는
 `github.sha`, target, binary checksum과 runner label을 확인한 뒤 실행을
 허용한다. caller가 임의 expected commit을 전달할 수 없고 protected non-fork
 ref의 `github.sha`만 `persist-credentials: false`로 checkout한다. evidence는

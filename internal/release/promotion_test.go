@@ -36,11 +36,13 @@ func TestPromoteRequiresExactTargetSetAndReleaseBinaryIdentity(t *testing.T) {
 		releaseManifest.Commit,
 		releaseManifest.Date,
 	)
+	cohort := "cert-20260730T000000Z-" + releaseManifest.Commit[:8]
 	calls := make(map[string]int)
 	report, err := promoteWithVerifier(PromotionOptions{
 		ReleaseDir:     dist,
 		EvidenceRoot:   root,
 		ExpectedCommit: releaseManifest.Commit,
+		ExpectedCohort: cohort,
 		Now:            time.Date(2026, 7, 30, 0, 0, 0, 0, time.UTC),
 		MaxAge:         24 * time.Hour,
 	}, func(bundle string, options evidence.VerifyOptions) (evidence.Manifest, error) {
@@ -55,7 +57,7 @@ func TestPromoteRequiresExactTargetSetAndReleaseBinaryIdentity(t *testing.T) {
 			}
 		}
 		manifest := evidence.Manifest{
-			Status: evidence.StatusVerified,
+			Status: evidence.StatusVerified, Cohort: cohort,
 			Target: evidence.TargetIdentity{
 				ID: requiredTargetID(kind), Kind: kind,
 			},
@@ -70,7 +72,8 @@ func TestPromoteRequiresExactTargetSetAndReleaseBinaryIdentity(t *testing.T) {
 				options.ExpectedPlanDigest != manifest.PlanDigest ||
 				options.ExpectedTargetID != manifest.Target.ID ||
 				options.ExpectedBinarySHA256 != manifest.BinarySHA256 ||
-				!options.RequirePublicationAcceptable {
+				options.ExpectedCohort != cohort ||
+				!options.RequireVerified {
 				return evidence.Manifest{}, fmt.Errorf(
 					"second strict verification was not fully bound: %#v",
 					options,
@@ -83,6 +86,7 @@ func TestPromoteRequiresExactTargetSetAndReleaseBinaryIdentity(t *testing.T) {
 		t.Fatalf("Promote() error = %v", err)
 	}
 	if report.Commit != releaseManifest.Commit ||
+		report.Cohort != cohort ||
 		report.CatalogRevision != releaseManifest.CatalogRevision ||
 		len(report.Targets) != 4 {
 		t.Fatalf("promotion report = %#v", report)
@@ -141,6 +145,15 @@ func TestPromoteFailsClosedForMissingDuplicateOrMismatchedEvidence(t *testing.T)
 			},
 			want: "non-standard ID",
 		},
+		{
+			name: "blocked target",
+			dirs: []string{"macos-host", "windows-host", "wsl-guest", "lima-guest"},
+			mutate: func(value evidence.Manifest) evidence.Manifest {
+				value.Status = evidence.StatusBlocked
+				return value
+			},
+			want: "not verified",
+		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -154,6 +167,7 @@ func TestPromoteFailsClosedForMissingDuplicateOrMismatchedEvidence(t *testing.T)
 			_, promoteErr := promoteWithVerifier(PromotionOptions{
 				ReleaseDir: dist, EvidenceRoot: root,
 				ExpectedCommit: manifest.Commit,
+				ExpectedCohort: "cert-20260730T000000Z-" + manifest.Commit[:8],
 				Now:            time.Now().UTC(), MaxAge: time.Hour,
 			}, func(bundle string, _ evidence.VerifyOptions) (evidence.Manifest, error) {
 				kinds := []targetpkg.Kind{
@@ -177,6 +191,7 @@ func TestPromoteFailsClosedForMissingDuplicateOrMismatchedEvidence(t *testing.T)
 				}
 				value := evidence.Manifest{
 					Status: evidence.StatusVerified,
+					Cohort: "cert-20260730T000000Z-" + manifest.Commit[:8],
 					Target: evidence.TargetIdentity{
 						ID: requiredTargetID(kind), Kind: kind,
 					},
@@ -208,6 +223,7 @@ func TestVerifyPromotionReportRebindsStableReportToRelease(t *testing.T) {
 	report := PromotionReport{
 		SchemaVersion: PromotionSchemaVersion,
 		Version:       manifest.Version, Commit: manifest.Commit,
+		Cohort:          "cert-20260730T000000Z-" + manifest.Commit[:8],
 		CatalogRevision: manifest.CatalogRevision,
 	}
 	for _, kind := range requiredPromotionTargets {
@@ -231,7 +247,12 @@ func TestVerifyPromotionReportRebindsStableReportToRelease(t *testing.T) {
 	if err := WritePromotionReport(path, report); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := VerifyPromotionReport(dist, path, manifest.Commit); err != nil {
+	if _, err := VerifyPromotionReport(
+		dist,
+		path,
+		manifest.Commit,
+		report.Cohort,
+	); err != nil {
 		t.Fatalf("VerifyPromotionReport() error = %v", err)
 	}
 	report.Commit = strings.Repeat("f", len(manifest.Commit))
@@ -239,8 +260,28 @@ func TestVerifyPromotionReportRebindsStableReportToRelease(t *testing.T) {
 	if err := WritePromotionReport(tampered, report); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := VerifyPromotionReport(dist, tampered, manifest.Commit); err == nil ||
+	if _, err := VerifyPromotionReport(
+		dist,
+		tampered,
+		manifest.Commit,
+		report.Cohort,
+	); err == nil ||
 		!strings.Contains(err.Error(), "exact release identity") {
 		t.Fatalf("VerifyPromotionReport(tampered) error = %v", err)
+	}
+
+	report.Commit = manifest.Commit
+	report.Targets[0].Status = evidence.StatusBlocked
+	blocked := filepath.Join(t.TempDir(), "release-promotion.json")
+	if err := WritePromotionReport(blocked, report); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := VerifyPromotionReport(
+		dist,
+		blocked,
+		manifest.Commit,
+		report.Cohort,
+	); err == nil || !strings.Contains(err.Error(), "not verified") {
+		t.Fatalf("VerifyPromotionReport(blocked) error = %v", err)
 	}
 }

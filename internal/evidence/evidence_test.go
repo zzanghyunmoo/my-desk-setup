@@ -28,6 +28,7 @@ const (
 	fixtureCommit          = "0123456789abcdef0123456789abcdef01234567"
 	fixtureCLIRevision     = "0.1.0 (commit=" + fixtureCommit + ", date=2026-07-29T00:00:00Z)"
 	fixtureCatalogRevision = "sha256:catalog"
+	fixtureCohort          = "cert-20260730T000000Z-01234567"
 )
 
 func TestCertifyAndVerifyReadyActualTarget(t *testing.T) {
@@ -36,6 +37,7 @@ func TestCertifyAndVerifyReadyActualTarget(t *testing.T) {
 	manifest, err := Verify(bundle, VerifyOptions{
 		ExpectedCLIRevision:     fixtureCLIRevision,
 		ExpectedCatalogRevision: fixtureCatalogRevision,
+		ExpectedCohort:          fixtureCohort,
 	})
 	if err != nil {
 		t.Fatalf("Verify(): %v", err)
@@ -46,9 +48,65 @@ func TestCertifyAndVerifyReadyActualTarget(t *testing.T) {
 	if manifest.CaptureKind != CaptureKindActualTarget {
 		t.Fatalf("capture_kind = %q, want actual target", manifest.CaptureKind)
 	}
+	if manifest.Cohort != fixtureCohort {
+		t.Fatalf("cohort = %q, want %q", manifest.Cohort, fixtureCohort)
+	}
 	if manifest.CLI.Commit != fixtureCommit || manifest.CLI.Version != "0.1.0" {
 		t.Fatalf("CLI identity = %+v", manifest.CLI)
 	}
+}
+
+func TestCertificationCohortIsStrictAndCommitBounded(t *testing.T) {
+	if err := ValidateCertificationCohort(fixtureCohort); err != nil {
+		t.Fatalf("ValidateCertificationCohort(): %v", err)
+	}
+	prefix, err := CertificationCohortCommitPrefix(fixtureCohort)
+	if err != nil || prefix != fixtureCommit[:8] {
+		t.Fatalf("cohort commit prefix = %q error=%v", prefix, err)
+	}
+	for _, invalid := range []string{
+		"",
+		"cert-20260730T000000Z-0123456",
+		"cert-20260730T000000+0900-01234567",
+		"cert-20261330T000000Z-01234567",
+		"cert-20260730T000000Z-0123456G",
+	} {
+		if err := ValidateCertificationCohort(invalid); err == nil {
+			t.Fatalf("ValidateCertificationCohort(%q) succeeded", invalid)
+		}
+	}
+}
+
+func TestVerifyRejectsDifferentCertificationCohort(t *testing.T) {
+	bundle := certifyFixture(t, true)
+	_, err := Verify(bundle, VerifyOptions{
+		ExpectedCohort: "cert-20260730T010000Z-01234567",
+	})
+	assertErrorContains(t, err, "wrong certification cohort")
+}
+
+func TestVerifyRejectsCohortFromAnotherCommit(t *testing.T) {
+	bundle := certifyFixture(t, true)
+	rewriteManifest(t, bundle, func(manifest *Manifest) {
+		manifest.Cohort = "cert-20260730T000000Z-deadbeef"
+	})
+	_, err := Verify(bundle, VerifyOptions{})
+	assertErrorContains(t, err, "does not match the production CLI commit")
+}
+
+func TestVerifyFreshnessUsesManifestCaptureCompletionTime(t *testing.T) {
+	bundle := certifyFixture(t, true)
+	captured := time.Unix(1<<40, 0).UTC()
+	if _, err := Verify(bundle, VerifyOptions{
+		Now: captured.Add(24 * time.Hour), MaxAge: 24 * time.Hour,
+	}); err != nil {
+		t.Fatalf("Verify(exact freshness boundary): %v", err)
+	}
+	_, err := Verify(bundle, VerifyOptions{
+		Now:    captured.Add(24*time.Hour + time.Second),
+		MaxAge: 24 * time.Hour,
+	})
+	assertErrorContains(t, err, "timestamp is stale")
 }
 
 func TestCertifyPublishesCommitmentWithoutRawGuestNonce(t *testing.T) {
@@ -637,6 +695,7 @@ func TestCertifyRejectsRepeatApplyMutationAfterDistinctFirstApply(t *testing.T) 
 		MDSPath:    filepath.Join(root, "fake-mds"),
 		TargetID:   plan.Target.ID.String(),
 		OutputDir:  filepath.Join(root, "mutating-repeat-bundle"),
+		Cohort:     fixtureCohort,
 		Components: []string{"go"},
 		Getenv: func(key string) string {
 			if key == "MDS_EXPECTED_GUEST_CREATION_NONCE" {
@@ -805,6 +864,7 @@ esac
 	bundle := filepath.Join(root, "bundle")
 	manifest, err := Certify(context.Background(), CertifyRequest{
 		MDSPath: binaryPath, TargetID: targetID.String(), OutputDir: bundle,
+		Cohort:     fixtureCohort,
 		Components: []string{"go"},
 		Getenv: func(key string) string {
 			if key == "MDS_EXPECTED_GUEST_CREATION_NONCE" {

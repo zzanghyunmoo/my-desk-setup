@@ -102,9 +102,9 @@ CLI와 Compose plugin은 guest-local systemd service로 설치하고 검증한�
 Release의 `checksums.txt`와 `release-manifest.json`을 먼저 검증하고, 같은
 release에 포함된 `macos.sh` 또는 `windows.ps1`을 사용한다. bootstrap은 exact
 release version과 archive SHA-256을 요구하며 임의의 `latest`를 실행하지 않는다.
-tag publication은 네 표준 actual target의 exact commit/catalog/plan/binary
-evidence를 통과해야 하며, 결과는 영구 asset `release-promotion.json`으로
-release에 함께 포함된다.
+tag publication은 네 표준 actual target의 동일한 immutable
+commit+cohort와 exact catalog/plan/binary verified evidence를 통과해야 하며,
+결과는 영구 asset `release-promotion.json`으로 release에 함께 포함된다.
 
 ```sh
 MDS_VERSION='<exact-version>' \

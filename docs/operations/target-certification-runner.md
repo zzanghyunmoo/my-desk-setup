@@ -25,20 +25,22 @@ host committed ownership record와 일치하는 값이 없으면 job을 실행�
 
 repository 관리자가 다음 외부 상태를 먼저 만든다.
 
-1. `main`과 certification에 사용할 ref를 protected ref로 설정한다.
+1. `main`과 certification에 사용할 ref, `v*` tag를 protected ruleset으로
+   설정하고 tag update/delete를 금지한다.
 2. repository environment `target-certification`을 만든다.
 3. environment에 required reviewer와 protected branch/tag deployment rule을
    설정한다.
 4. environment secret은 등록하지 않는다.
-5. 각 runner를 이 개인 repository의 repository-level runner로 직접 등록하고
-   표의 custom label 하나만 부여한다. 개인 repository에는 organization/
-   enterprise runner group을 전제하지 않는다.
+5. 각 job 직전에 이 개인 repository의 repository-level `--ephemeral`
+   runner를 등록하고 표의 custom label 하나만 부여한다. 개인 repository에는
+   organization/enterprise runner group을 전제하지 않는다.
 
 `Actual target` job은 non-fork `workflow_dispatch`, `github.ref_protected`,
-`target-certification` reviewer 승인을 모두 요구한다. dispatcher는 commit이나
-guest creation nonce를 입력할 수 없다.
+`target-certification` reviewer 승인을 모두 요구한다. Dispatcher는 commit이나
+guest creation nonce를 입력할 수 없고, 네 dispatch는 같은 canonical
+`cert-<UTC YYYYMMDDThhmmssZ>-<commit8>` cohort를 사용한다.
 
-## 2. 전용 OS 계정과 service
+## 2. 전용 OS 계정과 one-job ephemeral runner
 
 각 target에서 interactive 개발 계정과 분리된 계정을 만든다. 권장 계정명과
 작업 root는 다음과 같다.
@@ -55,23 +57,31 @@ repository secret을 복사하지 않는다. guest의 system package와 Docker d
 준비처럼 service job에서 prompt할 수 없는 prerequisite는 dispatch 전에
 운영자가 별도로 완료한다. Docker 기능 검증에 필요한 target-local group
 membership은 reviewed prerequisite로만 허용한다. GitHub runner 자체의
-repository-scoped service registration material만 runner 설치 문서가 지정한
-owner-only 위치에 둔다.
+repository-scoped registration material은 해당 한 job 동안만 owner-only
+runner directory에 둔다.
 
 GitHub의 현재 self-hosted runner 설치 문서에서 target OS/architecture의 exact
 archive와 checksum을 확인한 뒤 사용자가 runner를 등록한다. 등록 시 repository
-URL, 표의 custom label 하나와 전용 work directory를 선택한다. macOS/Linux는
-등록 뒤 `svc.sh`, Windows는 service mode로 설치해
-전용 계정으로 실행한다. registration token이나 GitHub 로그인 명령은 이
-runbook, shell history 또는 repository에 기록하지 않는다.
+URL, `--ephemeral`, `--no-default-labels`, 표의 custom label 하나와 전용 work
+directory를 선택한다. Registration token 입력과 실제 등록 명령 실행은 사용자가
+직접 하고 이 runbook, shell history 또는 repository에 기록하지 않는다.
+Persistent `svc.sh`/Windows service 등록은 사용하지 않는다. 전용 계정의
+foreground one-job process 또는 운영자가 만든 one-shot service로 한 job만
+받은 뒤 process가 종료돼야 한다.
 
-service 설치 후 다음을 확인한다.
+job 시작 전에 다음을 확인한다.
 
-- service 계정과 work directory owner가 표의 전용 계정이다.
+- runner process 계정과 work directory owner가 표의 전용 계정이다.
 - runner에 다른 `mds-*` label이 없다.
 - work directory에 기존 checkout이나 credential file이 없다.
 - host runner process에는 `MDS_EXPECTED_GUEST_CREATION_NONCE`가 없다.
-- guest runner service는 다음 절차가 끝날 때까지 중지돼 있다.
+- guest runner process는 다음 절차가 끝날 때까지 시작하지 않는다.
+
+job 종료 뒤 runner가 GitHub에서 자동 deregister됐는지 확인한다. Process를
+종료하고 owner-only runner directory의 registration credential, `_diag`와
+`_work`를 scrub한 뒤 다음 job은 새 directory와 새 registration으로 시작한다.
+실패·`blocked` bundle은 필요하면 권한이 제한된 상태에서 진단한 뒤 업로드하지
+않고 같은 scrub 절차를 적용한다.
 
 ## 3. Guest committed ownership 확인
 
@@ -191,14 +201,14 @@ file이고 mode `0600`, `0640` 또는 `0644`여야 한다. root로 읽어 record
 확인한다. 하나라도 다르면 runner를 시작하지 말고 same-name replacement
 guest 또는 stale ownership conflict를 먼저 해결한다.
 
-## 4. Guest runner service에 nonce 고정
+## 4. Guest one-job runner에 nonce 주입
 
-guest의 GitHub runner systemd unit을 `<runner-service-unit>`이라 한다.
-host record에서 확인한 64자 lowercase creation nonce를 root-owned drop-in에
-설정한다.
+guest의 one-shot GitHub runner process를 시작하는 systemd unit을
+`<runner-one-shot-unit>`이라 한다. Host record에서 확인한 64자 lowercase
+creation nonce를 해당 cohort/job에만 쓰는 root-owned drop-in에 설정한다.
 
 ```ini
-# /etc/systemd/system/<runner-service-unit>.service.d/mds-identity.conf
+# /etc/systemd/system/<runner-one-shot-unit>.service.d/mds-identity.conf
 [Service]
 Environment="MDS_EXPECTED_GUEST_CREATION_NONCE=<64-lowercase-hex>"
 ```
@@ -206,13 +216,15 @@ Environment="MDS_EXPECTED_GUEST_CREATION_NONCE=<64-lowercase-hex>"
 directory는 root 소유 `0755`, 파일은 root 소유 `0600`으로 만들고 다음 순서로
 반영한다.
 
-1. runner service를 중지한다.
+1. runner process가 실행 중이지 않은지 확인한다.
 2. root 권한 editor로 drop-in을 작성한다.
 3. owner/mode와 값의 `^[0-9a-f]{64}$` 형식을 root 권한으로 검사하되 값을
    stdout에 출력하지 않는다.
-4. `systemctl daemon-reload` 뒤 service를 시작한다.
+4. `systemctl daemon-reload` 뒤 one-shot runner를 시작한다.
 5. 전용 계정 process가 값을 상속했는지만 root 권한으로 검사하고 실제 nonce는
    log에 출력하지 않는다.
+6. job 종료와 deregistration 확인 뒤 unit/drop-in과 process environment에서
+   nonce를 제거하고 runner directory를 scrub한다.
 
 workflow는 guest target에서 이 값이 없거나 형식이 틀리면 capture 전에
 실패한다. host target에서 값이 발견돼도 실패한다. 값은 workflow input,
@@ -223,7 +235,7 @@ repository/environment secret 또는 job-level `env`로 대체하지 않는다.
 environment reviewer는 승인 전에 다음 값을 release manifest, reviewed plan과
 대조한다.
 
-- protected ref의 `github.sha`
+- protected ref의 `github.sha`와 네 target이 공유할 immutable cohort
 - target ID와 custom runner label exact pair
 - production `mds`의 absolute regular non-symlink path
 - release manifest의 on-disk binary SHA-256
@@ -233,22 +245,22 @@ environment reviewer는 승인 전에 다음 값을 release manifest, reviewed p
 - runner work directory가 이전 job의 untracked file 없이 clean한 상태
 
 runner에는 실제 target과 production binary가 준비돼 있어야 한다. 인증되지
-않은 component가 있으면 bundle은 정직하게 `blocked`가 될 수 있으며 reviewer는
-이를 `verified`로 바꾸지 않는다.
+않은 component가 있으면 bundle은 정직하게 `blocked`가 되고 upload/promotion
+대상이 아니다. Reviewer는 이를 `verified`로 바꾸지 않는다.
 
 ## 6. Guest 재생성과 nonce rotation
 
 guest를 다시 만들거나 host ownership record의 creation nonce가 바뀌면 기존
-runner service를 즉시 중지한다.
+one-job runner process를 즉시 중지한다.
 
 1. 새 guest의 root-owned marker와 새 committed host record를 먼저 대조한다.
-2. old nonce가 든 drop-in을 새 nonce로 교체한다.
-3. `daemon-reload`와 service restart를 수행한다.
+2. old nonce가 든 one-shot drop-in을 새 nonce로 교체한다.
+3. `daemon-reload` 뒤 새 ephemeral runner를 등록·실행한다.
 4. old nonce가 process environment나 backup drop-in에 남지 않았는지 root
    권한으로 확인한다.
 5. 새 commit에서 certification을 다시 수행한다.
 
-old guest, old nonce 또는 이전 commit의 evidence는 새 target identity의
-certification으로 재사용하지 않는다. runner를 제거할 때는 GitHub에서
-registration을 폐기한 뒤 service와 owner-only runner directory를 운영자가
-명시적으로 삭제한다.
+old guest, old nonce, 이전 commit 또는 다른 cohort의 evidence는 새 target
+identity의 certification으로 재사용하지 않는다. Job마다 GitHub deregistration,
+one-shot unit/drop-in 제거와 owner-only runner directory scrub을 사용자가
+확인한다.

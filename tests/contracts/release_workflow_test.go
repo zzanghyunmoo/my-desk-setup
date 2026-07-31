@@ -23,6 +23,11 @@ func TestReleasePublishRequiresActualTargetPromotion(t *testing.T) {
 		"release-promotion.json",
 		"- promotion",
 		"actions: read",
+		"Certification-Cohort:",
+		"github.ref_protected == true",
+		"scripts/publish-release.sh",
+		"MDS_CERTIFICATION_COHORT:",
+		"release-promotion-${{ needs.build.outputs.commit }}-${{ needs.build.outputs.cohort }}",
 	} {
 		if !strings.Contains(workflow, required) {
 			t.Fatalf("release workflow missing %q", required)
@@ -44,7 +49,10 @@ func TestTargetCertificationCarriesExactPromotionIdentity(t *testing.T) {
 	workflow := string(content)
 	for _, required := range []string{
 		"expected_binary_sha256:",
+		"cohort:",
 		"--expected-binary-sha256",
+		`--cohort "$CERTIFICATION_COHORT"`,
+		`--expected-cohort "$CERTIFICATION_COHORT"`,
 		"MDS_EXPECTED_GUEST_CREATION_NONCE",
 		`[[ ! "${MDS_EXPECTED_GUEST_CREATION_NONCE:-}" =~ ^[0-9a-f]{64}$ ]]`,
 		"--require-verified",
@@ -59,7 +67,7 @@ func TestTargetCertificationCarriesExactPromotionIdentity(t *testing.T) {
 		`test "$(git rev-parse HEAD)" = "$EXPECTED_COMMIT"`,
 		`test -z "$(git status --porcelain=v1 --untracked-files=all)"`,
 		"EVIDENCE_OUTPUT=$RUNNER_TEMP/mds-target-evidence/run-$GITHUB_RUN_ID-attempt-$GITHUB_RUN_ATTEMPT",
-		"target-evidence-${{ steps.certification-identity.outputs.target_kind }}-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}",
+		"target-evidence-${{ steps.certification-identity.outputs.target_kind }}-${{ github.sha }}-${{ steps.certification-identity.outputs.cohort }}-${{ github.run_id }}-${{ github.run_attempt }}",
 		"wsl-guest:Ubuntu-26.04",
 		"lima-guest:mds",
 		"mds-macos-host",
@@ -71,8 +79,11 @@ func TestTargetCertificationCarriesExactPromotionIdentity(t *testing.T) {
 		"windows-host:local)\n              target_kind=windows-host\n              expected_runner_label=mds-windows-host\n              certification_profile=certification-windows-host",
 		"wsl-guest:Ubuntu-26.04)\n              target_kind=wsl-guest\n              expected_runner_label=mds-wsl-guest\n              certification_profile=certification-wsl-guest",
 		"lima-guest:mds)\n              target_kind=lima-guest\n              expected_runner_label=mds-lima-guest\n              certification_profile=certification-lima-guest",
-		`echo "certification_profile=$certification_profile" >> "$GITHUB_OUTPUT"`,
+		`echo "certification_profile=$certification_profile"`,
+		`echo "cohort=$CERTIFICATION_COHORT"`,
 		"CERTIFICATION_PROFILE: ${{ steps.certification-identity.outputs.certification_profile }}",
+		"scripts/install-gitleaks.sh",
+		`grep -R -q -E '"(image_)?creation_nonce"[[:space:]]*:'`,
 		"unsupported promotion target ID: $TARGET_ID",
 		"Exact reviewed certification profile plan digest for this target",
 		"      - name: Upload verified certification output\n        if: success()\n        uses: actions/upload-artifact@",
@@ -210,13 +221,40 @@ func TestEvidenceDiscoveryBindsExactRunIdentityAndTargetCardinality(
 		"actions/workflows/target-certification.yml/runs",
 		`.head_sha == $commit`,
 		`.conclusion == "success"`,
-		`+ $commit + "-" + $run_id + "-" + $run_attempt + "$"`,
+		"MDS_CERTIFICATION_COHORT",
+		`+ $commit + "-" + $cohort + "-" + $run_id + "-" + $run_attempt + "$"`,
 		"for mds_kind in macos-host windows-host wsl-guest lima-guest",
 		"expected exactly one $mds_kind artifact",
 		"does not contain the exact four-file bundle",
 	} {
 		if !strings.Contains(script, required) {
 			t.Fatalf("evidence discovery script missing %q", required)
+		}
+	}
+}
+
+func TestReleasePublicationIsDraftFirstAndIdempotent(t *testing.T) {
+	root := repositoryRoot(t)
+	content, err := os.ReadFile(
+		filepath.Join(root, "scripts", "publish-release.sh"),
+	)
+	if err != nil {
+		t.Fatalf("read release publication script: %v", err)
+	}
+	script := string(content)
+	for _, required := range []string{
+		`git rev-list -n 1 "$MDS_RELEASE_TAG"`,
+		`gh release create "$MDS_RELEASE_TAG"`,
+		"--draft",
+		`gh release upload "$MDS_RELEASE_TAG"`,
+		"--clobber",
+		`gh release download "$MDS_RELEASE_TAG"`,
+		`cmp -s "$mds_local"`,
+		`gh release edit "$MDS_RELEASE_TAG"`,
+		"--draft=false",
+	} {
+		if !strings.Contains(script, required) {
+			t.Fatalf("release publication script missing %q", required)
 		}
 	}
 }

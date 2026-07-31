@@ -30,6 +30,7 @@ type Manifest struct {
 	SchemaVersion   string           `json:"schema_version"`
 	CaptureKind     string           `json:"capture_kind"`
 	Status          Status           `json:"status"`
+	Cohort          string           `json:"cohort"`
 	CapturedAtUnix  json.Number      `json:"captured_at_unix"`
 	Target          TargetIdentity   `json:"target"`
 	CLI             CLIIdentity      `json:"cli"`
@@ -79,6 +80,7 @@ type CertifyRequest struct {
 	MDSPath    string
 	TargetID   string
 	OutputDir  string
+	Cohort     string
 	All        bool
 	Profile    string
 	Components []string
@@ -100,6 +102,8 @@ type VerifyOptions struct {
 	ExpectedPlanDigest           string
 	ExpectedTargetID             string
 	ExpectedBinarySHA256         string
+	ExpectedCohort               string
+	RequireVerified              bool
 	RequirePublicationAcceptable bool
 	Now                          time.Time
 	MaxAge                       time.Duration

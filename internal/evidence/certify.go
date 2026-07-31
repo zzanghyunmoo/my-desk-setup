@@ -69,6 +69,12 @@ func Certify(ctx context.Context, request CertifyRequest) (Manifest, error) {
 	if err != nil {
 		return Manifest{}, err
 	}
+	cohortCommitPrefix, err := CertificationCohortCommitPrefix(request.Cohort)
+	if err != nil || cohortCommitPrefix != cli.Commit[:8] {
+		return Manifest{}, errors.New(
+			"certification cohort does not match the production CLI commit",
+		)
+	}
 	selectionArgs, err := selectionArguments(request)
 	if err != nil {
 		return Manifest{}, err
@@ -227,7 +233,7 @@ func Certify(ctx context.Context, request CertifyRequest) (Manifest, error) {
 	}
 	manifest := Manifest{
 		SchemaVersion: SchemaVersion, CaptureKind: CaptureKindActualTarget,
-		Status:         status,
+		Status: status, Cohort: request.Cohort,
 		CapturedAtUnix: json.Number(strconv.FormatInt(now.Unix(), 10)),
 		Target:         targetIdentity, CLI: cli,
 		BinarySHA256:    binarySHA256,
@@ -244,6 +250,7 @@ func Certify(ctx context.Context, request CertifyRequest) (Manifest, error) {
 		ExpectedPlanDigest:      plan.Digest,
 		ExpectedTargetID:        request.TargetID,
 		ExpectedBinarySHA256:    binarySHA256,
+		ExpectedCohort:          request.Cohort,
 	}); err != nil {
 		return Manifest{}, fmt.Errorf("verify captured evidence: %w", err)
 	}
@@ -275,6 +282,9 @@ func validateCertifyRequest(request CertifyRequest) error {
 	if request.ExpectedBinarySHA256 != "" &&
 		exactartifact.ValidateSHA256(request.ExpectedBinarySHA256) != nil {
 		return errors.New("expected mds binary SHA-256 must be 64 lowercase hex characters")
+	}
+	if err := ValidateCertificationCohort(request.Cohort); err != nil {
+		return err
 	}
 	if _, err := target.ParseID(request.TargetID); err != nil {
 		return fmt.Errorf("invalid certification target: %w", err)

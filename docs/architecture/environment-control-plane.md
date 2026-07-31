@@ -211,15 +211,15 @@ Actions actual-target artifact를 찾아 다음 네 표준 target을 정확히 �
 
 각 bundle은 CLI commit, catalog revision, plan digest, target ID와 실제
 실행한 on-disk binary SHA-256을 release manifest에 다시 결합해 검증한다.
-guest bundle은 dispatcher가 설정할 수 없는 전용 runner service의
+guest bundle은 dispatcher가 설정할 수 없는 전용 one-job runner process의
 `MDS_EXPECTED_GUEST_CREATION_NONCE`를 root-owned marker와 대조하고, nonce를
 target fingerprint와 plan digest에 포함한다. 이 service 환경값은 host의
 committed ownership record에서 provisioning하며 guest target/name에 전용이다.
 증거가 없거나 오래됐거나 중복됐거나 identity가 다르면 publication은
-fail closed다. `verified`는 그대로 통과한다. `blocked`는 status를 바꾸지
-않으며, target identity가 완전하고 ready가 아닌 모든 outcome이 사용자의
-정직한 `action-required`인 경우에만 publication-acceptable이다. planned
-`unready`/`conflict`, `unsupported` 또는 불완전 target은 승격을 차단한다.
+fail closed다. 네 bundle은 동일한 immutable commit+cohort에 속하고 manifest
+capture 완료 시각이 24시간 이내이며 모두 `verified`여야 한다. `blocked`,
+`unready`/`conflict`, `unsupported` 또는 불완전 target은 예외 없이 승격을
+차단한다.
 
 promotion 결과는 deterministic `mds.release-promotion/v1` 보고서로 만들고
 publish 직전에 release manifest와 다시 대조한 뒤

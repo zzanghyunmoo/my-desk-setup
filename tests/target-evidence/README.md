@@ -28,6 +28,7 @@ scripts/certify-target.sh \
   --mds /absolute/path/to/mds \
   --target lima-guest:mds \
   --output target-evidence/run-manual-001 \
+  --cohort 'cert-20260731T120000Z-<commit8>' \
   --expected-binary-sha256 '<release-binary-sha256>' \
   --profile certification-lima-guest
 unset MDS_EXPECTED_GUEST_CREATION_NONCE
@@ -39,6 +40,7 @@ scripts/verify-target-evidence.sh \
   --expected-plan-digest 'sha256:<target-eligible-all-plan>' \
   --expected-target lima-guest:mds \
   --expected-binary-sha256 '<release-binary-sha256>' \
+  --expected-cohort 'cert-20260731T120000Z-<commit8>' \
   --max-age 45m \
   --require-verified
 ```
@@ -47,7 +49,7 @@ For a manual WSL/Lima run, read the expected nonce from the host's committed
 ownership record and confirm the provider/name before exposing it only through
 the protected process environment. The
 self-hosted workflow does not accept this value from the dispatcher: its
-dedicated guest runner service must inherit the target-specific, root-owned
+dedicated guest one-job runner process must inherit the target-specific, root-owned
 `MDS_EXPECTED_GUEST_CREATION_NONCE`. Host certifier processes and runner
 services must not define that environment variable.
 
@@ -57,11 +59,12 @@ profile, and an unknown target ID fails before capture. General `all` and
 `owner` selection keep their honest manual and platform-limited outcomes.
 
 The workflow appends the GitHub run ID and attempt to its target-local output
-parent. Artifact names bind target kind, expected commit, run ID, and attempt.
-Only a bundle that passes strict `--require-verified` verification is uploaded.
-An honestly `blocked` capture remains runner-local for diagnosis. Missing,
-stale, duplicate, unsupported, planned unready/conflict, wrong-target, and
-wrong-binary evidence remain failures.
+parent. Artifact names bind target kind, expected commit, immutable cohort,
+run ID, and attempt. Only a bundle that passes strict `--require-verified`,
+Gitleaks, and raw-nonce-field verification is uploaded. An honestly `blocked`
+capture remains runner-local for diagnosis. Missing, stale, cross-cohort,
+duplicate, unsupported, planned unready/conflict, wrong-target, and wrong-binary
+evidence remain failures.
 
 Authentication remains user-owned. Neither command accepts auth/login/token
 arguments, and the verifier rejects credential-shaped content, auth commands,

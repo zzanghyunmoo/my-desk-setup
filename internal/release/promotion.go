@@ -32,6 +32,7 @@ type PromotionOptions struct {
 	ReleaseDir     string
 	EvidenceRoot   string
 	ExpectedCommit string
+	ExpectedCohort string
 	Now            time.Time
 	MaxAge         time.Duration
 }
@@ -49,6 +50,7 @@ type PromotionReport struct {
 	SchemaVersion   string           `json:"schema_version"`
 	Version         string           `json:"version"`
 	Commit          string           `json:"commit"`
+	Cohort          string           `json:"cohort"`
 	CatalogRevision string           `json:"catalog_revision"`
 	Targets         []PromotedTarget `json:"targets"`
 }
@@ -74,6 +76,19 @@ func promoteWithVerifier(
 	if !commitPattern.MatchString(options.ExpectedCommit) {
 		return PromotionReport{}, errors.New(
 			"expected release commit must be a full lowercase commit SHA",
+		)
+	}
+	if err := evidence.ValidateCertificationCohort(
+		options.ExpectedCohort,
+	); err != nil {
+		return PromotionReport{}, err
+	}
+	cohortCommitPrefix, err := evidence.CertificationCohortCommitPrefix(
+		options.ExpectedCohort,
+	)
+	if err != nil || cohortCommitPrefix != options.ExpectedCommit[:8] {
+		return PromotionReport{}, errors.New(
+			"certification cohort does not match the release commit",
 		)
 	}
 	if options.Now.IsZero() || options.MaxAge <= 0 {
@@ -114,6 +129,7 @@ func promoteWithVerifier(
 		initial, verifyErr := verify(bundle, evidence.VerifyOptions{
 			ExpectedCLIRevision:     expectedCLIRevision,
 			ExpectedCatalogRevision: releaseManifest.CatalogRevision,
+			ExpectedCohort:          options.ExpectedCohort,
 			Now:                     options.Now,
 			MaxAge:                  options.MaxAge,
 		})
@@ -122,6 +138,13 @@ func promoteWithVerifier(
 				"verify target evidence %s: %w",
 				filepath.Base(bundle),
 				verifyErr,
+			)
+		}
+		if initial.Status != evidence.StatusVerified {
+			return PromotionReport{}, fmt.Errorf(
+				"target evidence %q is %s, not verified",
+				initial.Target.ID,
+				initial.Status,
 			)
 		}
 		kind := initial.Target.Kind
@@ -169,14 +192,15 @@ func promoteWithVerifier(
 			)
 		}
 		strict, verifyErr := verify(bundle, evidence.VerifyOptions{
-			ExpectedCLIRevision:          expectedCLIRevision,
-			ExpectedCatalogRevision:      releaseManifest.CatalogRevision,
-			ExpectedPlanDigest:           initial.PlanDigest,
-			ExpectedTargetID:             initial.Target.ID,
-			ExpectedBinarySHA256:         artifact.BinarySHA256,
-			RequirePublicationAcceptable: true,
-			Now:                          options.Now,
-			MaxAge:                       options.MaxAge,
+			ExpectedCLIRevision:     expectedCLIRevision,
+			ExpectedCatalogRevision: releaseManifest.CatalogRevision,
+			ExpectedPlanDigest:      initial.PlanDigest,
+			ExpectedTargetID:        initial.Target.ID,
+			ExpectedBinarySHA256:    artifact.BinarySHA256,
+			ExpectedCohort:          options.ExpectedCohort,
+			RequireVerified:         true,
+			Now:                     options.Now,
+			MaxAge:                  options.MaxAge,
 		})
 		if verifyErr != nil {
 			return PromotionReport{}, fmt.Errorf(
@@ -202,6 +226,7 @@ func promoteWithVerifier(
 		SchemaVersion:   PromotionSchemaVersion,
 		Version:         releaseManifest.Version,
 		Commit:          releaseManifest.Commit,
+		Cohort:          options.ExpectedCohort,
 		CatalogRevision: releaseManifest.CatalogRevision,
 		Targets:         make([]PromotedTarget, 0, len(requiredPromotionTargets)),
 	}
@@ -307,7 +332,8 @@ func WritePromotionReport(path string, report PromotionReport) error {
 func VerifyPromotionReport(
 	releaseDir,
 	reportPath,
-	expectedCommit string,
+	expectedCommit,
+	expectedCohort string,
 ) (PromotionReport, error) {
 	releaseManifest, err := Verify(releaseDir)
 	if err != nil {
@@ -318,6 +344,15 @@ func VerifyPromotionReport(
 			"release commit mismatch: manifest=%s expected=%s",
 			releaseManifest.Commit,
 			expectedCommit,
+		)
+	}
+	if err := evidence.ValidateCertificationCohort(expectedCohort); err != nil {
+		return PromotionReport{}, err
+	}
+	prefix, err := evidence.CertificationCohortCommitPrefix(expectedCohort)
+	if err != nil || prefix != expectedCommit[:8] {
+		return PromotionReport{}, errors.New(
+			"certification cohort does not match the release commit",
 		)
 	}
 	info, err := os.Lstat(reportPath)
@@ -354,6 +389,7 @@ func VerifyPromotionReport(
 	if report.SchemaVersion != PromotionSchemaVersion ||
 		report.Version != releaseManifest.Version ||
 		report.Commit != releaseManifest.Commit ||
+		report.Cohort != expectedCohort ||
 		report.CatalogRevision != releaseManifest.CatalogRevision {
 		return PromotionReport{}, errors.New(
 			"promotion report does not match the exact release identity",
@@ -380,10 +416,9 @@ func VerifyPromotionReport(
 				requiredTargetID(kind),
 			)
 		}
-		if promoted.Status != evidence.StatusVerified &&
-			promoted.Status != evidence.StatusBlocked {
+		if promoted.Status != evidence.StatusVerified {
 			return PromotionReport{}, fmt.Errorf(
-				"promotion target %q has invalid status %q",
+				"promotion target %q is not verified: %q",
 				promoted.ID,
 				promoted.Status,
 			)

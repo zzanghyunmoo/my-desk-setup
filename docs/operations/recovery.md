@@ -198,10 +198,9 @@ evidence를 다시 수집할 때는 production artifact checksum부터 재검증
 target에서 전체 certification을 새로 실행한다. verifier 통과는 bundle
 무결성을 뜻하며 target outcome이 `blocked`인 경우까지 성공으로 바꾸지 않는다.
 
-publication gate에서는 expected identity와 binary checksum을 모두 명시한다.
-`blocked`는 `verified`로 정규화하지 않는다. 다만 완전한 표준 target에서 남은
-모든 outcome이 정직한 `action-required`인 경우에만 manual exception으로
-publication-acceptable이다.
+publication gate에서는 expected commit+cohort identity와 binary checksum을
+모두 명시한다. `blocked`는 `verified`로 정규화하지 않으며 manual exception
+없이 promotion을 차단한다.
 
 ```sh
 scripts/verify-target-evidence.sh \
@@ -211,12 +210,15 @@ scripts/verify-target-evidence.sh \
   --expected-plan-digest 'sha256:<expected-plan-digest>' \
   --expected-target '<target-id>' \
   --expected-binary-sha256 '<release-binary-sha256>' \
+  --expected-cohort 'cert-<UTC YYYYMMDDThhmmssZ>-<commit8>' \
   --max-age 24h \
-  --require-publication-acceptable
+  --require-verified
 ```
 
-tag promotion은 `macos-host:local`, `windows-host:local`,
-`wsl-guest:Ubuntu-26.04`, `lima-guest:mds` bundle을 각각 정확히 하나 요구한다.
-누락, 중복, stale, commit/catalog/plan/target/binary mismatch가 있으면 새 release
-publication을 중단한다. 성공한 `release-promotion.json`은 GitHub Release의 영구
-asset이므로 임시 Actions artifact가 만료된 뒤에도 gate 결과를 확인할 수 있다.
+tag promotion은 동일한 commit+cohort의 `macos-host:local`,
+`windows-host:local`, `wsl-guest:Ubuntu-26.04`, `lima-guest:mds` verified
+bundle을 각각 정확히 하나 요구한다. 누락, 중복, stale,
+commit/cohort/catalog/plan/target/binary mismatch가 있으면 새 release
+publication을 중단한다. 성공한 `release-promotion.json`은 GitHub Release의
+영구 asset이므로 임시 Actions artifact가 만료된 뒤에도 gate 결과를 확인할 수
+있다.
