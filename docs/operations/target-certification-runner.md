@@ -72,9 +72,24 @@ Persistent `svc.sh`/Windows service 등록은 사용하지 않는다. 전용 계
 foreground one-job process 또는 운영자가 만든 one-shot service로 한 job만
 받은 뒤 process가 종료돼야 한다.
 
+Windows runner는 등록 전에 현재 지원되는 Git for Windows를 설치하고, runner
+전용 계정의 `PATH`에서 `git.exe`와 Git Bash의 `bash.exe`가 모두 발견되는지
+확인한다. Workflow checkout과 actual-target step은 각각 Git과 Bash를 필요로 한다.
+Gitleaks 설치 step은 Windows PowerShell 5.1(`powershell.exe`)을 명시적으로
+사용하므로 PowerShell 7(`pwsh`)은 필수 prerequisite가 아니다. Runner process를
+시작할 같은 계정과 환경에서 다음 preflight가 모두 성공해야 한다.
+
+```powershell
+git --version
+bash --version
+$PSVersionTable.PSVersion
+bash -lc 'git --version && grep --version'
+```
+
 job 시작 전에 다음을 확인한다.
 
 - runner process 계정과 work directory owner가 표의 전용 계정이다.
+- Windows runner는 위 Git/Bash/Windows PowerShell preflight를 통과했다.
 - runner에 다른 `mds-*` label이 없다.
 - work directory에 기존 checkout이나 credential file이 없다.
 - host runner process에는 `MDS_EXPECTED_GUEST_CREATION_NONCE`가 없다.

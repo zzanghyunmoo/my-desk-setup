@@ -86,7 +86,9 @@ func TestTargetCertificationCarriesExactPromotionIdentity(t *testing.T) {
 		"CERTIFICATION_PROFILE: ${{ steps.certification-identity.outputs.certification_profile }}",
 		"scripts/install-gitleaks.sh",
 		"scripts/install-gitleaks.ps1",
-		`if [[ "$RUNNER_OS" == Windows ]]`,
+		"Install pinned Gitleaks on Windows",
+		"if: runner.os == 'Windows'",
+		"shell: powershell",
 		`mds_gitleaks="$RUNNER_TEMP/mds-tools/gitleaks.exe"`,
 		`grep -R -q -E '"(image_)?creation_nonce"[[:space:]]*:'`,
 		"unsupported promotion target ID: $TARGET_ID",
@@ -130,6 +132,17 @@ func TestRunnerRegistrationKeepsRequiredSelfHostedLabel(t *testing.T) {
 	}
 	if strings.Contains(runbook, "`--no-default-labels`, 표의") {
 		t.Fatal("runner runbook still instructs users to remove default labels")
+	}
+	for _, required := range []string{
+		"Git for Windows",
+		"`git.exe`",
+		"`bash.exe`",
+		"Windows PowerShell 5.1",
+		"bash -lc 'git --version && grep --version'",
+	} {
+		if !strings.Contains(runbook, required) {
+			t.Fatalf("runner runbook missing Windows preflight %q", required)
+		}
 	}
 }
 

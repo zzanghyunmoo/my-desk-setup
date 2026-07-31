@@ -28,8 +28,20 @@ try {
         -OutFile $archive `
         -MaximumRedirection 3 `
         -TimeoutSec 600 `
+        -UseBasicParsing `
         -PassThru
-    $effectiveUri = $response.BaseResponse.RequestMessage.RequestUri
+    $baseResponse = $response.BaseResponse
+    $responseUriProperty = $baseResponse.PSObject.Properties["ResponseUri"]
+    $requestMessageProperty = $baseResponse.PSObject.Properties["RequestMessage"]
+    if ($null -ne $responseUriProperty) {
+        $effectiveUri = $responseUriProperty.Value
+    }
+    elseif ($null -ne $requestMessageProperty) {
+        $effectiveUri = $requestMessageProperty.Value.RequestUri
+    }
+    else {
+        throw "Gitleaks download did not expose its effective URI"
+    }
     if ($effectiveUri.Scheme -ne "https" -or
         -not [string]::IsNullOrEmpty($effectiveUri.UserInfo)) {
         throw "Gitleaks download did not preserve a credential-free HTTPS URL"

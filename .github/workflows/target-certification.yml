@@ -104,7 +104,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Install pinned Gitleaks
-        shell: pwsh
+        shell: powershell
         run: scripts/install-gitleaks.ps1 -OutputDirectory "$env:RUNNER_TEMP/mds-tools"
       - name: Scan fixture evidence
         shell: pwsh
@@ -260,15 +260,14 @@ jobs:
             echo "certification modified the checked-out runner workspace" >&2
             exit 1
           fi
-      - name: Install pinned Gitleaks
+      - name: Install pinned Gitleaks on Windows
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: scripts/install-gitleaks.ps1 -OutputDirectory "$env:RUNNER_TEMP/mds-tools"
+      - name: Install pinned Gitleaks on POSIX
+        if: runner.os != 'Windows'
         shell: bash
-        run: |
-          if [[ "$RUNNER_OS" == Windows ]]; then
-            pwsh -NoProfile -File scripts/install-gitleaks.ps1 \
-              -OutputDirectory "$RUNNER_TEMP/mds-tools"
-          else
-            scripts/install-gitleaks.sh "$RUNNER_TEMP/mds-tools"
-          fi
+        run: scripts/install-gitleaks.sh "$RUNNER_TEMP/mds-tools"
       - name: Scan verified evidence before upload
         shell: bash
         run: |
