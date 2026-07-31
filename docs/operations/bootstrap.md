@@ -371,14 +371,16 @@ Release promotion은 manual exception 없이 `--require-verified`만 사용한�
 
 tag workflow는 exact commit의 성공한 target-certification run만 GitHub Actions
 API로 조회한다. 한 번의 네-target 시도는
-`cert-<UTC YYYYMMDDThhmmssZ>-<commit8>` cohort를 공유한다. Artifact 이름은
+`cert-<UTC YYYYMMDDThhmmssZ>-<commit8>` cohort를 공유하며 네 capture는 5분의
+clock skew를 제외하고 cohort timestamp부터 4시간 안에 끝나야 한다. Artifact 이름은
 `target-evidence-<kind>-<commit>-<cohort>-<run-id>-<attempt>`이며 선택한
 commit+cohort 안에서 네 표준 target별로 정확히 하나여야 한다. 다운로드한
 bundle은 Gitleaks와 raw-nonce-field 검사를 거친 뒤 release와 재결합해
 promotion한다. Protected annotated tag message에는 정확히 한 줄의
 `Certification-Cohort: <cohort>`를 넣는다. Tag workflow는 같은 tag의 draft
 release를 재사용하고 모든 remote asset bytes를 다시 비교한 뒤에만 publish한다.
-Promotion report는 stable `release-promotion.json` asset으로 게시한다.
+Promotion report는 target별 `captured_at_unix`를 포함한 stable
+`release-promotion.json` asset으로 게시한다.
 
 actual-target job은 `target-certification` 보호 environment와 다음 네
 allowlisted label만 사용한다.

@@ -59,8 +59,11 @@ func newCertifyCommand(stdout io.Writer) *cobra.Command {
 	var request evidence.CertifyRequest
 	command := &cobra.Command{
 		Use:   "certify",
-		Short: "Run read-only plan and doctor with a production mds binary",
-		Args:  cobra.NoArgs,
+		Short: "Plan, apply, repeat, and diagnose with a production mds binary",
+		Long: "Plan, apply, repeat, and diagnose an actual target with a production mds binary. " +
+			"Certification mutates the selected target using the reviewed plan digest, " +
+			"but it never performs authentication.",
+		Args: cobra.NoArgs,
 		RunE: func(command *cobra.Command, _ []string) error {
 			request.Now = time.Now
 			manifest, err := evidence.Certify(command.Context(), request)

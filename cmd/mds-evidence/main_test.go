@@ -83,6 +83,15 @@ func TestCertifyHelpDoesNotExposeRawNonceFlag(t *testing.T) {
 	if strings.Contains(stdout.String(), "expected-guest-creation-nonce") {
 		t.Fatalf("certify help exposes removed raw nonce flag:\n%s", stdout.String())
 	}
+	for _, required := range []string{
+		"Plan, apply, repeat, and diagnose",
+		"mutates the selected target",
+		"never performs authentication",
+	} {
+		if !strings.Contains(stdout.String(), required) {
+			t.Fatalf("certify help missing %q:\n%s", required, stdout.String())
+		}
+	}
 }
 
 func TestCertifyRequiresImmutableCohort(t *testing.T) {

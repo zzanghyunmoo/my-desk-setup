@@ -111,6 +111,10 @@ func newApplyCommand(streams Streams, system Runtime) *cobra.Command {
 				guestBootstrapArchive,
 			)
 			if err != nil {
+				var archiveError *hostadapter.GuestBootstrapArchiveError
+				if errors.As(err, &archiveError) {
+					return invalidInput(err)
+				}
 				return err
 			}
 			if stateRoot == "" {

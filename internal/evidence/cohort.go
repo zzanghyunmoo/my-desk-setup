@@ -29,3 +29,13 @@ func CertificationCohortCommitPrefix(value string) (string, error) {
 	}
 	return certificationCohortPattern.FindStringSubmatch(value)[2], nil
 }
+
+func CertificationCohortTimestamp(value string) (time.Time, error) {
+	if err := ValidateCertificationCohort(value); err != nil {
+		return time.Time{}, err
+	}
+	return time.Parse(
+		"20060102T150405Z",
+		certificationCohortPattern.FindStringSubmatch(value)[1],
+	)
+}

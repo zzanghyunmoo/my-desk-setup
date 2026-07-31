@@ -9,6 +9,7 @@ on:
       - ".gitleaks.toml"
       - "scripts/certify-target.sh"
       - "scripts/install-gitleaks.sh"
+      - "scripts/install-gitleaks.ps1"
       - "scripts/verify-target-evidence.sh"
       - "tests/target-evidence/**"
   push:
@@ -21,6 +22,7 @@ on:
       - ".gitleaks.toml"
       - "scripts/certify-target.sh"
       - "scripts/install-gitleaks.sh"
+      - "scripts/install-gitleaks.ps1"
       - "scripts/verify-target-evidence.sh"
       - "tests/target-evidence/**"
   workflow_dispatch:
@@ -93,6 +95,23 @@ jobs:
             echo "Hosted fixture status: \`implemented\`."
             echo "No actual target was certified and this job must not be read as \`verified\`."
           } >> "$GITHUB_STEP_SUMMARY"
+
+  fixture-contract-windows:
+    name: Fixture contract (Windows scanner)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install pinned Gitleaks
+        shell: pwsh
+        run: scripts/install-gitleaks.ps1 -OutputDirectory "$env:RUNNER_TEMP/mds-tools"
+      - name: Scan fixture evidence
+        shell: pwsh
+        run: |
+          & "$env:RUNNER_TEMP/mds-tools/gitleaks.exe" dir `
+            --no-banner --redact --config .gitleaks.toml `
+            tests/target-evidence
 
   actual-target:
     name: Actual target
@@ -242,11 +261,22 @@ jobs:
             exit 1
           fi
       - name: Install pinned Gitleaks
-        run: scripts/install-gitleaks.sh "$RUNNER_TEMP/mds-tools"
+        shell: bash
+        run: |
+          if [[ "$RUNNER_OS" == Windows ]]; then
+            pwsh -NoProfile -File scripts/install-gitleaks.ps1 \
+              -OutputDirectory "$RUNNER_TEMP/mds-tools"
+          else
+            scripts/install-gitleaks.sh "$RUNNER_TEMP/mds-tools"
+          fi
       - name: Scan verified evidence before upload
         shell: bash
         run: |
-          "$RUNNER_TEMP/mds-tools/gitleaks" dir \
+          mds_gitleaks="$RUNNER_TEMP/mds-tools/gitleaks"
+          if [[ "$RUNNER_OS" == Windows ]]; then
+            mds_gitleaks="$RUNNER_TEMP/mds-tools/gitleaks.exe"
+          fi
+          "$mds_gitleaks" dir \
             --no-banner --redact --config .gitleaks.toml \
             "$EVIDENCE_OUTPUT"
           if grep -R -q -E '"(image_)?creation_nonce"[[:space:]]*:' \

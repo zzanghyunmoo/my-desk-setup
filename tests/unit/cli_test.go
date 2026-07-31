@@ -548,6 +548,64 @@ func TestCLIApplyRejectsRelativeGuestBootstrapArchiveBeforeMutation(t *testing.T
 	}
 }
 
+func TestCLIApplyClassifiesUnsafeGuestBootstrapArchiveAsInvalidInput(t *testing.T) {
+	home := t.TempDir()
+	privatePath := filepath.Join(home, "private-release-missing.tar.gz")
+	originalURL := version.GuestLinuxARM64URL
+	originalSHA256 := version.GuestLinuxARM64SHA256
+	version.GuestLinuxARM64URL = "https://example.invalid/mds-linux-arm64.tar.gz"
+	version.GuestLinuxARM64SHA256 = strings.Repeat("a", 64)
+	t.Cleanup(func() {
+		version.GuestLinuxARM64URL = originalURL
+		version.GuestLinuxARM64SHA256 = originalSHA256
+	})
+	system := cli.Runtime{
+		GOOS: "darwin", GOARCH: "arm64",
+		Getenv:  func(string) string { return "" },
+		HomeDir: func() (string, error) { return home, nil },
+	}
+	plan := cliPlanForComponent(t, system, "lima")
+	stateRoot := filepath.Join(home, "state")
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	code := cli.Run(
+		[]string{
+			"apply",
+			"--target", "macos-host:local",
+			"--component", "lima",
+			"--plan-digest", plan.Digest,
+			"--guest-bootstrap-archive", privatePath,
+			"--state-root", stateRoot,
+			"--format", "json",
+		},
+		cli.Streams{
+			Input: strings.NewReader(""), Output: &stdout, Error: &stderr,
+		},
+		system,
+	)
+	if code != cli.ExitInvalidInput {
+		t.Fatalf(
+			"apply code=%d stderr=%q, want invalid-input exit %d",
+			code,
+			stderr.String(),
+			cli.ExitInvalidInput,
+		)
+	}
+	envelope := decodeCLIError(t, stderr.Bytes())
+	if envelope.Code != "invalid-input" ||
+		!strings.Contains(envelope.Details.Cause, "cannot be opened safely") {
+		t.Fatalf("apply error = %+v, want archive invalid-input", envelope)
+	}
+	if strings.Contains(stderr.String(), privatePath) ||
+		strings.Contains(stderr.String(), filepath.Base(privatePath)) {
+		t.Fatalf("apply error leaks guest archive path: %q", stderr.String())
+	}
+	if _, err := os.Stat(stateRoot); !os.IsNotExist(err) {
+		t.Fatalf("state root exists after rejected archive: %v", err)
+	}
+}
+
 func TestCLIApplyEmitsActionRequiredWithoutAuth(t *testing.T) {
 	home := t.TempDir()
 	system := cli.Runtime{

@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -19,7 +20,11 @@ import (
 	targetpkg "github.com/zzanghyunmoo/my-desk-setup/internal/target"
 )
 
-const PromotionSchemaVersion = "mds.release-promotion/v1"
+const (
+	PromotionSchemaVersion        = "mds.release-promotion/v1"
+	maximumCohortCaptureWindow    = 4 * time.Hour
+	certificationCaptureClockSkew = 5 * time.Minute
+)
 
 type promotionTargetSpec struct {
 	Kind targetpkg.Kind
@@ -50,6 +55,7 @@ type PromotedTarget struct {
 	PlanDigest      string          `json:"plan_digest"`
 	BinarySHA256    string          `json:"binary_sha256"`
 	ReleaseArtifact string          `json:"release_artifact"`
+	CapturedAtUnix  int64           `json:"captured_at_unix"`
 }
 
 type PromotionReport struct {
@@ -95,9 +101,20 @@ func promoteWithVerifier(
 			"certification cohort does not match the release commit",
 		)
 	}
+	cohortTimestamp, err := evidence.CertificationCohortTimestamp(
+		options.ExpectedCohort,
+	)
+	if err != nil {
+		return PromotionReport{}, err
+	}
 	if options.Now.IsZero() || options.MaxAge <= 0 {
 		return PromotionReport{}, errors.New(
 			"promotion requires a current timestamp and bounded positive evidence age",
+		)
+	}
+	if cohortTimestamp.After(options.Now.Add(certificationCaptureClockSkew)) {
+		return PromotionReport{}, errors.New(
+			"certification cohort timestamp is in the future",
 		)
 	}
 	releaseManifest, err := Verify(options.ReleaseDir)
@@ -129,6 +146,8 @@ func promoteWithVerifier(
 		)
 	}
 	byKind := make(map[targetpkg.Kind]PromotedTarget, len(bundles))
+	var earliestCapture time.Time
+	var latestCapture time.Time
 	for _, bundle := range bundles {
 		initial, verifyErr := verify(bundle, evidence.VerifyOptions{
 			ExpectedCLIRevision:     expectedCLIRevision,
@@ -150,6 +169,32 @@ func promoteWithVerifier(
 				initial.Target.ID,
 				initial.Status,
 			)
+		}
+		capturedAtUnix, parseErr := strconv.ParseInt(
+			string(initial.CapturedAtUnix),
+			10,
+			64,
+		)
+		if parseErr != nil || capturedAtUnix < 0 {
+			return PromotionReport{}, fmt.Errorf(
+				"target evidence %q has invalid capture timestamp",
+				initial.Target.ID,
+			)
+		}
+		capturedAt := time.Unix(capturedAtUnix, 0).UTC()
+		if capturedAt.Before(
+			cohortTimestamp.Add(-certificationCaptureClockSkew),
+		) || capturedAt.After(cohortTimestamp.Add(maximumCohortCaptureWindow)) {
+			return PromotionReport{}, fmt.Errorf(
+				"target evidence %q falls outside the certification cohort window",
+				initial.Target.ID,
+			)
+		}
+		if earliestCapture.IsZero() || capturedAt.Before(earliestCapture) {
+			earliestCapture = capturedAt
+		}
+		if latestCapture.IsZero() || capturedAt.After(latestCapture) {
+			latestCapture = capturedAt
 		}
 		kind := initial.Target.Kind
 		targetSpec, required := promotionTarget(kind)
@@ -225,7 +270,13 @@ func promoteWithVerifier(
 			PlanDigest:      initial.PlanDigest,
 			BinarySHA256:    initial.BinarySHA256,
 			ReleaseArtifact: artifact.Name,
+			CapturedAtUnix:  capturedAtUnix,
 		}
+	}
+	if latestCapture.Sub(earliestCapture) > maximumCohortCaptureWindow {
+		return PromotionReport{}, errors.New(
+			"target evidence capture spread exceeds the certification cohort window",
+		)
 	}
 	report := PromotionReport{
 		SchemaVersion:   PromotionSchemaVersion,
@@ -348,6 +399,10 @@ func VerifyPromotionReport(
 			"certification cohort does not match the release commit",
 		)
 	}
+	cohortTimestamp, err := evidence.CertificationCohortTimestamp(expectedCohort)
+	if err != nil {
+		return PromotionReport{}, err
+	}
 	info, err := os.Lstat(reportPath)
 	if err != nil {
 		return PromotionReport{}, fmt.Errorf("inspect promotion report: %w", err)
@@ -399,6 +454,8 @@ func VerifyPromotionReport(
 	for _, artifact := range releaseManifest.Artifacts {
 		artifacts[artifact.Name] = artifact
 	}
+	var earliestCapture time.Time
+	var latestCapture time.Time
 	for index, targetSpec := range requiredPromotionTargets {
 		promoted := report.Targets[index]
 		if promoted.Kind != targetSpec.Kind ||
@@ -415,6 +472,23 @@ func VerifyPromotionReport(
 				promoted.ID,
 				promoted.Status,
 			)
+		}
+		capturedAt := time.Unix(promoted.CapturedAtUnix, 0).UTC()
+		if promoted.CapturedAtUnix < 0 ||
+			capturedAt.Before(
+				cohortTimestamp.Add(-certificationCaptureClockSkew),
+			) ||
+			capturedAt.After(cohortTimestamp.Add(maximumCohortCaptureWindow)) {
+			return PromotionReport{}, fmt.Errorf(
+				"promotion target %q has an invalid capture timestamp",
+				promoted.ID,
+			)
+		}
+		if earliestCapture.IsZero() || capturedAt.Before(earliestCapture) {
+			earliestCapture = capturedAt
+		}
+		if latestCapture.IsZero() || capturedAt.After(latestCapture) {
+			latestCapture = capturedAt
 		}
 		if exactartifact.ValidateSHA256(promoted.BinarySHA256) != nil {
 			return PromotionReport{}, fmt.Errorf(
@@ -441,6 +515,11 @@ func VerifyPromotionReport(
 				promoted.ID,
 			)
 		}
+	}
+	if latestCapture.Sub(earliestCapture) > maximumCohortCaptureWindow {
+		return PromotionReport{}, errors.New(
+			"promotion report capture spread exceeds the certification cohort window",
+		)
 	}
 	return report, nil
 }

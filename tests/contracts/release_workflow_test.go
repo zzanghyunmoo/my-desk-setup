@@ -2,7 +2,9 @@ package contracts_test
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -83,6 +85,9 @@ func TestTargetCertificationCarriesExactPromotionIdentity(t *testing.T) {
 		`echo "cohort=$CERTIFICATION_COHORT"`,
 		"CERTIFICATION_PROFILE: ${{ steps.certification-identity.outputs.certification_profile }}",
 		"scripts/install-gitleaks.sh",
+		"scripts/install-gitleaks.ps1",
+		`if [[ "$RUNNER_OS" == Windows ]]`,
+		`mds_gitleaks="$RUNNER_TEMP/mds-tools/gitleaks.exe"`,
 		`grep -R -q -E '"(image_)?creation_nonce"[[:space:]]*:'`,
 		"unsupported promotion target ID: $TARGET_ID",
 		"Exact reviewed certification profile plan digest for this target",
@@ -108,6 +113,23 @@ func TestTargetCertificationCarriesExactPromotionIdentity(t *testing.T) {
 		if strings.Contains(workflow, forbidden) {
 			t.Fatalf("target certification workflow contains %q", forbidden)
 		}
+	}
+}
+
+func TestRunnerRegistrationKeepsRequiredSelfHostedLabel(t *testing.T) {
+	root := repositoryRoot(t)
+	content, err := os.ReadFile(
+		filepath.Join(root, "docs", "operations", "target-certification-runner.md"),
+	)
+	if err != nil {
+		t.Fatalf("read target runner runbook: %v", err)
+	}
+	runbook := string(content)
+	if !strings.Contains(runbook, "기본 `self-hosted` label") {
+		t.Fatal("runner runbook does not preserve the required self-hosted label")
+	}
+	if strings.Contains(runbook, "`--no-default-labels`, 표의") {
+		t.Fatal("runner runbook still instructs users to remove default labels")
 	}
 }
 
@@ -256,5 +278,197 @@ func TestReleasePublicationIsDraftFirstAndIdempotent(t *testing.T) {
 		if !strings.Contains(script, required) {
 			t.Fatalf("release publication script missing %q", required)
 		}
+	}
+}
+
+func TestReleasePublicationFailsClosedAndPublishesOnlyVerifiedBytes(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the publication contract executes its POSIX shell script")
+	}
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash is required for the publication contract")
+	}
+
+	t.Run("lookup failure does not create release", func(t *testing.T) {
+		result := runPublishReleaseContract(t, "500", false)
+		if result.err == nil {
+			t.Fatal("publish succeeded after GitHub lookup failure")
+		}
+		if result.log != "api\n" {
+			t.Fatalf(
+				"GitHub calls = %q, want lookup only\n%s",
+				result.log,
+				result.output,
+			)
+		}
+	})
+
+	t.Run("missing release follows exact draft-first order", func(t *testing.T) {
+		result := runPublishReleaseContract(t, "404", false)
+		if result.err != nil {
+			t.Fatalf("publish failed: %v\n%s", result.err, result.output)
+		}
+		want := "api\nrelease create\nrelease upload\nrelease download\nrelease edit\n"
+		if result.log != want {
+			t.Fatalf("GitHub calls = %q, want %q", result.log, want)
+		}
+	})
+
+	t.Run("published release is verified without mutation", func(t *testing.T) {
+		result := runPublishReleaseContract(t, "200", false)
+		if result.err != nil {
+			t.Fatalf("published release verification failed: %v\n%s", result.err, result.output)
+		}
+		want := "api\nrelease download\n"
+		if result.log != want {
+			t.Fatalf("GitHub calls = %q, want %q", result.log, want)
+		}
+	})
+
+	t.Run("byte mismatch never publishes draft", func(t *testing.T) {
+		result := runPublishReleaseContract(t, "404", true)
+		if result.err == nil {
+			t.Fatal("publish succeeded with mismatched downloaded bytes")
+		}
+		want := "api\nrelease create\nrelease upload\nrelease download\n"
+		if result.log != want {
+			t.Fatalf("GitHub calls = %q, want no release edit", result.log)
+		}
+	})
+}
+
+type publishReleaseContractResult struct {
+	output string
+	log    string
+	err    error
+}
+
+func runPublishReleaseContract(
+	t *testing.T,
+	apiStatus string,
+	corruptDownload bool,
+) publishReleaseContractResult {
+	t.Helper()
+	root := repositoryRoot(t)
+	fixture := t.TempDir()
+	bin := filepath.Join(fixture, "bin")
+	releaseDir := filepath.Join(fixture, "release")
+	if err := os.MkdirAll(bin, 0o700); err != nil {
+		t.Fatalf("MkdirAll(bin): %v", err)
+	}
+	if err := os.MkdirAll(releaseDir, 0o700); err != nil {
+		t.Fatalf("MkdirAll(release): %v", err)
+	}
+	assetName := "mds_0.1.0_linux_amd64.tar.gz"
+	if err := os.WriteFile(
+		filepath.Join(releaseDir, assetName),
+		[]byte("verified archive bytes"),
+		0o600,
+	); err != nil {
+		t.Fatalf("WriteFile(asset): %v", err)
+	}
+	report := filepath.Join(fixture, "release-promotion.json")
+	if err := os.WriteFile(report, []byte("{}\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(report): %v", err)
+	}
+	logPath := filepath.Join(fixture, "gh.log")
+	commit := strings.Repeat("a", 40)
+	writeExecutable(t, filepath.Join(bin, "git"), `#!/bin/sh
+printf '%s\n' "$MDS_COMMIT"
+`)
+	writeExecutable(t, filepath.Join(bin, "gh"), `#!/bin/sh
+set -eu
+if [ "$1" = api ]; then
+  printf 'api\n' >> "$MDS_FAKE_GH_LOG"
+  case "$MDS_FAKE_API_STATUS" in
+    200)
+      printf 'HTTP/2.0 200 OK\n\n%s\tfalse\n' "$MDS_RELEASE_TAG"
+      exit 0
+      ;;
+    404)
+      printf 'HTTP/2.0 404 Not Found\n\n'
+      exit 1
+      ;;
+    *)
+      printf 'HTTP/2.0 %s Failure\n\n' "$MDS_FAKE_API_STATUS"
+      exit 1
+      ;;
+  esac
+fi
+if [ "$1" != release ]; then
+  exit 2
+fi
+printf 'release %s\n' "$2" >> "$MDS_FAKE_GH_LOG"
+if [ "$2" = download ]; then
+  destination=
+  previous=
+  for argument in "$@"; do
+    if [ "$previous" = --dir ]; then
+      destination=$argument
+    fi
+    previous=$argument
+  done
+  test -n "$destination"
+  cp "$MDS_FAKE_RELEASE_DIR"/* "$destination/"
+  cp "$MDS_FAKE_PROMOTION_REPORT" "$destination/"
+  if [ "$MDS_FAKE_CORRUPT" = 1 ]; then
+    printf 'different bytes\n' > "$destination/mds_0.1.0_linux_amd64.tar.gz"
+  fi
+fi
+`)
+
+	corrupt := "0"
+	if corruptDownload {
+		corrupt = "1"
+	}
+	command := exec.Command(
+		"bash",
+		filepath.Join(root, "scripts", "publish-release.sh"),
+	)
+	command.Dir = root
+	environment := make([]string, 0, len(os.Environ())+12)
+	for _, entry := range os.Environ() {
+		key, _, _ := strings.Cut(entry, "=")
+		switch key {
+		case "PATH", "GH_TOKEN", "GITHUB_REPOSITORY", "MDS_RELEASE_TAG",
+			"MDS_RELEASE_DIR", "MDS_PROMOTION_REPORT", "MDS_COMMIT",
+			"MDS_FAKE_GH_LOG", "MDS_FAKE_API_STATUS",
+			"MDS_FAKE_RELEASE_DIR", "MDS_FAKE_PROMOTION_REPORT",
+			"MDS_FAKE_CORRUPT":
+			continue
+		}
+		environment = append(environment, entry)
+	}
+	command.Env = append(
+		environment,
+		"PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"),
+		"GH_TOKEN=fixture-token",
+		"GITHUB_REPOSITORY=example/my-desk-setup",
+		"MDS_RELEASE_TAG=v0.1.0",
+		"MDS_RELEASE_DIR="+releaseDir,
+		"MDS_PROMOTION_REPORT="+report,
+		"MDS_COMMIT="+commit,
+		"MDS_FAKE_GH_LOG="+logPath,
+		"MDS_FAKE_API_STATUS="+apiStatus,
+		"MDS_FAKE_RELEASE_DIR="+releaseDir,
+		"MDS_FAKE_PROMOTION_REPORT="+report,
+		"MDS_FAKE_CORRUPT="+corrupt,
+	)
+	output, err := command.CombinedOutput()
+	log, readErr := os.ReadFile(logPath)
+	if readErr != nil && !os.IsNotExist(readErr) {
+		t.Fatalf("ReadFile(log): %v", readErr)
+	}
+	return publishReleaseContractResult{
+		output: string(output),
+		log:    string(log),
+		err:    err,
+	}
+}
+
+func writeExecutable(t *testing.T, path, content string) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte(content), 0o700); err != nil {
+		t.Fatalf("WriteFile(%s): %v", path, err)
 	}
 }

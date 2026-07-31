@@ -64,6 +64,11 @@ func TestCertificationCohortIsStrictAndCommitBounded(t *testing.T) {
 	if err != nil || prefix != fixtureCommit[:8] {
 		t.Fatalf("cohort commit prefix = %q error=%v", prefix, err)
 	}
+	timestamp, err := CertificationCohortTimestamp(fixtureCohort)
+	if err != nil ||
+		!timestamp.Equal(time.Date(2026, 7, 30, 0, 0, 0, 0, time.UTC)) {
+		t.Fatalf("cohort timestamp = %s error=%v", timestamp, err)
+	}
 	for _, invalid := range []string{
 		"",
 		"cert-20260730T000000Z-0123456",
@@ -166,6 +171,40 @@ func TestCertifyAcceptsActionRequiredDoctorReport(t *testing.T) {
 	}
 	if manifest.Status != StatusBlocked {
 		t.Fatalf("status = %q, want %q", manifest.Status, StatusBlocked)
+	}
+}
+
+func TestRequireVerifiedAcceptsOnlyVerifiedEvidence(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		ready     bool
+		wantError string
+	}{
+		{name: "verified", ready: true},
+		{name: "blocked", ready: false, wantError: "not verified"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			bundle := certifyFixture(t, test.ready)
+			var manifest Manifest
+			readJSON(t, filepath.Join(bundle, ManifestFile), &manifest)
+
+			_, err := Verify(bundle, VerifyOptions{
+				ExpectedCLIRevision:     manifest.CLI.Revision,
+				ExpectedCatalogRevision: manifest.CatalogRevision,
+				ExpectedPlanDigest:      manifest.PlanDigest,
+				ExpectedTargetID:        manifest.Target.ID,
+				ExpectedBinarySHA256:    manifest.BinarySHA256,
+				ExpectedCohort:          manifest.Cohort,
+				RequireVerified:         true,
+			})
+			if test.wantError == "" {
+				if err != nil {
+					t.Fatalf("Verify(RequireVerified): %v", err)
+				}
+				return
+			}
+			assertErrorContains(t, err, test.wantError)
+		})
 	}
 }
 

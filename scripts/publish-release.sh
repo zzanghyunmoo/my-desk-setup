@@ -25,7 +25,7 @@ fi
 
 mds_tmp=$(mktemp -d)
 trap 'rm -rf -- "$mds_tmp"' EXIT
-mds_release_json="$mds_tmp/release.json"
+mds_release_response="$mds_tmp/release-response.txt"
 mds_was_draft=false
 
 for mds_local in "$MDS_RELEASE_DIR"/* "$MDS_PROMOTION_REPORT"; do
@@ -35,24 +35,41 @@ for mds_local in "$MDS_RELEASE_DIR"/* "$MDS_PROMOTION_REPORT"; do
   fi
   basename "$mds_local"
 done | LC_ALL=C sort > "$mds_tmp/expected-assets.txt"
-if [[ "$(wc -l < "$mds_tmp/expected-assets.txt" | tr -d ' ')" !=
-  "$(LC_ALL=C sort -u "$mds_tmp/expected-assets.txt" | wc -l | tr -d ' ')" ]]; then
+mds_expected_count=$(wc -l < "$mds_tmp/expected-assets.txt" | tr -d ' ')
+mds_unique_count=$(
+  LC_ALL=C sort -u "$mds_tmp/expected-assets.txt" | wc -l | tr -d ' '
+)
+if [[ "$mds_expected_count" != "$mds_unique_count" ]]; then
   echo "local release asset names must be unique" >&2
   exit 1
 fi
 
-if gh api "repos/$GITHUB_REPOSITORY/releases/tags/$MDS_RELEASE_TAG" \
-  > "$mds_release_json" 2>/dev/null; then
-  if [[ "$(jq -r '.tag_name' "$mds_release_json")" != "$MDS_RELEASE_TAG" ]]; then
+mds_api_exit=0
+if gh api --include \
+  --jq '[.tag_name, .draft] | @tsv' \
+  "repos/$GITHUB_REPOSITORY/releases/tags/$MDS_RELEASE_TAG" \
+  > "$mds_release_response" 2>"$mds_tmp/release-response.err"; then
+  mds_api_exit=0
+else
+  mds_api_exit=$?
+fi
+mds_api_status=$(sed -n \
+  '1s/^HTTP\/[^ ]* \([0-9][0-9][0-9]\).*/\1/p' \
+  "$mds_release_response")
+
+if [[ "$mds_api_status" == 200 && "$mds_api_exit" == 0 ]]; then
+  IFS=$'\t' read -r mds_existing_tag mds_was_draft < <(
+    tail -n 1 "$mds_release_response"
+  )
+  if [[ "$mds_existing_tag" != "$MDS_RELEASE_TAG" ]]; then
     echo "existing release has a different tag identity" >&2
     exit 1
   fi
-  mds_was_draft=$(jq -r '.draft' "$mds_release_json")
   if [[ "$mds_was_draft" != true && "$mds_was_draft" != false ]]; then
     echo "existing release has an invalid draft state" >&2
     exit 1
   fi
-else
+elif [[ "$mds_api_status" == 404 ]]; then
   gh release create "$MDS_RELEASE_TAG" \
     --repo "$GITHUB_REPOSITORY" \
     --draft \
@@ -60,6 +77,9 @@ else
     --generate-notes \
     --title "$MDS_RELEASE_TAG"
   mds_was_draft=true
+else
+  echo "GitHub release lookup failed with HTTP status ${mds_api_status:-unknown}" >&2
+  exit 1
 fi
 
 if [[ "$mds_was_draft" == true ]]; then

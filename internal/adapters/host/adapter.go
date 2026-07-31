@@ -17,6 +17,22 @@ type Options struct {
 	GuestBootstrapArchive string
 }
 
+type GuestBootstrapArchiveError struct {
+	err error
+}
+
+func (err *GuestBootstrapArchiveError) Error() string {
+	return err.err.Error()
+}
+
+func (err *GuestBootstrapArchiveError) Unwrap() error {
+	return err.err
+}
+
+func guestBootstrapArchiveError(err error) error {
+	return &GuestBootstrapArchiveError{err: err}
+}
+
 func New(
 	environment catalog.Environment,
 	port transport.Port,
@@ -90,17 +106,17 @@ func NewWithOptions(
 		guestArchitecture := normalizeCatalogArchitecture(architecture)
 		artifact, exists := runtime.BootstrapArtifacts[guestArchitecture]
 		if !exists {
-			return nil, fmt.Errorf(
+			return nil, guestBootstrapArchiveError(fmt.Errorf(
 				"guest bootstrap metadata is unavailable for host architecture %q",
 				guestArchitecture,
-			)
+			))
 		}
 		snapshot, err := loadGuestBootstrapArchive(
 			options.GuestBootstrapArchive,
 			artifact.SHA256,
 		)
 		if err != nil {
-			return nil, err
+			return nil, guestBootstrapArchiveError(err)
 		}
 		artifact.Archive = snapshot
 		runtime.BootstrapArtifacts[guestArchitecture] = artifact

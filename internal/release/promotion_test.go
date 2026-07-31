@@ -1,9 +1,11 @@
 package release
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -65,6 +67,7 @@ func TestPromoteRequiresExactTargetSetAndReleaseBinaryIdentity(t *testing.T) {
 			BinarySHA256:    artifact.BinarySHA256,
 			CatalogRevision: releaseManifest.CatalogRevision,
 			PlanDigest:      "sha256:plan-" + string(kind),
+			CapturedAtUnix:  promotionFixtureCapture(),
 		}
 		if calls[string(kind)] == 2 {
 			if options.ExpectedCLIRevision != expectedRevision ||
@@ -154,6 +157,18 @@ func TestPromoteFailsClosedForMissingDuplicateOrMismatchedEvidence(t *testing.T)
 			},
 			want: "not verified",
 		},
+		{
+			name: "capture outside cohort window",
+			dirs: []string{"macos-host", "windows-host", "wsl-guest", "lima-guest"},
+			mutate: func(value evidence.Manifest) evidence.Manifest {
+				value.CapturedAtUnix = json.Number(strconv.FormatInt(
+					time.Date(2026, 7, 30, 5, 0, 0, 0, time.UTC).Unix(),
+					10,
+				))
+				return value
+			},
+			want: "outside the certification cohort window",
+		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -200,7 +215,8 @@ func TestPromoteFailsClosedForMissingDuplicateOrMismatchedEvidence(t *testing.T)
 						manifest.Version, manifest.Commit, manifest.Date,
 					)},
 					BinarySHA256: binarySHA, CatalogRevision: manifest.CatalogRevision,
-					PlanDigest: "sha256:plan",
+					PlanDigest:     "sha256:plan",
+					CapturedAtUnix: promotionFixtureCapture(),
 				}
 				if test.mutate != nil {
 					value = test.mutate(value)
@@ -240,6 +256,9 @@ func TestVerifyPromotionReportRebindsStableReportToRelease(t *testing.T) {
 			PlanDigest:      "sha256:" + strings.Repeat("a", 64),
 			BinarySHA256:    artifact.BinarySHA256,
 			ReleaseArtifact: artifact.Name,
+			CapturedAtUnix: time.Date(
+				2026, 7, 30, 0, 0, 0, 0, time.UTC,
+			).Unix(),
 		})
 	}
 	path := filepath.Join(t.TempDir(), "release-promotion.json")
@@ -283,4 +302,11 @@ func TestVerifyPromotionReportRebindsStableReportToRelease(t *testing.T) {
 	); err == nil || !strings.Contains(err.Error(), "not verified") {
 		t.Fatalf("VerifyPromotionReport(blocked) error = %v", err)
 	}
+}
+
+func promotionFixtureCapture() json.Number {
+	return json.Number(strconv.FormatInt(
+		time.Date(2026, 7, 30, 0, 0, 0, 0, time.UTC).Unix(),
+		10,
+	))
 }

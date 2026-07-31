@@ -2,7 +2,7 @@
 set -euo pipefail
 
 if (( $# == 0 )); then
-  echo "usage: $0 --mds <absolute-path> --target <id> --output <dir> <--all|--profile NAME|--component ID...>" >&2
+  echo "usage: $0 --mds <absolute-path> --target <id> --output <dir> --cohort <cert-YYYYMMDDThhmmssZ-commit8> <--all|--profile NAME|--component ID...>" >&2
   exit 2
 fi
 

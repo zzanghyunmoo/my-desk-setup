@@ -38,7 +38,9 @@ repository 관리자가 다음 외부 상태를 먼저 만든다.
 `Actual target` job은 non-fork `workflow_dispatch`, `github.ref_protected`,
 `target-certification` reviewer 승인을 모두 요구한다. Dispatcher는 commit이나
 guest creation nonce를 입력할 수 없고, 네 dispatch는 같은 canonical
-`cert-<UTC YYYYMMDDThhmmssZ>-<commit8>` cohort를 사용한다.
+`cert-<UTC YYYYMMDDThhmmssZ>-<commit8>` cohort를 사용한다. Cohort timestamp는
+네 dispatch 시작 시각이며, 네 capture는 5분의 clock skew를 제외하고 이 시각부터
+4시간 안에 끝나야 같은 release promotion에 포함된다.
 
 ## 2. 전용 OS 계정과 one-job ephemeral runner
 
@@ -62,8 +64,9 @@ runner directory에 둔다.
 
 GitHub의 현재 self-hosted runner 설치 문서에서 target OS/architecture의 exact
 archive와 checksum을 확인한 뒤 사용자가 runner를 등록한다. 등록 시 repository
-URL, `--ephemeral`, `--no-default-labels`, 표의 custom label 하나와 전용 work
-directory를 선택한다. Registration token 입력과 실제 등록 명령 실행은 사용자가
+URL, `--ephemeral`, 기본 `self-hosted` label, 표의 custom label 하나와 전용 work
+directory를 선택한다. `--no-default-labels`는 workflow의 `self-hosted` 요구와
+충돌하므로 사용하지 않는다. Registration token 입력과 실제 등록 명령 실행은 사용자가
 직접 하고 이 runbook, shell history 또는 repository에 기록하지 않는다.
 Persistent `svc.sh`/Windows service 등록은 사용하지 않는다. 전용 계정의
 foreground one-job process 또는 운영자가 만든 one-shot service로 한 job만
