@@ -619,7 +619,7 @@ func TestCertificationTargetPropagatesIndependentlyProbedGuestIdentity(t *testin
 			}
 			return facts, nil
 		},
-	}, strings.Repeat("a", 64))
+	}, id, strings.Repeat("a", 64))
 	if err != nil {
 		t.Fatalf("certificationTarget(): %v", err)
 	}

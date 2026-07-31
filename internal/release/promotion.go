@@ -21,11 +21,17 @@ import (
 
 const PromotionSchemaVersion = "mds.release-promotion/v1"
 
-var requiredPromotionTargets = []targetpkg.Kind{
-	targetpkg.KindMacOSHost,
-	targetpkg.KindWindowsHost,
-	targetpkg.KindWSLGuest,
-	targetpkg.KindLimaGuest,
+type promotionTargetSpec struct {
+	Kind targetpkg.Kind
+	ID   string
+	OS   string
+}
+
+var requiredPromotionTargets = []promotionTargetSpec{
+	{Kind: targetpkg.KindMacOSHost, ID: "macos-host:local", OS: "darwin"},
+	{Kind: targetpkg.KindWindowsHost, ID: "windows-host:local", OS: "windows"},
+	{Kind: targetpkg.KindWSLGuest, ID: "wsl-guest:Ubuntu-26.04", OS: "linux"},
+	{Kind: targetpkg.KindLimaGuest, ID: "lima-guest:mds", OS: "linux"},
 }
 
 type PromotionOptions struct {
@@ -78,15 +84,13 @@ func promoteWithVerifier(
 			"expected release commit must be a full lowercase commit SHA",
 		)
 	}
-	if err := evidence.ValidateCertificationCohort(
-		options.ExpectedCohort,
-	); err != nil {
-		return PromotionReport{}, err
-	}
 	cohortCommitPrefix, err := evidence.CertificationCohortCommitPrefix(
 		options.ExpectedCohort,
 	)
-	if err != nil || cohortCommitPrefix != options.ExpectedCommit[:8] {
+	if err != nil {
+		return PromotionReport{}, err
+	}
+	if cohortCommitPrefix != options.ExpectedCommit[:8] {
 		return PromotionReport{}, errors.New(
 			"certification cohort does not match the release commit",
 		)
@@ -148,7 +152,8 @@ func promoteWithVerifier(
 			)
 		}
 		kind := initial.Target.Kind
-		if !requiredPromotionKind(kind) {
+		targetSpec, required := promotionTarget(kind)
+		if !required {
 			return PromotionReport{}, fmt.Errorf(
 				"unexpected target kind %q",
 				kind,
@@ -160,12 +165,12 @@ func promoteWithVerifier(
 				kind,
 			)
 		}
-		if initial.Target.ID != requiredTargetID(kind) {
+		if initial.Target.ID != targetSpec.ID {
 			return PromotionReport{}, fmt.Errorf(
 				"target kind %q has non-standard ID %q; want %q",
 				kind,
 				initial.Target.ID,
-				requiredTargetID(kind),
+				targetSpec.ID,
 			)
 		}
 		artifacts := artifactsByBinary[initial.BinarySHA256]
@@ -183,7 +188,7 @@ func promoteWithVerifier(
 			)
 		}
 		artifact := artifacts[0]
-		if artifact.OS != expectedArtifactOS(kind) {
+		if artifact.OS != targetSpec.OS {
 			return PromotionReport{}, fmt.Errorf(
 				"target kind %q cannot certify %s artifact %q",
 				kind,
@@ -230,12 +235,12 @@ func promoteWithVerifier(
 		CatalogRevision: releaseManifest.CatalogRevision,
 		Targets:         make([]PromotedTarget, 0, len(requiredPromotionTargets)),
 	}
-	for _, kind := range requiredPromotionTargets {
-		promoted, exists := byKind[kind]
+	for _, targetSpec := range requiredPromotionTargets {
+		promoted, exists := byKind[targetSpec.Kind]
 		if !exists {
 			return PromotionReport{}, fmt.Errorf(
 				"missing required target evidence for %q",
-				kind,
+				targetSpec.Kind,
 			)
 		}
 		report.Targets = append(report.Targets, promoted)
@@ -281,40 +286,28 @@ func exactEvidenceDirectories(root string) ([]string, error) {
 }
 
 func expectedArtifactOS(kind targetpkg.Kind) string {
-	switch kind {
-	case targetpkg.KindMacOSHost:
-		return "darwin"
-	case targetpkg.KindWindowsHost:
-		return "windows"
-	case targetpkg.KindWSLGuest, targetpkg.KindLimaGuest:
-		return "linux"
-	default:
+	targetSpec, exists := promotionTarget(kind)
+	if !exists {
 		return ""
 	}
-}
-
-func requiredPromotionKind(kind targetpkg.Kind) bool {
-	for _, required := range requiredPromotionTargets {
-		if kind == required {
-			return true
-		}
-	}
-	return false
+	return targetSpec.OS
 }
 
 func requiredTargetID(kind targetpkg.Kind) string {
-	switch kind {
-	case targetpkg.KindMacOSHost:
-		return "macos-host:local"
-	case targetpkg.KindWindowsHost:
-		return "windows-host:local"
-	case targetpkg.KindWSLGuest:
-		return "wsl-guest:Ubuntu-26.04"
-	case targetpkg.KindLimaGuest:
-		return "lima-guest:mds"
-	default:
+	targetSpec, exists := promotionTarget(kind)
+	if !exists {
 		return ""
 	}
+	return targetSpec.ID
+}
+
+func promotionTarget(kind targetpkg.Kind) (promotionTargetSpec, bool) {
+	for _, targetSpec := range requiredPromotionTargets {
+		if kind == targetSpec.Kind {
+			return targetSpec, true
+		}
+	}
+	return promotionTargetSpec{}, false
 }
 
 func WritePromotionReport(path string, report PromotionReport) error {
@@ -346,11 +339,11 @@ func VerifyPromotionReport(
 			expectedCommit,
 		)
 	}
-	if err := evidence.ValidateCertificationCohort(expectedCohort); err != nil {
+	prefix, err := evidence.CertificationCohortCommitPrefix(expectedCohort)
+	if err != nil {
 		return PromotionReport{}, err
 	}
-	prefix, err := evidence.CertificationCohortCommitPrefix(expectedCohort)
-	if err != nil || prefix != expectedCommit[:8] {
+	if prefix != expectedCommit[:8] {
 		return PromotionReport{}, errors.New(
 			"certification cohort does not match the release commit",
 		)
@@ -406,14 +399,14 @@ func VerifyPromotionReport(
 	for _, artifact := range releaseManifest.Artifacts {
 		artifacts[artifact.Name] = artifact
 	}
-	for index, kind := range requiredPromotionTargets {
+	for index, targetSpec := range requiredPromotionTargets {
 		promoted := report.Targets[index]
-		if promoted.Kind != kind ||
-			promoted.ID != requiredTargetID(kind) {
+		if promoted.Kind != targetSpec.Kind ||
+			promoted.ID != targetSpec.ID {
 			return PromotionReport{}, fmt.Errorf(
 				"promotion target %d does not match required target %q",
 				index,
-				requiredTargetID(kind),
+				targetSpec.ID,
 			)
 		}
 		if promoted.Status != evidence.StatusVerified {
@@ -442,7 +435,7 @@ func VerifyPromotionReport(
 		artifact, exists := artifacts[promoted.ReleaseArtifact]
 		if !exists ||
 			artifact.BinarySHA256 != promoted.BinarySHA256 ||
-			artifact.OS != expectedArtifactOS(kind) {
+			artifact.OS != targetSpec.OS {
 			return PromotionReport{}, fmt.Errorf(
 				"promotion target %q does not match its release artifact",
 				promoted.ID,

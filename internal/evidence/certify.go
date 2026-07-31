@@ -45,11 +45,20 @@ var (
 	)
 )
 
+type certificationIdentity struct {
+	Target             target.ID
+	CohortCommitPrefix string
+}
+
 func Certify(ctx context.Context, request CertifyRequest) (Manifest, error) {
-	if err := validateCertifyRequest(request); err != nil {
+	identity, err := validateCertifyRequest(request)
+	if err != nil {
 		return Manifest{}, err
 	}
-	expectedGuestCreationNonce, err := certificationNonceEnvironment(request)
+	expectedGuestCreationNonce, err := certificationNonceEnvironment(
+		request,
+		identity.Target,
+	)
 	if err != nil {
 		return Manifest{}, err
 	}
@@ -69,8 +78,7 @@ func Certify(ctx context.Context, request CertifyRequest) (Manifest, error) {
 	if err != nil {
 		return Manifest{}, err
 	}
-	cohortCommitPrefix, err := CertificationCohortCommitPrefix(request.Cohort)
-	if err != nil || cohortCommitPrefix != cli.Commit[:8] {
+	if identity.CohortCommitPrefix != cli.Commit[:8] {
 		return Manifest{}, errors.New(
 			"certification cohort does not match the production CLI commit",
 		)
@@ -81,6 +89,7 @@ func Certify(ctx context.Context, request CertifyRequest) (Manifest, error) {
 	}
 	certifiedTarget, environment, err := certificationTarget(
 		request,
+		identity.Target,
 		expectedGuestCreationNonce,
 	)
 	if err != nil {
@@ -257,56 +266,88 @@ func Certify(ctx context.Context, request CertifyRequest) (Manifest, error) {
 	return manifest, nil
 }
 
-func validateCertifyRequest(request CertifyRequest) error {
+func validateCertifyRequest(
+	request CertifyRequest,
+) (certificationIdentity, error) {
 	if request.MDSPath == "" {
-		return errors.New("mds binary path is required")
+		return certificationIdentity{}, errors.New("mds binary path is required")
 	}
 	if !filepath.IsAbs(request.MDSPath) {
-		return errors.New("mds binary path must be absolute")
+		return certificationIdentity{}, errors.New(
+			"mds binary path must be absolute",
+		)
 	}
 	info, err := os.Lstat(request.MDSPath)
 	if err != nil {
-		return fmt.Errorf("inspect mds binary: %w", err)
+		return certificationIdentity{}, fmt.Errorf(
+			"inspect mds binary: %w",
+			err,
+		)
 	}
 	if info.Mode()&os.ModeSymlink != 0 {
-		return errors.New("mds binary must not be a symlink")
+		return certificationIdentity{}, errors.New(
+			"mds binary must not be a symlink",
+		)
 	}
 	if info.IsDir() || !info.Mode().IsRegular() {
-		return errors.New("mds binary must be a regular file")
+		return certificationIdentity{}, errors.New(
+			"mds binary must be a regular file",
+		)
 	}
 	if reparse, err := isReparsePoint(request.MDSPath); err != nil {
-		return fmt.Errorf("inspect mds binary reparse state: %w", err)
+		return certificationIdentity{}, fmt.Errorf(
+			"inspect mds binary reparse state: %w",
+			err,
+		)
 	} else if reparse {
-		return errors.New("mds binary must not be a reparse point")
+		return certificationIdentity{}, errors.New(
+			"mds binary must not be a reparse point",
+		)
 	}
 	if request.ExpectedBinarySHA256 != "" &&
 		exactartifact.ValidateSHA256(request.ExpectedBinarySHA256) != nil {
-		return errors.New("expected mds binary SHA-256 must be 64 lowercase hex characters")
+		return certificationIdentity{}, errors.New(
+			"expected mds binary SHA-256 must be 64 lowercase hex characters",
+		)
 	}
-	if err := ValidateCertificationCohort(request.Cohort); err != nil {
-		return err
+	cohortCommitPrefix, err := CertificationCohortCommitPrefix(
+		request.Cohort,
+	)
+	if err != nil {
+		return certificationIdentity{}, err
 	}
-	if _, err := target.ParseID(request.TargetID); err != nil {
-		return fmt.Errorf("invalid certification target: %w", err)
+	certificationID, err := target.ParseID(request.TargetID)
+	if err != nil {
+		return certificationIdentity{}, fmt.Errorf(
+			"invalid certification target: %w",
+			err,
+		)
 	}
 	if request.OutputDir == "" {
-		return errors.New("evidence output directory is required")
+		return certificationIdentity{}, errors.New(
+			"evidence output directory is required",
+		)
 	}
 	if _, err := os.Lstat(request.OutputDir); err == nil {
-		return errors.New("evidence output directory already exists")
+		return certificationIdentity{}, errors.New(
+			"evidence output directory already exists",
+		)
 	} else if !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("inspect evidence output directory: %w", err)
+		return certificationIdentity{}, fmt.Errorf(
+			"inspect evidence output directory: %w",
+			err,
+		)
 	}
-	return nil
+	return certificationIdentity{
+		Target:             certificationID,
+		CohortCommitPrefix: cohortCommitPrefix,
+	}, nil
 }
 
 func certificationNonceEnvironment(
 	request CertifyRequest,
+	id target.ID,
 ) (string, error) {
-	id, err := target.ParseID(request.TargetID)
-	if err != nil {
-		return "", fmt.Errorf("invalid certification target: %w", err)
-	}
 	getenv := request.Getenv
 	if getenv == nil {
 		getenv = os.Getenv
@@ -386,13 +427,11 @@ func selectionArguments(request CertifyRequest) ([]string, error) {
 
 func certificationTarget(
 	request CertifyRequest,
+	id target.ID,
 	expectedGuestCreationNonce string,
 ) (target.Facts, map[string]string, error) {
-	id, err := target.ParseID(request.TargetID)
-	if err != nil {
-		return target.Facts{}, nil, err
-	}
 	var facts target.Facts
+	var err error
 	if request.RuntimeProbe != nil {
 		facts, err = request.RuntimeProbe(id)
 	} else {

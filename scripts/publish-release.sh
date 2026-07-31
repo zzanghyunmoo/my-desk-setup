@@ -28,6 +28,19 @@ trap 'rm -rf -- "$mds_tmp"' EXIT
 mds_release_json="$mds_tmp/release.json"
 mds_was_draft=false
 
+for mds_local in "$MDS_RELEASE_DIR"/* "$MDS_PROMOTION_REPORT"; do
+  if [[ ! -f "$mds_local" || -L "$mds_local" ]]; then
+    echo "local release asset set contains a non-regular file" >&2
+    exit 1
+  fi
+  basename "$mds_local"
+done | LC_ALL=C sort > "$mds_tmp/expected-assets.txt"
+if [[ "$(wc -l < "$mds_tmp/expected-assets.txt" | tr -d ' ')" !=
+  "$(LC_ALL=C sort -u "$mds_tmp/expected-assets.txt" | wc -l | tr -d ' ')" ]]; then
+  echo "local release asset names must be unique" >&2
+  exit 1
+fi
+
 if gh api "repos/$GITHUB_REPOSITORY/releases/tags/$MDS_RELEASE_TAG" \
   > "$mds_release_json" 2>/dev/null; then
   if [[ "$(jq -r '.tag_name' "$mds_release_json")" != "$MDS_RELEASE_TAG" ]]; then
@@ -62,18 +75,6 @@ gh release download "$MDS_RELEASE_TAG" \
   --repo "$GITHUB_REPOSITORY" \
   --dir "$mds_tmp/remote"
 
-for mds_local in "$MDS_RELEASE_DIR"/* "$MDS_PROMOTION_REPORT"; do
-  if [[ ! -f "$mds_local" || -L "$mds_local" ]]; then
-    echo "local release asset set contains a non-regular file" >&2
-    exit 1
-  fi
-  basename "$mds_local"
-done | LC_ALL=C sort > "$mds_tmp/expected-assets.txt"
-if [[ "$(wc -l < "$mds_tmp/expected-assets.txt" | tr -d ' ')" !=
-  "$(LC_ALL=C sort -u "$mds_tmp/expected-assets.txt" | wc -l | tr -d ' ')" ]]; then
-  echo "local release asset names must be unique" >&2
-  exit 1
-fi
 find "$mds_tmp/remote" -mindepth 1 -maxdepth 1 -type f \
   -exec basename {} \; | LC_ALL=C sort > "$mds_tmp/remote-assets.txt"
 if ! cmp -s "$mds_tmp/expected-assets.txt" "$mds_tmp/remote-assets.txt"; then

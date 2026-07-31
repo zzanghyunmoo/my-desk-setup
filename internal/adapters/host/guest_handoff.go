@@ -250,7 +250,7 @@ func (runtime GuestRuntime) guestBootstrapCommand(
 	var stdin []byte
 	if len(artifact.Archive) > 0 {
 		sourceMode = "stdin"
-		stdin = append([]byte(nil), artifact.Archive...)
+		stdin = artifact.Archive
 	}
 	guestCommand := transport.Command{
 		Executable: "/bin/sh",

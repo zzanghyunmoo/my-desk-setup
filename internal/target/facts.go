@@ -5,7 +5,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"fmt"
+
+	"github.com/zzanghyunmoo/my-desk-setup/internal/artifact"
 )
 
 const guestCreationNonceCommitmentDomain = "mds.guest-creation-nonce/v1\x00"
@@ -55,9 +56,13 @@ func (facts Facts) Fingerprint() (string, error) {
 }
 
 func GuestCreationNonceCommitment(nonce string) (string, error) {
+	if artifact.ValidateSHA256(nonce) != nil {
+		return "", errors.New(
+			"guest creation nonce must contain exactly 64 lowercase hex characters",
+		)
+	}
 	decoded, err := hex.DecodeString(nonce)
-	if err != nil || len(decoded) != sha256.Size ||
-		hex.EncodeToString(decoded) != nonce {
+	if err != nil {
 		return "", errors.New(
 			"guest creation nonce must contain exactly 64 lowercase hex characters",
 		)
@@ -74,9 +79,7 @@ func ValidateGuestCreationNonceCommitment(commitment string) error {
 		commitment[:len(prefix)] != prefix {
 		return errors.New("guest creation nonce commitment is invalid")
 	}
-	decoded, err := hex.DecodeString(commitment[len(prefix):])
-	if err != nil || len(decoded) != sha256.Size ||
-		fmt.Sprintf("%x", decoded) != commitment[len(prefix):] {
+	if artifact.ValidateSHA256(commitment[len(prefix):]) != nil {
 		return errors.New("guest creation nonce commitment is invalid")
 	}
 	return nil

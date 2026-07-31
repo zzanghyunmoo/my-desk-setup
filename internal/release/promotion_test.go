@@ -226,17 +226,16 @@ func TestVerifyPromotionReportRebindsStableReportToRelease(t *testing.T) {
 		Cohort:          "cert-20260730T000000Z-" + manifest.Commit[:8],
 		CatalogRevision: manifest.CatalogRevision,
 	}
-	for _, kind := range requiredPromotionTargets {
-		osName := expectedArtifactOS(kind)
+	for _, targetSpec := range requiredPromotionTargets {
 		var artifact Artifact
 		for _, candidate := range manifest.Artifacts {
-			if candidate.OS == osName {
+			if candidate.OS == targetSpec.OS {
 				artifact = candidate
 				break
 			}
 		}
 		report.Targets = append(report.Targets, PromotedTarget{
-			ID: requiredTargetID(kind), Kind: kind,
+			ID: targetSpec.ID, Kind: targetSpec.Kind,
 			Status:          evidence.StatusVerified,
 			PlanDigest:      "sha256:" + strings.Repeat("a", 64),
 			BinarySHA256:    artifact.BinarySHA256,
