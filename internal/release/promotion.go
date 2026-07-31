@@ -17,11 +17,12 @@ import (
 	exactartifact "github.com/zzanghyunmoo/my-desk-setup/internal/artifact"
 	"github.com/zzanghyunmoo/my-desk-setup/internal/durable"
 	"github.com/zzanghyunmoo/my-desk-setup/internal/evidence"
+	"github.com/zzanghyunmoo/my-desk-setup/internal/safefile"
 	targetpkg "github.com/zzanghyunmoo/my-desk-setup/internal/target"
 )
 
 const (
-	PromotionSchemaVersion        = "mds.release-promotion/v1"
+	PromotionSchemaVersion        = "mds.release-promotion/v2"
 	maximumCohortCaptureWindow    = 4 * time.Hour
 	certificationCaptureClockSkew = 5 * time.Minute
 )
@@ -40,22 +41,26 @@ var requiredPromotionTargets = []promotionTargetSpec{
 }
 
 type PromotionOptions struct {
-	ReleaseDir     string
-	EvidenceRoot   string
-	ExpectedCommit string
-	ExpectedCohort string
-	Now            time.Time
-	MaxAge         time.Duration
+	ReleaseDir         string
+	EvidenceRoot       string
+	ExpectedCommit     string
+	ExpectedCohort     string
+	EvidenceArchiveDir string
+	Now                time.Time
+	MaxAge             time.Duration
 }
 
 type PromotedTarget struct {
-	ID              string          `json:"id"`
-	Kind            targetpkg.Kind  `json:"kind"`
-	Status          evidence.Status `json:"status"`
-	PlanDigest      string          `json:"plan_digest"`
-	BinarySHA256    string          `json:"binary_sha256"`
-	ReleaseArtifact string          `json:"release_artifact"`
-	CapturedAtUnix  int64           `json:"captured_at_unix"`
+	ID               string          `json:"id"`
+	Kind             targetpkg.Kind  `json:"kind"`
+	Status           evidence.Status `json:"status"`
+	PlanDigest       string          `json:"plan_digest"`
+	BinarySHA256     string          `json:"binary_sha256"`
+	ReleaseArtifact  string          `json:"release_artifact"`
+	EvidenceArtifact string          `json:"evidence_artifact"`
+	EvidenceArchive  string          `json:"evidence_archive"`
+	EvidenceSHA256   string          `json:"evidence_sha256"`
+	CapturedAtUnix   int64           `json:"captured_at_unix"`
 }
 
 type PromotionReport struct {
@@ -73,7 +78,34 @@ type evidenceVerifier func(
 ) (evidence.Manifest, error)
 
 func Promote(options PromotionOptions) (PromotionReport, error) {
-	return promoteWithVerifier(options, evidence.Verify)
+	report, err := promoteWithVerifier(options, evidence.Verify)
+	if err != nil {
+		return PromotionReport{}, err
+	}
+	if options.EvidenceArchiveDir == "" {
+		return PromotionReport{}, errors.New(
+			"evidence archive directory is required",
+		)
+	}
+	releaseManifest, err := Verify(options.ReleaseDir)
+	if err != nil {
+		return PromotionReport{}, fmt.Errorf("reverify release for evidence archive: %w", err)
+	}
+	expectedCLIRevision := fmt.Sprintf(
+		"%s (commit=%s, date=%s)",
+		releaseManifest.Version,
+		releaseManifest.Commit,
+		releaseManifest.Date,
+	)
+	if err := buildEvidenceArchives(
+		options.EvidenceRoot,
+		options.EvidenceArchiveDir,
+		expectedCLIRevision,
+		&report,
+	); err != nil {
+		return PromotionReport{}, err
+	}
+	return report, nil
 }
 
 func promoteWithVerifier(
@@ -267,10 +299,11 @@ func promoteWithVerifier(
 		}
 		byKind[kind] = PromotedTarget{
 			ID: initial.Target.ID, Kind: kind, Status: initial.Status,
-			PlanDigest:      initial.PlanDigest,
-			BinarySHA256:    initial.BinarySHA256,
-			ReleaseArtifact: artifact.Name,
-			CapturedAtUnix:  capturedAtUnix,
+			PlanDigest:       initial.PlanDigest,
+			BinarySHA256:     initial.BinarySHA256,
+			ReleaseArtifact:  artifact.Name,
+			EvidenceArtifact: filepath.Base(bundle),
+			CapturedAtUnix:   capturedAtUnix,
 		}
 	}
 	if latestCapture.Sub(earliestCapture) > maximumCohortCaptureWindow {
@@ -297,6 +330,95 @@ func promoteWithVerifier(
 		report.Targets = append(report.Targets, promoted)
 	}
 	return report, nil
+}
+
+func buildEvidenceArchives(
+	evidenceRoot,
+	outputDir,
+	expectedCLIRevision string,
+	report *PromotionReport,
+) (returnErr error) {
+	if report == nil {
+		return errors.New("promotion report is required")
+	}
+	if _, err := os.Lstat(outputDir); err == nil {
+		return fmt.Errorf("evidence archive path already exists: %s", outputDir)
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("inspect evidence archive path: %w", err)
+	}
+	parent := filepath.Dir(outputDir)
+	if err := os.MkdirAll(parent, 0o700); err != nil {
+		return fmt.Errorf("create evidence archive parent: %w", err)
+	}
+	staging, err := os.MkdirTemp(
+		parent,
+		"."+filepath.Base(outputDir)+".staging-*",
+	)
+	if err != nil {
+		return fmt.Errorf("create evidence archive staging: %w", err)
+	}
+	defer func() {
+		if err := os.RemoveAll(staging); returnErr == nil && err != nil {
+			returnErr = fmt.Errorf("remove evidence archive staging: %w", err)
+		}
+	}()
+
+	bundles, err := exactEvidenceDirectories(evidenceRoot)
+	if err != nil {
+		return err
+	}
+	bundlesByName := make(map[string]string, len(bundles))
+	for _, bundle := range bundles {
+		bundlesByName[filepath.Base(bundle)] = bundle
+	}
+	for index := range report.Targets {
+		promoted := &report.Targets[index]
+		bundle, exists := bundlesByName[promoted.EvidenceArtifact]
+		if !exists {
+			return fmt.Errorf(
+				"promotion target %q is missing source evidence artifact %q",
+				promoted.ID,
+				promoted.EvidenceArtifact,
+			)
+		}
+		archiveName := fmt.Sprintf(
+			"mds_%s_certification_%s_%s.zip",
+			report.Version,
+			promoted.Kind,
+			report.Cohort,
+		)
+		archivePath := filepath.Join(staging, archiveName)
+		if err := writeEvidenceArchive(archivePath, bundle); err != nil {
+			return fmt.Errorf(
+				"archive target evidence %q: %w",
+				promoted.ID,
+				err,
+			)
+		}
+		archive, err := evidenceArchiveBytes(archivePath)
+		if err != nil {
+			return err
+		}
+		promoted.EvidenceArchive = archiveName
+		promoted.EvidenceSHA256 = bytesSHA256(archive)
+		if err := verifyArchivedEvidenceBytes(
+			archive,
+			expectedCLIRevision,
+			report.CatalogRevision,
+			report.Cohort,
+			*promoted,
+		); err != nil {
+			return fmt.Errorf(
+				"reverify archived target evidence %q: %w",
+				promoted.ID,
+				err,
+			)
+		}
+	}
+	if err := durable.PublishDirectory(staging, outputDir); err != nil {
+		return fmt.Errorf("publish evidence archives: %w", err)
+	}
+	return nil
 }
 
 func exactEvidenceDirectories(root string) ([]string, error) {
@@ -376,12 +498,44 @@ func WritePromotionReport(path string, report PromotionReport) error {
 func VerifyPromotionReport(
 	releaseDir,
 	reportPath,
+	evidenceArchiveDir,
 	expectedCommit,
 	expectedCohort string,
+) (PromotionReport, error) {
+	return verifyPromotionReportWithArchiveVerifier(
+		releaseDir,
+		reportPath,
+		evidenceArchiveDir,
+		expectedCommit,
+		expectedCohort,
+		verifyArchivedEvidenceBytes,
+	)
+}
+
+type evidenceArchiveVerifier func(
+	[]byte,
+	string,
+	string,
+	string,
+	PromotedTarget,
+) error
+
+func verifyPromotionReportWithArchiveVerifier(
+	releaseDir,
+	reportPath,
+	evidenceArchiveDir,
+	expectedCommit,
+	expectedCohort string,
+	verifyArchive evidenceArchiveVerifier,
 ) (PromotionReport, error) {
 	releaseManifest, err := Verify(releaseDir)
 	if err != nil {
 		return PromotionReport{}, fmt.Errorf("verify release: %w", err)
+	}
+	if !commitPattern.MatchString(expectedCommit) {
+		return PromotionReport{}, errors.New(
+			"expected release commit must be a full lowercase commit SHA",
+		)
 	}
 	if releaseManifest.Commit != expectedCommit {
 		return PromotionReport{}, fmt.Errorf(
@@ -403,18 +557,12 @@ func VerifyPromotionReport(
 	if err != nil {
 		return PromotionReport{}, err
 	}
-	info, err := os.Lstat(reportPath)
+	data, err := safefile.ReadRegularNoFollow(reportPath, 1<<20)
 	if err != nil {
-		return PromotionReport{}, fmt.Errorf("inspect promotion report: %w", err)
-	}
-	if !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {
-		return PromotionReport{}, errors.New(
-			"promotion report must be a regular non-symlink file",
+		return PromotionReport{}, fmt.Errorf(
+			"snapshot bounded promotion report: %w",
+			err,
 		)
-	}
-	data, err := os.ReadFile(reportPath)
-	if err != nil {
-		return PromotionReport{}, fmt.Errorf("read promotion report: %w", err)
 	}
 	var report PromotionReport
 	decoder := json.NewDecoder(bytes.NewReader(data))
@@ -454,6 +602,26 @@ func VerifyPromotionReport(
 	for _, artifact := range releaseManifest.Artifacts {
 		artifacts[artifact.Name] = artifact
 	}
+	evidenceArchiveInfo, err := os.Lstat(evidenceArchiveDir)
+	if err != nil {
+		return PromotionReport{}, fmt.Errorf(
+			"inspect evidence archive directory: %w",
+			err,
+		)
+	}
+	if !evidenceArchiveInfo.IsDir() ||
+		evidenceArchiveInfo.Mode()&os.ModeSymlink != 0 {
+		return PromotionReport{}, errors.New(
+			"evidence archive path must be a real directory",
+		)
+	}
+	expectedEvidenceArchives := make(map[string]bool, len(requiredPromotionTargets))
+	expectedCLIRevision := fmt.Sprintf(
+		"%s (commit=%s, date=%s)",
+		releaseManifest.Version,
+		releaseManifest.Commit,
+		releaseManifest.Date,
+	)
 	var earliestCapture time.Time
 	var latestCapture time.Time
 	for index, targetSpec := range requiredPromotionTargets {
@@ -515,10 +683,99 @@ func VerifyPromotionReport(
 				promoted.ID,
 			)
 		}
+		expectedEvidenceArtifactPrefix := fmt.Sprintf(
+			"target-evidence-%s-%s-%s-",
+			promoted.Kind,
+			report.Commit,
+			report.Cohort,
+		)
+		if !strings.HasPrefix(
+			promoted.EvidenceArtifact,
+			expectedEvidenceArtifactPrefix,
+		) {
+			return PromotionReport{}, fmt.Errorf(
+				"promotion target %q has invalid source evidence artifact identity",
+				promoted.ID,
+			)
+		}
+		evidenceArtifactSuffix := strings.TrimPrefix(
+			promoted.EvidenceArtifact,
+			expectedEvidenceArtifactPrefix,
+		)
+		evidenceArtifactIdentity := strings.Split(evidenceArtifactSuffix, "-")
+		if len(evidenceArtifactIdentity) != 2 {
+			return PromotionReport{}, fmt.Errorf(
+				"promotion target %q has invalid source run identity",
+				promoted.ID,
+			)
+		}
+		for _, value := range evidenceArtifactIdentity {
+			parsed, parseErr := strconv.ParseUint(value, 10, 64)
+			if parseErr != nil || parsed == 0 {
+				return PromotionReport{}, fmt.Errorf(
+					"promotion target %q has invalid source run identity",
+					promoted.ID,
+				)
+			}
+		}
+		expectedEvidenceArchive := fmt.Sprintf(
+			"mds_%s_certification_%s_%s.zip",
+			report.Version,
+			promoted.Kind,
+			report.Cohort,
+		)
+		if promoted.EvidenceArchive != expectedEvidenceArchive ||
+			exactartifact.ValidateSHA256(promoted.EvidenceSHA256) != nil {
+			return PromotionReport{}, fmt.Errorf(
+				"promotion target %q has invalid evidence archive identity",
+				promoted.ID,
+			)
+		}
+		expectedEvidenceArchives[promoted.EvidenceArchive] = true
+		archivePath := filepath.Join(
+			evidenceArchiveDir,
+			promoted.EvidenceArchive,
+		)
+		archive, err := evidenceArchiveBytes(archivePath)
+		if err != nil {
+			return PromotionReport{}, fmt.Errorf(
+				"inspect promotion target %q evidence archive: %w",
+				promoted.ID,
+				err,
+			)
+		}
+		if bytesSHA256(archive) != promoted.EvidenceSHA256 {
+			return PromotionReport{}, fmt.Errorf(
+				"promotion target %q evidence archive checksum mismatch",
+				promoted.ID,
+			)
+		}
+		if err := verifyArchive(
+			archive,
+			expectedCLIRevision,
+			report.CatalogRevision,
+			report.Cohort,
+			promoted,
+		); err != nil {
+			return PromotionReport{}, fmt.Errorf(
+				"verify promotion target %q evidence archive: %w",
+				promoted.ID,
+				err,
+			)
+		}
 	}
 	if latestCapture.Sub(earliestCapture) > maximumCohortCaptureWindow {
 		return PromotionReport{}, errors.New(
 			"promotion report capture spread exceeds the certification cohort window",
+		)
+	}
+	if err := verifyExactFiles(
+		evidenceArchiveDir,
+		expectedEvidenceArchives,
+	); err != nil {
+		return PromotionReport{}, fmt.Errorf(
+			"verify evidence archive set: %w",
+			err,
 		)
 	}
 	return report, nil

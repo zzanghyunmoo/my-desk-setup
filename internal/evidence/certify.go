@@ -2,12 +2,9 @@ package evidence
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -62,19 +59,20 @@ func Certify(ctx context.Context, request CertifyRequest) (Manifest, error) {
 	if err != nil {
 		return Manifest{}, err
 	}
-	binarySHA256, err := hashRegularFile(request.MDSPath)
+	productionBinary, err := snapshotProductionBinary(request.MDSPath)
 	if err != nil {
 		return Manifest{}, err
 	}
-	if request.ExpectedBinarySHA256 != "" &&
-		binarySHA256 != request.ExpectedBinarySHA256 {
+	defer productionBinary.Remove()
+	binarySHA256 := productionBinary.SHA256
+	if binarySHA256 != request.ExpectedBinarySHA256 {
 		return Manifest{}, fmt.Errorf(
 			"mds binary checksum mismatch: got=%s expected=%s",
 			binarySHA256,
 			request.ExpectedBinarySHA256,
 		)
 	}
-	cli, err := readCLIIdentity(ctx, request.MDSPath)
+	cli, err := readCLIIdentity(ctx, productionBinary.Path)
 	if err != nil {
 		return Manifest{}, err
 	}
@@ -102,7 +100,7 @@ func Certify(ctx context.Context, request CertifyRequest) (Manifest, error) {
 
 	planOutput, _, err := runMDS(
 		ctx,
-		request.MDSPath,
+		productionBinary.Path,
 		append([]string{"plan"}, common...),
 		environment,
 		false,
@@ -115,13 +113,20 @@ func Certify(ctx context.Context, request CertifyRequest) (Manifest, error) {
 	if err := decodeStrict(planOutput, &plan); err != nil {
 		return Manifest{}, fmt.Errorf("decode plan output: %w", err)
 	}
+	if plan.Digest != request.ExpectedPlanDigest {
+		return Manifest{}, fmt.Errorf(
+			"reviewed plan digest mismatch before apply: got=%s expected=%s",
+			plan.Digest,
+			request.ExpectedPlanDigest,
+		)
+	}
 	applyArguments := append(
 		[]string{"apply", "--plan-digest", plan.Digest},
 		common...,
 	)
 	applyOutput, applyActionRequired, err := runMDS(
 		ctx,
-		request.MDSPath,
+		productionBinary.Path,
 		applyArguments,
 		environment,
 		true,
@@ -147,7 +152,7 @@ func Certify(ctx context.Context, request CertifyRequest) (Manifest, error) {
 	if applyReceipt.Complete {
 		repeatOutput, repeatActionRequired, err := runMDS(
 			ctx,
-			request.MDSPath,
+			productionBinary.Path,
 			applyArguments,
 			environment,
 			true,
@@ -173,7 +178,7 @@ func Certify(ctx context.Context, request CertifyRequest) (Manifest, error) {
 
 	doctorOutput, doctorActionRequired, err := runMDS(
 		ctx,
-		request.MDSPath,
+		productionBinary.Path,
 		append([]string{"doctor"}, common...),
 		environment,
 		true,
@@ -304,10 +309,18 @@ func validateCertifyRequest(
 			"mds binary must not be a reparse point",
 		)
 	}
-	if request.ExpectedBinarySHA256 != "" &&
-		exactartifact.ValidateSHA256(request.ExpectedBinarySHA256) != nil {
+	if exactartifact.ValidateSHA256(request.ExpectedBinarySHA256) != nil {
 		return certificationIdentity{}, errors.New(
-			"expected mds binary SHA-256 must be 64 lowercase hex characters",
+			"expected mds binary SHA-256 is required and must be 64 lowercase hex characters",
+		)
+	}
+	if !strings.HasPrefix(request.ExpectedPlanDigest, "sha256:") ||
+		exactartifact.ValidateSHA256(strings.TrimPrefix(
+			request.ExpectedPlanDigest,
+			"sha256:",
+		)) != nil {
+		return certificationIdentity{}, errors.New(
+			"expected plan digest is required and must be sha256 followed by 64 lowercase hex characters",
 		)
 	}
 	cohortCommitPrefix, err := CertificationCohortCommitPrefix(
@@ -370,23 +383,6 @@ func certificationNonceEnvironment(
 		}
 	}
 	return expectedGuestCreationNonce, nil
-}
-
-func hashRegularFile(path string) (digest string, returnErr error) {
-	file, err := os.Open(path)
-	if err != nil {
-		return "", fmt.Errorf("open mds binary for hashing: %w", err)
-	}
-	defer func() {
-		if err := file.Close(); returnErr == nil && err != nil {
-			returnErr = fmt.Errorf("close mds binary after hashing: %w", err)
-		}
-	}()
-	hash := sha256.New()
-	if _, err := io.Copy(hash, file); err != nil {
-		return "", fmt.Errorf("hash mds binary: %w", err)
-	}
-	return hex.EncodeToString(hash.Sum(nil)), nil
 }
 
 func selectionArguments(request CertifyRequest) ([]string, error) {

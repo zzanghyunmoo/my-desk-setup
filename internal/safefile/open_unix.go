@@ -1,6 +1,6 @@
 //go:build !windows
 
-package host
+package safefile
 
 import (
 	"errors"
@@ -9,7 +9,9 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-func openGuestBootstrapArchive(path string) (*os.File, int64, error) {
+// OpenRegularNoFollow opens one regular file without following a final
+// symlink and returns the size observed from the same open handle.
+func OpenRegularNoFollow(path string) (*os.File, int64, error) {
 	descriptor, err := unix.Open(
 		path,
 		unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NOFOLLOW,
@@ -21,7 +23,7 @@ func openGuestBootstrapArchive(path string) (*os.File, int64, error) {
 	file := os.NewFile(uintptr(descriptor), "")
 	if file == nil {
 		_ = unix.Close(descriptor)
-		return nil, 0, errors.New("create guest bootstrap archive handle")
+		return nil, 0, errors.New("create regular file handle")
 	}
 	var status unix.Stat_t
 	if err := unix.Fstat(descriptor, &status); err != nil {
@@ -30,7 +32,7 @@ func openGuestBootstrapArchive(path string) (*os.File, int64, error) {
 	}
 	if status.Mode&unix.S_IFMT != unix.S_IFREG {
 		_ = file.Close()
-		return nil, 0, errors.New("guest bootstrap archive is not regular")
+		return nil, 0, errors.New("path is not a regular file")
 	}
 	return file, status.Size, nil
 }

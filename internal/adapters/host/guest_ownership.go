@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/zzanghyunmoo/my-desk-setup/internal/adapters"
@@ -150,7 +151,10 @@ func (runtime GuestRuntime) validateGuestOwnershipMarker(
 	action planning.Action,
 	record guest.Ownership,
 ) (target.ImageIdentity, error) {
-	command, err := runtime.guestImageIdentityReadCommand(action)
+	command, err := runtime.guestImageIdentityReadCommand(
+		action,
+		record.CreationNonce,
+	)
 	if err != nil {
 		return target.ImageIdentity{}, err
 	}
@@ -161,7 +165,9 @@ func (runtime GuestRuntime) validateGuestOwnershipMarker(
 			err,
 		)
 	}
-	identity, err := target.ParseImageIdentity([]byte(result.Stdout))
+	safeIdentity := strings.TrimSpace(result.Stdout) +
+		"\ncreation_nonce=" + record.CreationNonce + "\n"
+	identity, err := target.ParseImageIdentity([]byte(safeIdentity))
 	if err != nil {
 		return target.ImageIdentity{}, err
 	}
@@ -186,8 +192,10 @@ func (runtime GuestRuntime) validateGuestOwnershipMarker(
 
 func (runtime GuestRuntime) guestImageIdentityReadCommand(
 	action planning.Action,
+	expectedCreationNonce string,
 ) (transport.Command, error) {
 	const script = `set -eu
+IFS= read -r expected_creation_nonce
 path=/etc/mds/image-identity-v1
 [ -f "$path" ] && [ ! -L "$path" ] || exit 74
 metadata=$(/usr/bin/stat -c '%u:%g:%a' "$path")
@@ -195,11 +203,22 @@ case "$metadata" in
   0:0:600|0:0:640|0:0:644) ;;
   *) exit 74 ;;
 esac
-/bin/cat "$path"
+line_count=$(/usr/bin/wc -l < "$path")
+[ "$line_count" -eq 4 ] || exit 74
+schema=$(/usr/bin/sed -n 's/^schema=//p' "$path")
+revision=$(/usr/bin/sed -n 's/^image_revision=//p' "$path")
+provenance=$(/usr/bin/sed -n 's/^image_provenance=//p' "$path")
+creation_nonce=$(/usr/bin/sed -n 's/^creation_nonce=//p' "$path")
+[ -n "$schema" ] && [ -n "$revision" ] && [ -n "$provenance" ]
+[ "$creation_nonce" = "$expected_creation_nonce" ] || exit 74
+printf 'schema=%s\n' "$schema"
+printf 'image_revision=%s\n' "$revision"
+printf 'image_provenance=%s\n' "$provenance"
 `
 	guestCommand := transport.Command{
 		Executable:  "/bin/sh",
 		Arguments:   []string{"-eu", "-c", script, "mds-image-identity"},
+		Stdin:       []byte(expectedCreationNonce + "\n"),
 		Timeout:     30 * time.Second,
 		OutputLimit: 4096,
 	}
@@ -224,6 +243,7 @@ esac
 	}
 	return transport.Command{
 		Executable: executable, Arguments: arguments,
+		Stdin:   guestCommand.Stdin,
 		Timeout: guestCommand.Timeout, OutputLimit: guestCommand.OutputLimit,
 	}, nil
 }

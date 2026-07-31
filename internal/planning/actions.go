@@ -2,7 +2,7 @@ package planning
 
 import "github.com/zzanghyunmoo/my-desk-setup/internal/target"
 
-const PlanSchema = "mds.plan/v1"
+const PlanSchema = "mds.plan/v2"
 
 type ActionStatus string
 

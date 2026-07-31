@@ -9,7 +9,7 @@ import (
 )
 
 const (
-	SchemaVersion           = "mds.target-evidence/v1"
+	SchemaVersion           = "mds.target-evidence/v2"
 	CaptureKindActualTarget = "actual-target"
 
 	ManifestFile  = "manifest.json"
@@ -87,7 +87,10 @@ type CertifyRequest struct {
 	// ExpectedBinarySHA256 binds capture to a release artifact before the
 	// target executes the binary.
 	ExpectedBinarySHA256 string
-	Now                  func() time.Time
+	// ExpectedPlanDigest binds capture to an externally reviewed plan before
+	// the target executes any mutating action.
+	ExpectedPlanDigest string
+	Now                func() time.Time
 	// Getenv is a deterministic test seam. Production callers leave it nil so
 	// the protected runner service environment remains the only nonce input.
 	Getenv func(string) string

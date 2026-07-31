@@ -8,6 +8,7 @@ on:
       - "internal/evidence/**"
       - ".gitleaks.toml"
       - "scripts/certify-target.sh"
+      - "scripts/certification-clock.sh"
       - "scripts/install-gitleaks.sh"
       - "scripts/install-gitleaks.ps1"
       - "scripts/verify-target-evidence.sh"
@@ -21,6 +22,7 @@ on:
       - "internal/evidence/**"
       - ".gitleaks.toml"
       - "scripts/certify-target.sh"
+      - "scripts/certification-clock.sh"
       - "scripts/install-gitleaks.sh"
       - "scripts/install-gitleaks.ps1"
       - "scripts/verify-target-evidence.sh"
@@ -198,6 +200,9 @@ jobs:
         shell: bash
         run: |
           echo "EVIDENCE_OUTPUT=$RUNNER_TEMP/mds-target-evidence/run-$GITHUB_RUN_ID-attempt-$GITHUB_RUN_ATTEMPT" >> "$GITHUB_ENV"
+      - name: Verify runner clock against GitHub
+        shell: bash
+        run: scripts/certification-clock.sh verify
       - name: Capture actual target evidence
         continue-on-error: true
         shell: bash
@@ -207,11 +212,26 @@ jobs:
           EXPECTED_BINARY_SHA256: ${{ inputs.expected_binary_sha256 }}
           CERTIFICATION_PROFILE: ${{ steps.certification-identity.outputs.certification_profile }}
           CERTIFICATION_COHORT: ${{ steps.certification-identity.outputs.cohort }}
+          EXPECTED_PLAN_DIGEST: ${{ inputs.expected_plan_digest }}
         run: |
           case "$TARGET_ID" in
-            wsl-guest:*|lima-guest:*)
+            wsl-guest:Ubuntu-26.04)
               if [[ ! "${MDS_EXPECTED_GUEST_CREATION_NONCE:-}" =~ ^[0-9a-f]{64}$ ]]; then
                 echo "guest runner service must provide a 64-character lowercase MDS_EXPECTED_GUEST_CREATION_NONCE" >&2
+                exit 2
+              fi
+              if [[ "${WSL_DISTRO_NAME:-}" != Ubuntu-26.04 ]]; then
+                echo "WSL guest runner service must inherit WSL_DISTRO_NAME=Ubuntu-26.04" >&2
+                exit 2
+              fi
+              ;;
+            lima-guest:mds)
+              if [[ ! "${MDS_EXPECTED_GUEST_CREATION_NONCE:-}" =~ ^[0-9a-f]{64}$ ]]; then
+                echo "guest runner service must provide a 64-character lowercase MDS_EXPECTED_GUEST_CREATION_NONCE" >&2
+                exit 2
+              fi
+              if [[ "${LIMA_INSTANCE:-}" != mds ]]; then
+                echo "Lima guest runner service must inherit LIMA_INSTANCE=mds" >&2
                 exit 2
               fi
               ;;
@@ -228,6 +248,7 @@ jobs:
             --output "$EVIDENCE_OUTPUT" \
             --cohort "$CERTIFICATION_COHORT" \
             --expected-binary-sha256 "$EXPECTED_BINARY_SHA256" \
+            --expected-plan-digest "$EXPECTED_PLAN_DIGEST" \
             --profile "$CERTIFICATION_PROFILE"
       - name: Verify against reviewed release and plan
         if: always()
@@ -281,6 +302,12 @@ jobs:
           if grep -R -q -E '"(image_)?creation_nonce"[[:space:]]*:' \
             "$EVIDENCE_OUTPUT"; then
             echo "verified evidence contains a raw guest creation nonce field" >&2
+            exit 1
+          fi
+          if test -n "${MDS_EXPECTED_GUEST_CREATION_NONCE:-}" &&
+            printf '%s\n' "$MDS_EXPECTED_GUEST_CREATION_NONCE" |
+              grep -R -F -q -f - -- "$EVIDENCE_OUTPUT"; then
+            echo "verified evidence contains raw guest creation nonce bytes" >&2
             exit 1
           fi
       - name: Upload verified certification output

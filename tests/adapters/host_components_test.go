@@ -244,6 +244,30 @@ func TestWSLRuntimeInstallsCanonicalGuestWithoutAuth(t *testing.T) {
 	if strings.Contains(joined, "--install --distribution") {
 		t.Fatalf("WSL lifecycle used moving distribution install:\n%s", joined)
 	}
+	record, exists, err := guest.LoadOwnership(
+		ownershipRoot,
+		"wsl",
+		"Ubuntu-26.04",
+	)
+	if err != nil || !exists {
+		t.Fatalf("LoadOwnership() record=%+v exists=%t error=%v", record, exists, err)
+	}
+	if strings.Contains(joined, record.CreationNonce) {
+		t.Fatal("WSL lifecycle exposed the raw guest nonce in process arguments")
+	}
+	var nonceStdinCommands int
+	for _, command := range port.commands {
+		if string(command.Stdin) != record.CreationNonce+"\n" {
+			continue
+		}
+		nonceStdinCommands++
+	}
+	if nonceStdinCommands != 3 {
+		t.Fatalf(
+			"raw nonce stdin command count = %d, want marker write and two independent reads",
+			nonceStdinCommands,
+		)
+	}
 	for _, forbidden := range []string{" auth ", " login ", "token"} {
 		if strings.Contains(strings.ToLower(joined), forbidden) {
 			t.Fatalf("WSL lifecycle contains forbidden auth surface %q:\n%s", forbidden, joined)

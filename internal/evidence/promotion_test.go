@@ -25,6 +25,7 @@ func TestCertifyRejectsUnexpectedBinarySHA256BeforeExecution(t *testing.T) {
 		MDSPath: binary, TargetID: "lima-guest:mds", OutputDir: output,
 		Cohort: fixtureCohort, All: true,
 		ExpectedBinarySHA256: strings.Repeat("f", 64),
+		ExpectedPlanDigest:   "sha256:" + strings.Repeat("e", 64),
 		Getenv: func(key string) string {
 			if key == "MDS_EXPECTED_GUEST_CREATION_NONCE" {
 				return strings.Repeat("a", 64)
@@ -37,6 +38,46 @@ func TestCertifyRejectsUnexpectedBinarySHA256BeforeExecution(t *testing.T) {
 	}
 	if _, statErr := os.Lstat(output); !os.IsNotExist(statErr) {
 		t.Fatalf("evidence output exists after binary mismatch: %v", statErr)
+	}
+}
+
+func TestCertifyRequiresReviewedBinaryAndPlanBeforeExecution(t *testing.T) {
+	root := t.TempDir()
+	binary := filepath.Join(root, "mds")
+	if err := os.WriteFile(binary, []byte("must not execute"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	binarySHA256 := fileSHA256Fixture(t, binary)
+	for _, test := range []struct {
+		name           string
+		expectedBinary string
+		expectedPlan   string
+		want           string
+	}{
+		{
+			name:         "missing binary identity",
+			expectedPlan: "sha256:" + strings.Repeat("e", 64),
+			want:         "binary SHA-256 is required",
+		},
+		{
+			name:           "missing plan identity",
+			expectedBinary: binarySHA256,
+			want:           "plan digest is required",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			output := filepath.Join(root, strings.ReplaceAll(test.name, " ", "-"))
+			_, err := Certify(context.Background(), CertifyRequest{
+				MDSPath: binary, TargetID: "lima-guest:mds", OutputDir: output,
+				Cohort: fixtureCohort, All: true,
+				ExpectedBinarySHA256: test.expectedBinary,
+				ExpectedPlanDigest:   test.expectedPlan,
+			})
+			assertErrorContains(t, err, test.want)
+			if _, statErr := os.Lstat(output); !os.IsNotExist(statErr) {
+				t.Fatalf("evidence output exists after identity rejection: %v", statErr)
+			}
+		})
 	}
 }
 

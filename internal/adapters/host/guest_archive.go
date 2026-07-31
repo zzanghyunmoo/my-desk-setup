@@ -6,6 +6,8 @@ import (
 	"errors"
 	"io"
 	"path/filepath"
+
+	"github.com/zzanghyunmoo/my-desk-setup/internal/safefile"
 )
 
 const maxGuestBootstrapArchiveBytes int64 = 256 << 20
@@ -19,7 +21,7 @@ func loadGuestBootstrapArchive(
 			"guest bootstrap archive must use an absolute path",
 		)
 	}
-	file, size, err := openGuestBootstrapArchive(path)
+	file, size, err := safefile.OpenRegularNoFollow(path)
 	if err != nil {
 		return nil, errors.New(
 			"guest bootstrap archive cannot be opened safely",

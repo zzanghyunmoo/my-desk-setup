@@ -397,6 +397,7 @@ func (runtime GuestRuntime) wslImageIdentityCommand(
 	creationNonce string,
 ) transport.Command {
 	const script = `umask 022
+IFS= read -r creation_nonce
 /usr/bin/install -d -m 0755 /etc/mds
 temporary=$(/usr/bin/mktemp /etc/mds/.image-identity-v1.XXXXXX)
 cleanup() {
@@ -407,7 +408,7 @@ trap cleanup EXIT HUP INT TERM
   printf 'schema=mds.guest-image/v2\n'
   printf 'image_revision=%s\n' "$1"
   printf 'image_provenance=%s\n' "$2"
-  printf 'creation_nonce=%s\n' "$3"
+  printf 'creation_nonce=%s\n' "$creation_nonce"
 } > "$temporary"
 /bin/chown 0:0 "$temporary"
 /bin/chmod 0644 "$temporary"
@@ -423,8 +424,8 @@ temporary=
 			"mds-image-identity",
 			"sha256:" + image.SHA256,
 			image.URL,
-			creationNonce,
 		},
+		Stdin:   []byte(creationNonce + "\n"),
 		Timeout: 5 * time.Minute,
 	}
 }

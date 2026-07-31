@@ -7,7 +7,7 @@ import (
 )
 
 const (
-	PlanSchema   = "mds.update/v1"
+	PlanSchema   = "mds.update/v2"
 	ResultSchema = "mds.update-result/v1"
 )
 

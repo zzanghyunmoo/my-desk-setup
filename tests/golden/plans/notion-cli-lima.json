@@ -1,5 +1,5 @@
 {
-  "schema_version": "mds.plan/v1",
+  "schema_version": "mds.plan/v2",
   "catalog_revision": "sha256:eed42036a197d67b2fda9a9c796d66d07fa878b1179221d880a534d5c40701b8",
   "target": {
     "id": {
@@ -61,5 +61,5 @@
     }
   ],
   "blockers": null,
-  "digest": "sha256:cee1869f2d1113ab001de8a4e3f9c67a5e604a9a979bf7fc6d5b38ef8d5a856f"
+  "digest": "sha256:14f55e3d1c0cea7bfaa4b49506d2dcc8c6f5cbf34c76d4e492eb11ccc5877990"
 }

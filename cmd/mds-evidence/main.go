@@ -99,6 +99,12 @@ func newCertifyCommand(stdout io.Writer) *cobra.Command {
 		"",
 		"SHA-256 of the exact release mds binary being certified",
 	)
+	flags.StringVar(
+		&request.ExpectedPlanDigest,
+		"expected-plan-digest",
+		"",
+		"reviewed plan digest that must match before apply",
+	)
 	flags.BoolVar(&request.All, "all", false, "certify every target-eligible component")
 	flags.StringVar(&request.Profile, "profile", "", "certify a named profile")
 	flags.StringSliceVar(
@@ -111,6 +117,8 @@ func newCertifyCommand(stdout io.Writer) *cobra.Command {
 	_ = command.MarkFlagRequired("target")
 	_ = command.MarkFlagRequired("output")
 	_ = command.MarkFlagRequired("cohort")
+	_ = command.MarkFlagRequired("expected-binary-sha256")
+	_ = command.MarkFlagRequired("expected-plan-digest")
 	return command
 }
 

@@ -1,12 +1,17 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+mds_script_dir=$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+mds_root=$(CDPATH='' cd -- "$mds_script_dir/.." && pwd)
+
 : "${GH_TOKEN:?set GH_TOKEN for GitHub release writes}"
 : "${GITHUB_REPOSITORY:?set GITHUB_REPOSITORY to owner/repository}"
 : "${MDS_RELEASE_TAG:?set MDS_RELEASE_TAG to the protected annotated tag}"
 : "${MDS_RELEASE_DIR:?set MDS_RELEASE_DIR to the verified release directory}"
 : "${MDS_PROMOTION_REPORT:?set MDS_PROMOTION_REPORT to release-promotion.json}"
+: "${MDS_EVIDENCE_ARCHIVE_DIR:?set MDS_EVIDENCE_ARCHIVE_DIR to durable evidence archives}"
 : "${MDS_COMMIT:?set MDS_COMMIT to the exact tagged commit}"
+: "${MDS_CERTIFICATION_COHORT:?set MDS_CERTIFICATION_COHORT to the selected certification cohort}"
 
 if [[ ! "$MDS_RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?$ ]] ||
   [[ ! "$MDS_COMMIT" =~ ^[0-9a-f]{40}$|^[0-9a-f]{64}$ ]]; then
@@ -14,7 +19,9 @@ if [[ ! "$MDS_RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z]+([.-][0-9A-Z
   exit 2
 fi
 if [[ ! -d "$MDS_RELEASE_DIR" || ! -f "$MDS_PROMOTION_REPORT" ||
-  -L "$MDS_RELEASE_DIR" || -L "$MDS_PROMOTION_REPORT" ]]; then
+  ! -d "$MDS_EVIDENCE_ARCHIVE_DIR" ||
+  -L "$MDS_RELEASE_DIR" || -L "$MDS_PROMOTION_REPORT" ||
+  -L "$MDS_EVIDENCE_ARCHIVE_DIR" ]]; then
   echo "verified release assets and promotion report are required" >&2
   exit 2
 fi
@@ -27,12 +34,48 @@ mds_tmp=$(mktemp -d)
 trap 'rm -rf -- "$mds_tmp"' EXIT
 mds_release_response="$mds_tmp/release-response.txt"
 mds_was_draft=false
+mds_verified_root="$mds_tmp/verified"
+mds_verified_release="$mds_verified_root/release"
+mds_verified_evidence="$mds_verified_root/evidence"
+mds_verified_report="$mds_verified_root/$(basename "$MDS_PROMOTION_REPORT")"
+mkdir -m 700 "$mds_verified_root"
+mkdir -m 700 "$mds_verified_release"
+mkdir -m 700 "$mds_verified_evidence"
 
-for mds_local in "$MDS_RELEASE_DIR"/* "$MDS_PROMOTION_REPORT"; do
+for mds_local in \
+  "$MDS_RELEASE_DIR"/* \
+  "$MDS_PROMOTION_REPORT" \
+  "$MDS_EVIDENCE_ARCHIVE_DIR"/*; do
   if [[ ! -f "$mds_local" || -L "$mds_local" ]]; then
     echo "local release asset set contains a non-regular file" >&2
     exit 1
   fi
+done
+for mds_local in "$MDS_RELEASE_DIR"/*; do
+  cp "$mds_local" "$mds_verified_release/$(basename "$mds_local")"
+done
+cp "$MDS_PROMOTION_REPORT" "$mds_verified_report"
+for mds_local in "$MDS_EVIDENCE_ARCHIVE_DIR"/*; do
+  cp "$mds_local" "$mds_verified_evidence/$(basename "$mds_local")"
+done
+chmod -R go-rwx "$mds_verified_root"
+
+(
+  cd "$mds_root"
+  go run ./cmd/mds-release verify \
+    --directory "$mds_verified_release"
+  go run ./cmd/mds-release verify-promotion \
+    --directory "$mds_verified_release" \
+    --report "$mds_verified_report" \
+    --evidence-archive-directory "$mds_verified_evidence" \
+    --commit "$MDS_COMMIT" \
+    --cohort "$MDS_CERTIFICATION_COHORT"
+)
+
+for mds_local in \
+  "$mds_verified_release"/* \
+  "$mds_verified_report" \
+  "$mds_verified_evidence"/*; do
   basename "$mds_local"
 done | LC_ALL=C sort > "$mds_tmp/expected-assets.txt"
 mds_expected_count=$(wc -l < "$mds_tmp/expected-assets.txt" | tr -d ' ')
@@ -84,8 +127,9 @@ fi
 
 if [[ "$mds_was_draft" == true ]]; then
   gh release upload "$MDS_RELEASE_TAG" \
-    "$MDS_RELEASE_DIR"/* \
-    "$MDS_PROMOTION_REPORT" \
+    "$mds_verified_release"/* \
+    "$mds_verified_report" \
+    "$mds_verified_evidence"/* \
     --repo "$GITHUB_REPOSITORY" \
     --clobber
 fi
@@ -102,9 +146,11 @@ if ! cmp -s "$mds_tmp/expected-assets.txt" "$mds_tmp/remote-assets.txt"; then
   exit 1
 fi
 while IFS= read -r mds_name; do
-  mds_local="$MDS_RELEASE_DIR/$mds_name"
-  if [[ "$mds_name" == "$(basename "$MDS_PROMOTION_REPORT")" ]]; then
-    mds_local="$MDS_PROMOTION_REPORT"
+  mds_local="$mds_verified_release/$mds_name"
+  if [[ "$mds_name" == "$(basename "$mds_verified_report")" ]]; then
+    mds_local="$mds_verified_report"
+  elif [[ -f "$mds_verified_evidence/$mds_name" ]]; then
+    mds_local="$mds_verified_evidence/$mds_name"
   fi
   if ! cmp -s "$mds_local" "$mds_tmp/remote/$mds_name"; then
     echo "release asset bytes differ from the verified local artifact: $mds_name" >&2

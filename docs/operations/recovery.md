@@ -221,6 +221,10 @@ bundle을 각각 정확히 하나 요구한다. 각 capture는 5분의 clock ske
 cohort timestamp부터 4시간 안에 끝나야 하며 capture spread도 4시간 이하여야 한다.
 누락, 중복, stale,
 commit/cohort/catalog/plan/target/binary mismatch가 있으면 새 release
-publication을 중단한다. 성공한 `release-promotion.json`은 GitHub Release의
-영구 asset이며 target별 capture timestamp를 보존하므로 임시 Actions artifact가
-만료된 뒤에도 gate 결과를 확인할 수 있다.
+publication을 중단한다. 성공한 `release-promotion.json`과 보고서에 SHA-256으로
+결합된 네 결정론적 evidence ZIP은 GitHub Release의 영구 asset이다. 따라서 임시
+Actions artifact가 만료된 뒤에도 target별 capture와 원본 bundle을 다시 검증할
+수 있다. Promotion downloader는 Actions ZIP을 32 MiB, 각 exact evidence entry를
+8 MiB로 제한한다. Release publisher는 GitHub mutation 전에 private snapshot의
+release checksum과 promotion 의미 계약을 다시 검증하고 그 snapshot bytes만
+게시한다.

@@ -1,7 +1,7 @@
 # Target evidence test boundary
 
 `go test ./internal/evidence` creates local fixture bundles only to prove the
-`mds.target-evidence/v1` contract and its tamper gates. A fixture may exercise
+`mds.target-evidence/v2` contract and its tamper gates. A fixture may exercise
 the `blocked` and `verified` validators, but the hosted fixture lane itself has
 status `implemented`; its temporary bundles are not actual-machine
 certification and must never be published as `verified`.
@@ -30,6 +30,7 @@ scripts/certify-target.sh \
   --output target-evidence/run-manual-001 \
   --cohort 'cert-20260731T120000Z-<commit8>' \
   --expected-binary-sha256 '<release-binary-sha256>' \
+  --expected-plan-digest 'sha256:<reviewed-plan>' \
   --profile certification-lima-guest
 unset MDS_EXPECTED_GUEST_CREATION_NONCE
 

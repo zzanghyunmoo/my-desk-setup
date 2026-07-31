@@ -68,7 +68,7 @@ guest는 marker를 mutation 없이 확인할 수 없으므로 mds가 자동 시�
 2. embedded catalog 또는 명시한 `--catalog`를 strict schema로 읽는다.
 3. 현재 또는 명시한 stable target identity와 mutation preimage를 관찰한다.
 4. dependency expansion과 target eligibility를 계산한다.
-5. stable `mds.plan/v1` JSON과 canonical SHA-256 digest를 만든다.
+5. stable `mds.plan/v2` JSON과 canonical SHA-256 digest를 만든다.
 6. 사용자가 action, blocker, requested version과 digest를 검토한다.
 7. `apply`가 같은 선택과 `--plan-digest`로 계획을 다시 계산한다.
 8. digest와 hard target preimage를 첫 mutation 전에 재검증하고 reachability,
@@ -85,10 +85,10 @@ catalog/lock, stable target facts와 selection은 같은 ordered action과 diges
 
 | 명령 | 기본 경계 | 결과 |
 | --- | --- | --- |
-| `plan` | read-only | `mds.plan/v1`, action과 digest |
+| `plan` | read-only | `mds.plan/v2`, action과 digest |
 | `apply` | exact digest 뒤 mutation | target-local `mds.receipt/v1` |
-| `doctor` | read-only, no-auth observation and functional verification | `mds.doctor/v1` |
-| `update` preview | read-only | `mds.update/v1`, old/new lock diff와 digest |
+| `doctor` | read-only, no-auth observation and functional verification | `mds.doctor/v2` |
+| `update` preview | read-only | `mds.update/v2`, old/new lock diff와 digest |
 | `update --plan-digest` | exact update mutation | lock write와 target receipt |
 | `catalog` | read-only | `mds.catalog/v1`, agent-readable capability graph |
 | `version` | read-only | 기존 text와 machine-readable version envelope |
@@ -191,7 +191,7 @@ Evidence 상태는 다음 의미로만 사용한다.
 | `blocked` | 실제 target에서 certification을 시도했으나 prerequisite나 readiness가 남음 |
 | `verified` | reviewed apply가 complete이고 repeat apply가 전부 no-op이며 production artifact가 해당 실제 target의 필수 probe를 모두 통과함 |
 
-actual bundle은 `mds.target-evidence/v1`, `capture_kind: actual-target`이며
+actual bundle은 `mds.target-evidence/v2`, `capture_kind: actual-target`이며
 status로 `blocked` 또는 `verified`만 허용한다. `implemented`를 actual bundle에
 기록하면 verifier가 거부해야 한다.
 
@@ -221,9 +221,11 @@ capture 완료 시각이 24시간 이내이며 모두 `verified`여야 한다. `
 `unready`/`conflict`, `unsupported` 또는 불완전 target은 예외 없이 승격을
 차단한다.
 
-promotion 결과는 deterministic `mds.release-promotion/v1` 보고서로 만들고
-publish 직전에 release manifest와 다시 대조한 뒤
-`release-promotion.json`이라는 영구 GitHub Release asset으로 함께 게시한다.
+promotion 결과는 deterministic `mds.release-promotion/v2` 보고서로 만들고
+publish 직전에 release manifest, 원본 Actions artifact identity와 네
+content-addressed evidence ZIP을 다시 대조한다. 보고서와 네 ZIP은
+`release-promotion.json` 및 durable certification GitHub Release asset으로
+함께 게시한다.
 
 현재 Windows host, WSL Ubuntu와 Lima Ubuntu의 실제 evidence는 없다. 이
 dependency가 해소되기 전에는 네 target 전체가 verified라고 주장할 수 없다.

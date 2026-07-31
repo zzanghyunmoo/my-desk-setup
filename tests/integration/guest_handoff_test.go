@@ -610,8 +610,7 @@ func ownedGuestFixture(
 	}
 	marker := "schema=mds.guest-image/v2\n" +
 		"image_revision=sha256:" + imageSHA + "\n" +
-		"image_provenance=" + imageURL + "\n" +
-		"creation_nonce=" + record.CreationNonce + "\n"
+		"image_provenance=" + imageURL + "\n"
 	return spec, root, marker
 }
 

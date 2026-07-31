@@ -39,8 +39,17 @@ repository 관리자가 다음 외부 상태를 먼저 만든다.
 `target-certification` reviewer 승인을 모두 요구한다. Dispatcher는 commit이나
 guest creation nonce를 입력할 수 없고, 네 dispatch는 같은 canonical
 `cert-<UTC YYYYMMDDThhmmssZ>-<commit8>` cohort를 사용한다. Cohort timestamp는
-네 dispatch 시작 시각이며, 네 capture는 5분의 clock skew를 제외하고 이 시각부터
-4시간 안에 끝나야 같은 release promotion에 포함된다.
+첫 dispatch 직전에 GitHub 서버 시각으로 발급한다.
+
+```sh
+scripts/certification-clock.sh cohort '<approved-full-commit-sha>'
+```
+
+네 capture는 5분의 promotion clock skew를 제외하고 이 시각부터 4시간 안에
+끝나야 같은 release promotion에 포함된다. 각 runner는 capture 전에
+`scripts/certification-clock.sh verify`로 GitHub 서버 UTC와 로컬 UTC의 절대
+오차가 60초 이하인지 확인하며, 이를 넘으면 runner 시계를 동기화한 뒤 새
+dispatch를 시작한다.
 
 ## 2. 전용 OS 계정과 one-job ephemeral runner
 
@@ -61,6 +70,12 @@ repository secret을 복사하지 않는다. guest의 system package와 Docker d
 membership은 reviewed prerequisite로만 허용한다. GitHub runner 자체의
 repository-scoped registration material은 해당 한 job 동안만 owner-only
 runner directory에 둔다.
+
+Host production binary 설치, reviewed `plan`/`apply`, local guest seed와
+ownership record 생성, host actual-target runner 실행은 모두 동일한 전용 host
+계정과 동일한 home에서 수행한다. macOS/Lima wave는 `mds-cert-macos`,
+Windows/WSL wave는 `mds-cert-windows`가 이 경계를 소유한다. 다른 interactive
+계정에서 만든 guest나 ownership record를 전용 계정으로 복사해 인증하지 않는다.
 
 GitHub의 현재 self-hosted runner 설치 문서에서 target OS/architecture의 exact
 archive와 checksum을 확인한 뒤 사용자가 runner를 등록한다. 등록 시 repository
@@ -83,13 +98,14 @@ Gitleaks 설치 step은 Windows PowerShell 5.1(`powershell.exe`)을 명시적으
 git --version
 bash --version
 $PSVersionTable.PSVersion
-bash -lc 'git --version && grep --version'
+bash -lc 'git --version && grep --version && curl --version'
 ```
 
 job 시작 전에 다음을 확인한다.
 
 - runner process 계정과 work directory owner가 표의 전용 계정이다.
-- Windows runner는 위 Git/Bash/Windows PowerShell preflight를 통과했다.
+- Windows runner는 위 Git/Bash/curl/Windows PowerShell preflight를 통과했다.
+- runner UTC와 GitHub 서버 UTC의 절대 오차가 60초 이하다.
 - runner에 다른 `mds-*` label이 없다.
 - work directory에 기존 checkout이나 credential file이 없다.
 - host runner process에는 `MDS_EXPECTED_GUEST_CREATION_NONCE`가 없다.
@@ -219,16 +235,21 @@ file이고 mode `0600`, `0640` 또는 `0644`여야 한다. root로 읽어 record
 확인한다. 하나라도 다르면 runner를 시작하지 말고 same-name replacement
 guest 또는 stale ownership conflict를 먼저 해결한다.
 
-## 4. Guest one-job runner에 nonce 주입
+## 4. Guest one-job runner에 target identity 주입
 
 guest의 one-shot GitHub runner process를 시작하는 systemd unit을
 `<runner-one-shot-unit>`이라 한다. Host record에서 확인한 64자 lowercase
-creation nonce를 해당 cohort/job에만 쓰는 root-owned drop-in에 설정한다.
+creation nonce와 비밀이 아닌 exact target identity를 해당 cohort/job에만 쓰는
+root-owned drop-in에 설정한다.
 
 ```ini
 # /etc/systemd/system/<runner-one-shot-unit>.service.d/mds-identity.conf
 [Service]
 Environment="MDS_EXPECTED_GUEST_CREATION_NONCE=<64-lowercase-hex>"
+# WSL guest에서는 아래 한 줄만 추가한다.
+Environment="WSL_DISTRO_NAME=Ubuntu-26.04"
+# Lima guest에서는 WSL_DISTRO_NAME 대신 아래 한 줄만 추가한다.
+Environment="LIMA_INSTANCE=mds"
 ```
 
 directory는 root 소유 `0755`, 파일은 root 소유 `0600`으로 만들고 다음 순서로
@@ -236,17 +257,18 @@ directory는 root 소유 `0755`, 파일은 root 소유 `0600`으로 만들고 �
 
 1. runner process가 실행 중이지 않은지 확인한다.
 2. root 권한 editor로 drop-in을 작성한다.
-3. owner/mode와 값의 `^[0-9a-f]{64}$` 형식을 root 권한으로 검사하되 값을
-   stdout에 출력하지 않는다.
+3. owner/mode, nonce의 `^[0-9a-f]{64}$` 형식과 target identity의 exact 값을
+   root 권한으로 검사하되 nonce를 stdout에 출력하지 않는다.
 4. `systemctl daemon-reload` 뒤 one-shot runner를 시작한다.
-5. 전용 계정 process가 값을 상속했는지만 root 권한으로 검사하고 실제 nonce는
-   log에 출력하지 않는다.
+5. 전용 계정 process가 nonce와 exact target identity를 상속했는지만 root
+   권한으로 검사하고 실제 nonce는 log에 출력하지 않는다.
 6. job 종료와 deregistration 확인 뒤 unit/drop-in과 process environment에서
    nonce를 제거하고 runner directory를 scrub한다.
 
-workflow는 guest target에서 이 값이 없거나 형식이 틀리면 capture 전에
-실패한다. host target에서 값이 발견돼도 실패한다. 값은 workflow input,
-repository/environment secret 또는 job-level `env`로 대체하지 않는다.
+workflow는 guest target에서 nonce가 없거나 형식이 틀리거나 target identity가
+exact match하지 않으면 capture 전에 실패한다. host target에서 nonce가 발견돼도
+실패한다. Nonce는 workflow input, repository/environment secret 또는 job-level
+`env`로 대체하지 않는다.
 
 ## 5. Dispatch 전 점검
 
@@ -257,6 +279,9 @@ environment reviewer는 승인 전에 다음 값을 release manifest, reviewed p
 - target ID와 custom runner label exact pair
 - production `mds`의 absolute regular non-symlink path
 - release manifest의 on-disk binary SHA-256
+- certifier가 production path를 no-follow/reparse 거부로 한 번 열어 만든
+  owner-only private snapshot의 SHA-256과, 모든 subprocess가 그 snapshot만
+  실행한다는 경계
 - exact CLI revision, catalog revision과 target-eligible plan digest
 - guest라면 committed host record와 live marker의 provider/name/image/nonce
   일치
@@ -265,6 +290,22 @@ environment reviewer는 승인 전에 다음 값을 release manifest, reviewed p
 runner에는 실제 target과 production binary가 준비돼 있어야 한다. 인증되지
 않은 component가 있으면 bundle은 정직하게 `blocked`가 되고 upload/promotion
 대상이 아니다. Reviewer는 이를 `verified`로 바꾸지 않는다.
+
+Verified bundle 업로드 직전에는 exact file set/checksum 검증과 Gitleaks,
+credential-shaped key, nonce field-name 검사를 수행한다. Guest target은 여기에
+상속된 `MDS_EXPECTED_GUEST_CREATION_NONCE`의 exact byte sequence를 고정 문자열로
+추가 검사한다. 값이 어느 파일에서든 발견되면 값을 출력하지 않고 upload를
+중단한다.
+
+Release promotion은 선택된 네 verified bundle을 고정 timestamp와 entry
+metadata를 가진 결정론적 ZIP으로 다시 묶는다. Promotion report에는 원본 Actions
+artifact 이름, release evidence archive 이름과 SHA-256을 기록한다. 네 archive는
+promotion report와 함께 GitHub Release asset으로 게시되고 재다운로드 byte
+검증을 통과해야 하므로 30일 Actions artifact retention 뒤에도 release provenance를
+재검증할 수 있다. Downloader는 원본 Actions artifact를 32 MiB, 각 exact evidence
+entry를 8 MiB로 제한한다. Publisher는 첫 GitHub write 전에 release, report와 네
+archive를 owner-only staging에 snapshot하고 그 same bytes를 의미 검증한 뒤
+업로드·재다운로드 비교한다.
 
 ## 6. Guest 재생성과 nonce rotation
 

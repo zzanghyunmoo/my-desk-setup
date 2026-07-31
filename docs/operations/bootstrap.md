@@ -302,9 +302,12 @@ actual evidence 후보가 된다.
 - `blocked`: 실제 target에서 prerequisite/readiness가 남음
 - `verified`: 해당 실제 target의 모든 필수 probe 통과
 
-actual bundle은 `mds.target-evidence/v1`,
+actual bundle은 `mds.target-evidence/v2`,
 `capture_kind: actual-target`이어야 한다. production `mds`의 absolute,
 regular, non-symlink path와 아직 존재하지 않는 output directory를 사용한다.
+Certifier는 production path를 no-follow/reparse 거부로 한 번 열어 owner-only
+private snapshot을 만들고 SHA-256을 검증한 뒤 모든 subprocess에서 그 exact
+snapshot만 실행한다.
 선택 방식은 `--all`, `--profile` 또는 하나 이상의 `--component` 중 하나다.
 
 ```sh
@@ -314,12 +317,15 @@ scripts/certify-target.sh \
   --output ./target-evidence/macos-host \
   --cohort 'cert-20260731T120000Z-<commit8>' \
   --expected-binary-sha256 '<release-binary-sha256>' \
+  --expected-plan-digest 'sha256:<reviewed-plan-digest>' \
   --all
 ```
 
 WSL/Lima guest를 수동 인증할 때는 host의 committed ownership record에서 읽은
 creation nonce를 target/name과 대조한 뒤, shell history에 남지 않는 protected
-process environment로 전달한다. Certifier는 nonce flag를 받지 않는다.
+process environment로 전달한다. WSL은 `WSL_DISTRO_NAME=Ubuntu-26.04`,
+Lima는 `LIMA_INSTANCE=mds` exact target identity도 같은 process에 전달한다.
+Certifier는 nonce flag를 받지 않는다.
 
 ```sh
 IFS= read -r -s MDS_EXPECTED_GUEST_CREATION_NONCE </dev/tty
@@ -330,6 +336,7 @@ scripts/certify-target.sh \
   --output ./target-evidence/lima-guest \
   --cohort 'cert-20260731T120000Z-<commit8>' \
   --expected-binary-sha256 '<release-binary-sha256>' \
+  --expected-plan-digest 'sha256:<reviewed-plan-digest>' \
   --all
 unset MDS_EXPECTED_GUEST_CREATION_NONCE
 ```
@@ -379,8 +386,11 @@ bundle은 Gitleaks와 raw-nonce-field 검사를 거친 뒤 release와 재결합�
 promotion한다. Protected annotated tag message에는 정확히 한 줄의
 `Certification-Cohort: <cohort>`를 넣는다. Tag workflow는 같은 tag의 draft
 release를 재사용하고 모든 remote asset bytes를 다시 비교한 뒤에만 publish한다.
-Promotion report는 target별 `captured_at_unix`를 포함한 stable
-`release-promotion.json` asset으로 게시한다.
+Promotion report는 target별 `captured_at_unix`, 원본 Actions artifact 이름,
+결정론적 evidence ZIP 이름과 SHA-256을 포함한 stable
+`mds.release-promotion/v2` `release-promotion.json` asset으로 게시한다. 네
+verified bundle ZIP도 release asset으로 함께 게시해 Actions retention 뒤에도
+원본 evidence를 다시 검증할 수 있게 한다.
 
 actual-target job은 `target-certification` 보호 environment와 다음 네
 allowlisted label만 사용한다.

@@ -8,10 +8,12 @@ mds_root=$(CDPATH='' cd -- "$mds_script_dir/.." && pwd)
 : "${MDS_PROMOTION_REPORT:?set MDS_PROMOTION_REPORT to the downloaded promotion report}"
 : "${MDS_COMMIT:?set MDS_COMMIT to the exact release commit}"
 : "${MDS_CERTIFICATION_COHORT:?set MDS_CERTIFICATION_COHORT to the selected certification cohort}"
+: "${MDS_EVIDENCE_ARCHIVE_DIR:?set MDS_EVIDENCE_ARCHIVE_DIR to the durable evidence archive directory}"
 
 cd "$mds_root"
 exec go run ./cmd/mds-release verify-promotion \
   --directory "$MDS_RELEASE_DIR" \
   --report "$MDS_PROMOTION_REPORT" \
+  --evidence-archive-directory "$MDS_EVIDENCE_ARCHIVE_DIR" \
   --commit "$MDS_COMMIT" \
   --cohort "$MDS_CERTIFICATION_COHORT"
