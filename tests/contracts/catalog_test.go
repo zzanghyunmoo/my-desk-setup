@@ -12,6 +12,8 @@ import (
 
 	"github.com/zzanghyunmoo/my-desk-setup/internal/adapters/packages"
 	"github.com/zzanghyunmoo/my-desk-setup/internal/catalog"
+	"github.com/zzanghyunmoo/my-desk-setup/internal/planning"
+	"github.com/zzanghyunmoo/my-desk-setup/internal/target"
 	"github.com/zzanghyunmoo/my-desk-setup/internal/transport"
 )
 
@@ -474,6 +476,189 @@ func TestGuestAllExcludesGUI(t *testing.T) {
 	}
 }
 
+func TestCertificationProfilesAreReachableOnExactTargets(t *testing.T) {
+	environment := loadCatalog(t)
+	tests := []struct {
+		profile string
+		facts   target.Facts
+	}{
+		{
+			profile: "certification-macos-host",
+			facts: certificationFacts(
+				t,
+				target.KindMacOSHost,
+				"local",
+				"darwin",
+				"arm64",
+			),
+		},
+		{
+			profile: "certification-windows-host",
+			facts: certificationFacts(
+				t,
+				target.KindWindowsHost,
+				"local",
+				"windows",
+				"amd64",
+			),
+		},
+		{
+			profile: "certification-wsl-guest",
+			facts: certificationFacts(
+				t,
+				target.KindWSLGuest,
+				"Ubuntu-26.04",
+				"linux",
+				"amd64",
+			),
+		},
+		{
+			profile: "certification-lima-guest",
+			facts: certificationFacts(
+				t,
+				target.KindLimaGuest,
+				"mds",
+				"linux",
+				"arm64",
+			),
+		},
+	}
+
+	coveredKinds := make(map[string]bool)
+	coveredComponents := make(map[string]bool)
+	for _, test := range tests {
+		t.Run(test.profile, func(t *testing.T) {
+			selection, err := planning.Profile(test.profile)
+			if err != nil {
+				t.Fatalf("Profile(): %v", err)
+			}
+			plan, err := planning.Build(environment, test.facts, selection)
+			if err != nil {
+				t.Fatalf("Build(): %v", err)
+			}
+			if len(plan.Actions) == 0 {
+				t.Fatal("certification profile resolved no actions")
+			}
+			if len(plan.Blockers) != 0 {
+				t.Fatalf(
+					"certification profile has static blockers: %+v",
+					plan.Blockers,
+				)
+			}
+			for _, action := range plan.Actions {
+				component := catalogComponentByID(
+					t,
+					environment,
+					action.ComponentID,
+				)
+				coveredKinds[component.Kind] = true
+				coveredComponents[component.ID] = true
+			}
+		})
+	}
+
+	for _, kind := range []string{
+		"agent",
+		"cli",
+		"container",
+		"editor",
+		"language",
+		"platform",
+	} {
+		if !coveredKinds[kind] {
+			t.Fatalf(
+				"certification profiles do not cover representative %q surface",
+				kind,
+			)
+		}
+	}
+	for _, component := range []string{
+		"base-cli",
+		"codex",
+		"docker-engine",
+		"go",
+		"lima",
+		"neovim",
+		"wsl",
+	} {
+		if !coveredComponents[component] {
+			t.Fatalf(
+				"certification profiles do not cover representative component %q",
+				component,
+			)
+		}
+	}
+}
+
+func TestCertificationProfilesPreserveAllAndOwnerXcodeTruthfulness(t *testing.T) {
+	environment := loadCatalog(t)
+	facts := certificationFacts(
+		t,
+		target.KindMacOSHost,
+		"local",
+		"darwin",
+		"arm64",
+	)
+	for _, selection := range []struct {
+		name      string
+		selection planning.Selection
+	}{
+		{name: "all", selection: planning.All()},
+		{
+			name: "owner",
+			selection: func() planning.Selection {
+				value, err := planning.Profile("owner")
+				if err != nil {
+					t.Fatalf("Profile(owner): %v", err)
+				}
+				return value
+			}(),
+		},
+	} {
+		t.Run(selection.name, func(t *testing.T) {
+			plan, err := planning.Build(
+				environment,
+				facts,
+				selection.selection,
+			)
+			if err != nil {
+				t.Fatalf("Build(): %v", err)
+			}
+			for _, blocker := range plan.Blockers {
+				if blocker.ActionID == "macos-host:local/xcode" &&
+					blocker.Status == planning.ActionActionRequired {
+					return
+				}
+			}
+			t.Fatalf(
+				"%s no longer preserves the Xcode action-required blocker: %+v",
+				selection.name,
+				plan.Blockers,
+			)
+		})
+	}
+
+	certification, err := planning.Profile("certification-macos-host")
+	if err != nil {
+		t.Fatalf("Profile(certification-macos-host): %v", err)
+	}
+	plan, err := planning.Build(environment, facts, certification)
+	if err != nil {
+		t.Fatalf("Build(certification-macos-host): %v", err)
+	}
+	if len(plan.Blockers) != 0 {
+		t.Fatalf(
+			"certification macOS profile has static blockers: %+v",
+			plan.Blockers,
+		)
+	}
+	for _, action := range plan.Actions {
+		if action.ComponentID == "xcode" {
+			t.Fatal("certification macOS profile selected manual Xcode")
+		}
+	}
+}
+
 func TestNewProfileCompositionNeedsNoCoreChange(t *testing.T) {
 	environment := loadCatalog(t)
 	environment.Profiles = copyProfiles(environment.Profiles)
@@ -589,4 +774,45 @@ func resolvedIDs(resolved []catalog.ResolvedComponent) map[string]bool {
 		ids[item.Component.ID] = true
 	}
 	return ids
+}
+
+func certificationFacts(
+	t *testing.T,
+	kind target.Kind,
+	name,
+	osName,
+	architecture string,
+) target.Facts {
+	t.Helper()
+	id, err := target.NewID(kind, name)
+	if err != nil {
+		t.Fatalf("NewID(): %v", err)
+	}
+	return target.Facts{
+		ID:            id,
+		OS:            osName,
+		OSVersion:     "fixture",
+		Architecture:  architecture,
+		ImageRevision: "sha256:fixture",
+		SystemdSupported: kind == target.KindWSLGuest ||
+			kind == target.KindLimaGuest,
+		SystemdActive: kind == target.KindWSLGuest ||
+			kind == target.KindLimaGuest,
+		Reachable: true,
+	}
+}
+
+func catalogComponentByID(
+	t *testing.T,
+	environment catalog.Environment,
+	id string,
+) catalog.Component {
+	t.Helper()
+	for _, component := range environment.Catalog.Components {
+		if component.ID == id {
+			return component
+		}
+	}
+	t.Fatalf("resolved unknown component %q", id)
+	return catalog.Component{}
 }

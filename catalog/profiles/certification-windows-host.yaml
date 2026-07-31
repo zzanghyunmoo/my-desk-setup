@@ -1,0 +1,6 @@
+schema_version: 1
+id: certification-windows-host
+description: Reachable Windows host release certification surface.
+selection:
+  - wezterm
+  - wsl

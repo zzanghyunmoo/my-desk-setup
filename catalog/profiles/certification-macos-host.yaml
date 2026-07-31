@@ -1,0 +1,6 @@
+schema_version: 1
+id: certification-macos-host
+description: Reachable macOS host release certification surface.
+selection:
+  - lima
+  - wezterm

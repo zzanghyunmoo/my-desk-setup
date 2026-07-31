@@ -48,7 +48,8 @@ func TestTargetCertificationCarriesExactPromotionIdentity(t *testing.T) {
 		"MDS_EXPECTED_GUEST_CREATION_NONCE",
 		`[[ ! "${MDS_EXPECTED_GUEST_CREATION_NONCE:-}" =~ ^[0-9a-f]{64}$ ]]`,
 		"--expected-guest-creation-nonce",
-		"--require-publication-acceptable",
+		"--require-verified",
+		`--profile "$CERTIFICATION_PROFILE"`,
 		"continue-on-error: true",
 		"github.event.repository.fork == false",
 		"github.ref_protected == true",
@@ -67,6 +68,16 @@ func TestTargetCertificationCarriesExactPromotionIdentity(t *testing.T) {
 		"mds-wsl-guest",
 		"mds-lima-guest",
 		`test "$RUNNER_LABEL" = "$expected_runner_label"`,
+		"macos-host:local)\n              target_kind=macos-host\n              expected_runner_label=mds-macos-host\n              certification_profile=certification-macos-host",
+		"windows-host:local)\n              target_kind=windows-host\n              expected_runner_label=mds-windows-host\n              certification_profile=certification-windows-host",
+		"wsl-guest:Ubuntu-26.04)\n              target_kind=wsl-guest\n              expected_runner_label=mds-wsl-guest\n              certification_profile=certification-wsl-guest",
+		"lima-guest:mds)\n              target_kind=lima-guest\n              expected_runner_label=mds-lima-guest\n              certification_profile=certification-lima-guest",
+		`echo "certification_profile=$certification_profile" >> "$GITHUB_OUTPUT"`,
+		"CERTIFICATION_PROFILE: ${{ steps.certification-identity.outputs.certification_profile }}",
+		"unsupported promotion target ID: $TARGET_ID",
+		"Exact reviewed certification profile plan digest for this target",
+		"      - name: Upload verified certification output\n        if: success()\n        uses: actions/upload-artifact@",
+		"if-no-files-found: error",
 		"timeout-minutes: 240",
 	} {
 		if !strings.Contains(workflow, required) {
@@ -78,6 +89,9 @@ func TestTargetCertificationCarriesExactPromotionIdentity(t *testing.T) {
 		"inputs.expected_commit",
 		"expected_guest_creation_nonce:",
 		"inputs.expected_guest_creation_nonce",
+		"inputs.certification_profile",
+		"--all",
+		"--require-publication-acceptable",
 		"${{ secrets.",
 	} {
 		if strings.Contains(workflow, forbidden) {

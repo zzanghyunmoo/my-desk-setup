@@ -38,7 +38,7 @@ on:
         required: true
         type: string
       expected_plan_digest:
-        description: Exact reviewed target-eligible all-plan digest for this target
+        description: Exact reviewed certification profile plan digest for this target
         required: true
         type: string
       expected_binary_sha256:
@@ -133,18 +133,22 @@ jobs:
             macos-host:local)
               target_kind=macos-host
               expected_runner_label=mds-macos-host
+              certification_profile=certification-macos-host
               ;;
             windows-host:local)
               target_kind=windows-host
               expected_runner_label=mds-windows-host
+              certification_profile=certification-windows-host
               ;;
             wsl-guest:Ubuntu-26.04)
               target_kind=wsl-guest
               expected_runner_label=mds-wsl-guest
+              certification_profile=certification-wsl-guest
               ;;
             lima-guest:mds)
               target_kind=lima-guest
               expected_runner_label=mds-lima-guest
+              certification_profile=certification-lima-guest
               ;;
             *)
               echo "unsupported promotion target ID: $TARGET_ID" >&2
@@ -153,6 +157,7 @@ jobs:
           esac
           test "$RUNNER_LABEL" = "$expected_runner_label"
           echo "target_kind=$target_kind" >> "$GITHUB_OUTPUT"
+          echo "certification_profile=$certification_profile" >> "$GITHUB_OUTPUT"
       - name: Prepare target-local evidence path
         shell: bash
         run: |
@@ -164,6 +169,7 @@ jobs:
           MDS_PATH: ${{ inputs.mds_path }}
           TARGET_ID: ${{ inputs.target_id }}
           EXPECTED_BINARY_SHA256: ${{ inputs.expected_binary_sha256 }}
+          CERTIFICATION_PROFILE: ${{ steps.certification-identity.outputs.certification_profile }}
         run: |
           nonce_args=()
           case "$TARGET_ID" in
@@ -190,7 +196,7 @@ jobs:
             --output "$EVIDENCE_OUTPUT" \
             --expected-binary-sha256 "$EXPECTED_BINARY_SHA256" \
             "${nonce_args[@]}" \
-            --all
+            --profile "$CERTIFICATION_PROFILE"
       - name: Verify against reviewed release and plan
         if: always()
         shell: bash
@@ -209,7 +215,7 @@ jobs:
             --expected-target "$TARGET_ID" \
             --expected-binary-sha256 "$EXPECTED_BINARY_SHA256" \
             --max-age 45m \
-            --require-publication-acceptable
+            --require-verified
       - name: Verify runner workspace remained pristine
         if: always()
         shell: bash
@@ -220,11 +226,11 @@ jobs:
             echo "certification modified the checked-out runner workspace" >&2
             exit 1
           fi
-      - name: Preserve honest certification output
-        if: always()
+      - name: Upload verified certification output
+        if: success()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: target-evidence-${{ steps.certification-identity.outputs.target_kind }}-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ env.EVIDENCE_OUTPUT }}
-          if-no-files-found: warn
+          if-no-files-found: error
           retention-days: 30

@@ -28,7 +28,7 @@ scripts/certify-target.sh \
   --output target-evidence/run-manual-001 \
   --expected-binary-sha256 '<release-binary-sha256>' \
   --expected-guest-creation-nonce '<host-ownership-creation-nonce>' \
-  --all
+  --profile certification-lima-guest
 
 scripts/verify-target-evidence.sh \
   --bundle target-evidence/run-manual-001 \
@@ -38,7 +38,7 @@ scripts/verify-target-evidence.sh \
   --expected-target lima-guest:mds \
   --expected-binary-sha256 '<release-binary-sha256>' \
   --max-age 45m \
-  --require-publication-acceptable
+  --require-verified
 ```
 
 For a manual WSL/Lima run, read the expected nonce from the host's committed
@@ -48,12 +48,17 @@ dedicated guest runner service must inherit the target-specific, root-owned
 `MDS_EXPECTED_GUEST_CREATION_NONCE`. Host certification omits the nonce flag
 and host runner services must not define that environment variable.
 
+The workflow maps each exact target ID to one target-specific certification
+profile and runner label. The mapping is closed: dispatchers cannot supply a
+profile, and an unknown target ID fails before capture. General `all` and
+`owner` selection keep their honest manual and platform-limited outcomes.
+
 The workflow appends the GitHub run ID and attempt to its target-local output
 parent. Artifact names bind target kind, expected commit, run ID, and attempt.
-Capture may return non-zero for an honestly blocked manual action, but strict
-verification must still pass. Missing, stale, duplicate, unsupported, planned
-unready/conflict, wrong-target, and wrong-binary evidence remain failures while
-artifact upload preserves the attempted result for diagnosis.
+Only a bundle that passes strict `--require-verified` verification is uploaded.
+An honestly `blocked` capture remains runner-local for diagnosis. Missing,
+stale, duplicate, unsupported, planned unready/conflict, wrong-target, and
+wrong-binary evidence remain failures.
 
 Authentication remains user-owned. Neither command accepts auth/login/token
 arguments, and the verifier rejects credential-shaped content, auth commands,
