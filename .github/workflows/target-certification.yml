@@ -171,17 +171,12 @@ jobs:
           EXPECTED_BINARY_SHA256: ${{ inputs.expected_binary_sha256 }}
           CERTIFICATION_PROFILE: ${{ steps.certification-identity.outputs.certification_profile }}
         run: |
-          nonce_args=()
           case "$TARGET_ID" in
             wsl-guest:*|lima-guest:*)
               if [[ ! "${MDS_EXPECTED_GUEST_CREATION_NONCE:-}" =~ ^[0-9a-f]{64}$ ]]; then
                 echo "guest runner service must provide a 64-character lowercase MDS_EXPECTED_GUEST_CREATION_NONCE" >&2
                 exit 2
               fi
-              nonce_args=(
-                --expected-guest-creation-nonce
-                "$MDS_EXPECTED_GUEST_CREATION_NONCE"
-              )
               ;;
             *)
               if test -n "${MDS_EXPECTED_GUEST_CREATION_NONCE:-}"; then
@@ -195,7 +190,6 @@ jobs:
             --target "$TARGET_ID" \
             --output "$EVIDENCE_OUTPUT" \
             --expected-binary-sha256 "$EXPECTED_BINARY_SHA256" \
-            "${nonce_args[@]}" \
             --profile "$CERTIFICATION_PROFILE"
       - name: Verify against reviewed release and plan
         if: always()

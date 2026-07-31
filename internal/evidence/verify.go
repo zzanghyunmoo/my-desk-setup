@@ -586,7 +586,9 @@ func targetIdentityComplete(facts target.Facts) bool {
 			facts.RuntimeVersion != "" &&
 			facts.ImageRevision != "" &&
 			facts.ImageProvenance != "" &&
-			facts.ImageCreationNonce != ""
+			target.ValidateGuestCreationNonceCommitment(
+				facts.ImageCreationNonceCommitment,
+			) == nil
 	default:
 		return false
 	}

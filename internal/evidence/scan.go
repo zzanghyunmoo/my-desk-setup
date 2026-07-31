@@ -16,6 +16,9 @@ var (
 	credentialFlagPattern = regexp.MustCompile(
 		`(?i)"--(?:api-key|access-token|token|password|secret|credential)(?:=|")`,
 	)
+	rawGuestNonceFieldPattern = regexp.MustCompile(
+		`(?i)"(?:image_)?creation_nonce"\s*:`,
+	)
 	unixHomePattern = regexp.MustCompile(
 		`(?i)(?:/Users/[^/"'\s]+|/home/[^/"'\s]+|/root)(?:[/\\]|["'\s]|$)`,
 	)
@@ -45,6 +48,9 @@ func scanEvidenceMaterial(name string, content []byte) error {
 	}
 	if credentialFlagPattern.MatchString(text) {
 		return fmt.Errorf("%s contains a credential flag", name)
+	}
+	if rawGuestNonceFieldPattern.MatchString(text) {
+		return fmt.Errorf("%s contains a raw guest creation nonce field", name)
 	}
 	return nil
 }

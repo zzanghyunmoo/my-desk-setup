@@ -85,10 +85,10 @@ type CertifyRequest struct {
 	// ExpectedBinarySHA256 binds capture to a release artifact before the
 	// target executes the binary.
 	ExpectedBinarySHA256 string
-	// ExpectedGuestCreationNonce is copied from the host's committed ownership
-	// record and reviewed at the protected target-certification gate.
-	ExpectedGuestCreationNonce string
-	Now                        func() time.Time
+	Now                  func() time.Time
+	// Getenv is a deterministic test seam. Production callers leave it nil so
+	// the protected runner service environment remains the only nonce input.
+	Getenv func(string) string
 	// RuntimeProbe is a deterministic test seam. Production callers leave it
 	// nil so certification derives guest identity from protected runtime facts.
 	RuntimeProbe func(target.ID) (target.Facts, error)

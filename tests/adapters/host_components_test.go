@@ -452,15 +452,25 @@ func hostRuntimePlanIdentityWithRevisions(
 	}{
 		CatalogRevision: catalogRevision,
 		Target: target.Facts{
-			ID:                 id,
-			CLIRevision:        cliRevision,
-			CatalogRevision:    catalogRevision,
-			ImageRevision:      "sha256:" + imageSHA256,
-			ImageProvenance:    imageURL,
-			ImageCreationNonce: imageCreationNonce,
+			ID:              id,
+			CLIRevision:     cliRevision,
+			CatalogRevision: catalogRevision,
+			ImageRevision:   "sha256:" + imageSHA256,
+			ImageProvenance: imageURL,
+			ImageCreationNonceCommitment: hostNonceCommitment(
+				imageCreationNonce,
+			),
 		},
 	})
 	return string(encoded)
+}
+
+func hostNonceCommitment(nonce string) string {
+	commitment, err := target.GuestCreationNonceCommitment(nonce)
+	if err != nil {
+		panic(err)
+	}
+	return commitment
 }
 
 func ownershipNonce(

@@ -40,7 +40,7 @@ macOS와 Windows host binary에는 같은 release의 Linux `amd64`/`arm64`
 archive URL과 SHA-256이 함께 embed된다. guest bootstrap은 이 exact identity만
 사용하며 `latest`나 별도 moving catalog를 조회하지 않는다. GitHub Release
 asset download는 최대 3회의 HTTPS redirect만 따르고, 최종 authority에
-userinfo가 없는지 확인하며, 512 MiB 제한과 exact SHA-256 검증을 모두
+userinfo가 없는지 확인하며, 256 MiB 제한과 exact SHA-256 검증을 모두
 통과해야 extraction을 시작한다. Windows downloader의 10분 cancellation
 token은 redirect와 response header뿐 아니라 비동기 body read 전체에도
 적용된다.
@@ -129,8 +129,16 @@ Lima만 별도로 검토하고 준비할 수도 있다.
 "$HOME/.local/bin/mds" apply \
   --component lima \
   --plan-digest 'sha256:<reviewed-lima-plan-digest>' \
+  --guest-bootstrap-archive '/absolute/path/to/mds_0.1.0_linux_arm64.tar.gz' \
   --format json
 ```
+
+첫 release처럼 공개 asset이 아직 없을 때만 apply 전용
+`--guest-bootstrap-archive`로 같은 release의 absolute local archive를
+지정할 수 있다. Host binary에 embedded된 현재 architecture의 SHA-256과
+일치하는 regular non-symlink file만 허용하며, 256 MiB 이하의 한 번 연
+handle snapshot만 guest에 전달한다. 경로는 plan digest, receipt와 state에
+저장되지 않는다. Flag를 생략하면 embedded canonical HTTPS URL을 사용한다.
 
 adapter는 pinned Ubuntu 26.04 image와 digest로 `mds`라는 Lima instance를
 생성한다. template은 선택 architecture의 단일 image URL·SHA-256과
@@ -223,6 +231,7 @@ WSL만 별도로 계획할 수 있다.
 & $mds apply `
   --component wsl `
   --plan-digest "sha256:<reviewed-wsl-plan-digest>" `
+  --guest-bootstrap-archive "C:\absolute\path\to\mds_0.1.0_linux_amd64.tar.gz" `
   --format json
 ```
 
@@ -308,16 +317,19 @@ scripts/certify-target.sh \
 ```
 
 WSL/Lima guest를 수동 인증할 때는 host의 committed ownership record에서 읽은
-creation nonce를 target/name과 대조한 뒤 명시한다.
+creation nonce를 target/name과 대조한 뒤, shell history에 남지 않는 protected
+process environment로 전달한다. Certifier는 nonce flag를 받지 않는다.
 
 ```sh
+IFS= read -r -s MDS_EXPECTED_GUEST_CREATION_NONCE </dev/tty
+export MDS_EXPECTED_GUEST_CREATION_NONCE
 scripts/certify-target.sh \
   --mds "$HOME/.local/bin/mds" \
   --target lima-guest:mds \
   --output ./target-evidence/lima-guest \
   --expected-binary-sha256 '<release-binary-sha256>' \
-  --expected-guest-creation-nonce '<host-ownership-creation-nonce>' \
   --all
+unset MDS_EXPECTED_GUEST_CREATION_NONCE
 ```
 
 certifier는 production binary로 read-only `plan`을 만든 뒤 exact digest의

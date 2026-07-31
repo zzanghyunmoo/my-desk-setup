@@ -28,8 +28,9 @@ const (
 )
 
 type GuestBootstrapArtifact struct {
-	URL    string
-	SHA256 string
+	URL     string
+	SHA256  string
+	Archive []byte
 }
 
 // GuestRuntime owns only host-side WSL/Lima lifecycle. Linux component

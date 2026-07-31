@@ -24,7 +24,12 @@ func TestCertifyRejectsUnexpectedBinarySHA256BeforeExecution(t *testing.T) {
 	_, err := Certify(context.Background(), CertifyRequest{
 		MDSPath: binary, TargetID: "lima-guest:mds", OutputDir: output,
 		All: true, ExpectedBinarySHA256: strings.Repeat("f", 64),
-		ExpectedGuestCreationNonce: strings.Repeat("a", 64),
+		Getenv: func(key string) string {
+			if key == "MDS_EXPECTED_GUEST_CREATION_NONCE" {
+				return strings.Repeat("a", 64)
+			}
+			return ""
+		},
 	})
 	if err == nil || !strings.Contains(err.Error(), "binary checksum mismatch") {
 		t.Fatalf("Certify(binary mismatch) error = %v", err)

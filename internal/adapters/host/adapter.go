@@ -12,6 +12,11 @@ import (
 	"github.com/zzanghyunmoo/my-desk-setup/internal/version"
 )
 
+type Options struct {
+	AllowReplace          bool
+	GuestBootstrapArchive string
+}
+
 func New(
 	environment catalog.Environment,
 	port transport.Port,
@@ -20,11 +25,29 @@ func New(
 	architecture string,
 	allowReplace bool,
 ) (adapters.Component, error) {
+	return NewWithOptions(
+		environment,
+		port,
+		home,
+		platform,
+		architecture,
+		Options{AllowReplace: allowReplace},
+	)
+}
+
+func NewWithOptions(
+	environment catalog.Environment,
+	port transport.Port,
+	home,
+	platform,
+	architecture string,
+	options Options,
+) (adapters.Component, error) {
 	packagesAdapter := packages.Adapter{
 		Environment:  environment,
 		Port:         port,
 		Home:         home,
-		AllowReplace: allowReplace,
+		AllowReplace: options.AllowReplace,
 		Vendor: packages.Vendor{
 			Home: home, Platform: platform, Arch: architecture,
 		},
@@ -62,6 +85,25 @@ func New(
 		runtime.BootstrapArtifacts[guestArchitecture] = GuestBootstrapArtifact{
 			URL: artifact.URL, SHA256: artifact.SHA256,
 		}
+	}
+	if options.GuestBootstrapArchive != "" {
+		guestArchitecture := normalizeCatalogArchitecture(architecture)
+		artifact, exists := runtime.BootstrapArtifacts[guestArchitecture]
+		if !exists {
+			return nil, fmt.Errorf(
+				"guest bootstrap metadata is unavailable for host architecture %q",
+				guestArchitecture,
+			)
+		}
+		snapshot, err := loadGuestBootstrapArchive(
+			options.GuestBootstrapArchive,
+			artifact.SHA256,
+		)
+		if err != nil {
+			return nil, err
+		}
+		artifact.Archive = snapshot
+		runtime.BootstrapArtifacts[guestArchitecture] = artifact
 	}
 	byID := map[string]adapters.Component{
 		"lima": runtime,

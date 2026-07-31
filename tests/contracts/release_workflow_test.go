@@ -47,7 +47,6 @@ func TestTargetCertificationCarriesExactPromotionIdentity(t *testing.T) {
 		"--expected-binary-sha256",
 		"MDS_EXPECTED_GUEST_CREATION_NONCE",
 		`[[ ! "${MDS_EXPECTED_GUEST_CREATION_NONCE:-}" =~ ^[0-9a-f]{64}$ ]]`,
-		"--expected-guest-creation-nonce",
 		"--require-verified",
 		`--profile "$CERTIFICATION_PROFILE"`,
 		"continue-on-error: true",
@@ -89,6 +88,7 @@ func TestTargetCertificationCarriesExactPromotionIdentity(t *testing.T) {
 		"inputs.expected_commit",
 		"expected_guest_creation_nonce:",
 		"inputs.expected_guest_creation_nonce",
+		"--expected-guest-creation-nonce",
 		"inputs.certification_profile",
 		"--all",
 		"--require-publication-acceptable",
@@ -165,8 +165,10 @@ func TestBootstrapDownloadersKeepRedirectTimeoutAndBodyBounds(t *testing.T) {
 		"internal/adapters/host/guest-bootstrap.sh": {
 			"--location --max-redirs 3",
 			"--proto '=https' --proto-redir '=https'",
-			"--connect-timeout 30 --max-time 600 --max-filesize 536870912",
-			"ulimit -f 1048576",
+			"--connect-timeout 30 --max-time 600 --max-filesize 268435456",
+			"ulimit -f 524288",
+			"stdin)",
+			`cat > "$archive"`,
 		},
 		"bootstrap/windows.ps1": {
 			"$Handler.AllowAutoRedirect = $false",

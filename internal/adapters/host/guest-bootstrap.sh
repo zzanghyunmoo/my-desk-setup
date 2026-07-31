@@ -1,8 +1,9 @@
 #!/bin/sh
 set -eu
 
-artifact_url=$1
-expected_sha256=$2
+source_mode=$1
+artifact_url=$2
+expected_sha256=$3
 
 case "$artifact_url" in
   https://*[\?\#]* | https://*@*)
@@ -17,7 +18,7 @@ case "$artifact_url" in
 esac
 
 umask 077
-ulimit -f 1048576
+ulimit -f 524288
 temporary_directory=$(mktemp -d)
 staged_binary=
 staged_marker=
@@ -37,30 +38,44 @@ cleanup() {
 trap cleanup EXIT HUP INT TERM
 
 archive="$temporary_directory/mds.tar.gz"
-if command -v curl >/dev/null 2>&1; then
-  effective_url=$(curl --fail --show-error --silent \
-    --location --max-redirs 3 --proto '=https' --proto-redir '=https' --tlsv1.2 \
-    --connect-timeout 30 --max-time 600 --max-filesize 536870912 \
-    --output "$archive" --write-out '%{url_effective}' "$artifact_url")
-  case "$effective_url" in
-    https://*) ;;
-    *)
-      echo "guest bootstrap redirect must remain HTTPS" >&2
+case "$source_mode" in
+  url)
+    if command -v curl >/dev/null 2>&1; then
+      effective_url=$(curl --fail --show-error --silent \
+        --location --max-redirs 3 --proto '=https' --proto-redir '=https' --tlsv1.2 \
+        --connect-timeout 30 --max-time 600 --max-filesize 268435456 \
+        --output "$archive" --write-out '%{url_effective}' "$artifact_url")
+      case "$effective_url" in
+        https://*) ;;
+        *)
+          echo "guest bootstrap redirect must remain HTTPS" >&2
+          exit 1
+          ;;
+      esac
+      effective_authority=${effective_url#https://}
+      effective_authority=${effective_authority%%/*}
+      case "$effective_authority" in
+        "" | *@*)
+          echo "guest bootstrap redirect must not contain userinfo" >&2
+          exit 1
+          ;;
+      esac
+    else
+      echo "guest bootstrap requires curl" >&2
+      exit 69
+    fi
+    ;;
+  stdin)
+    if ! cat > "$archive"; then
+      echo "guest bootstrap local archive exceeds the 256 MiB limit" >&2
       exit 1
-      ;;
-  esac
-  effective_authority=${effective_url#https://}
-  effective_authority=${effective_authority%%/*}
-  case "$effective_authority" in
-    "" | *@*)
-      echo "guest bootstrap redirect must not contain userinfo" >&2
-      exit 1
-      ;;
-  esac
-else
-  echo "guest bootstrap requires curl" >&2
-  exit 69
-fi
+    fi
+    ;;
+  *)
+    echo "guest bootstrap source mode must be url or stdin" >&2
+    exit 2
+    ;;
+esac
 
 printf '%s  %s\n' "$expected_sha256" "$archive" | sha256sum -c -
 if [ "$(tar -tzf "$archive")" != "mds" ]; then

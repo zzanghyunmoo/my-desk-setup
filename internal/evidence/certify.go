@@ -49,6 +49,10 @@ func Certify(ctx context.Context, request CertifyRequest) (Manifest, error) {
 	if err := validateCertifyRequest(request); err != nil {
 		return Manifest{}, err
 	}
+	expectedGuestCreationNonce, err := certificationNonceEnvironment(request)
+	if err != nil {
+		return Manifest{}, err
+	}
 	binarySHA256, err := hashRegularFile(request.MDSPath)
 	if err != nil {
 		return Manifest{}, err
@@ -69,7 +73,10 @@ func Certify(ctx context.Context, request CertifyRequest) (Manifest, error) {
 	if err != nil {
 		return Manifest{}, err
 	}
-	certifiedTarget, environment, err := certificationTarget(request)
+	certifiedTarget, environment, err := certificationTarget(
+		request,
+		expectedGuestCreationNonce,
+	)
 	if err != nil {
 		return Manifest{}, err
 	}
@@ -184,7 +191,8 @@ func Certify(ctx context.Context, request CertifyRequest) (Manifest, error) {
 		plan.Target.Architecture != certifiedTarget.Architecture ||
 		plan.Target.ImageRevision != certifiedTarget.ImageRevision ||
 		plan.Target.ImageProvenance != certifiedTarget.ImageProvenance ||
-		plan.Target.ImageCreationNonce != certifiedTarget.ImageCreationNonce {
+		plan.Target.ImageCreationNonceCommitment !=
+			certifiedTarget.ImageCreationNonceCommitment {
 		return Manifest{}, errors.New(
 			"captured plan target does not match independently certified runtime identity",
 		)
@@ -268,25 +276,8 @@ func validateCertifyRequest(request CertifyRequest) error {
 		exactartifact.ValidateSHA256(request.ExpectedBinarySHA256) != nil {
 		return errors.New("expected mds binary SHA-256 must be 64 lowercase hex characters")
 	}
-	id, err := target.ParseID(request.TargetID)
-	if err != nil {
+	if _, err := target.ParseID(request.TargetID); err != nil {
 		return fmt.Errorf("invalid certification target: %w", err)
-	}
-	switch id.Kind {
-	case target.KindWSLGuest, target.KindLimaGuest:
-		if exactartifact.ValidateSHA256(
-			request.ExpectedGuestCreationNonce,
-		) != nil {
-			return errors.New(
-				"guest certification requires the 64-character lowercase creation nonce from the host ownership record",
-			)
-		}
-	default:
-		if request.ExpectedGuestCreationNonce != "" {
-			return errors.New(
-				"host certification must not provide a guest creation nonce",
-			)
-		}
 	}
 	if request.OutputDir == "" {
 		return errors.New("evidence output directory is required")
@@ -297,6 +288,37 @@ func validateCertifyRequest(request CertifyRequest) error {
 		return fmt.Errorf("inspect evidence output directory: %w", err)
 	}
 	return nil
+}
+
+func certificationNonceEnvironment(
+	request CertifyRequest,
+) (string, error) {
+	id, err := target.ParseID(request.TargetID)
+	if err != nil {
+		return "", fmt.Errorf("invalid certification target: %w", err)
+	}
+	getenv := request.Getenv
+	if getenv == nil {
+		getenv = os.Getenv
+	}
+	expectedGuestCreationNonce := strings.TrimSpace(
+		getenv("MDS_EXPECTED_GUEST_CREATION_NONCE"),
+	)
+	switch id.Kind {
+	case target.KindWSLGuest, target.KindLimaGuest:
+		if exactartifact.ValidateSHA256(expectedGuestCreationNonce) != nil {
+			return "", errors.New(
+				"guest certification requires a valid MDS_EXPECTED_GUEST_CREATION_NONCE in the protected runner environment",
+			)
+		}
+	default:
+		if expectedGuestCreationNonce != "" {
+			return "", errors.New(
+				"host certification environment must not contain MDS_EXPECTED_GUEST_CREATION_NONCE",
+			)
+		}
+	}
+	return expectedGuestCreationNonce, nil
 }
 
 func hashRegularFile(path string) (digest string, returnErr error) {
@@ -354,6 +376,7 @@ func selectionArguments(request CertifyRequest) ([]string, error) {
 
 func certificationTarget(
 	request CertifyRequest,
+	expectedGuestCreationNonce string,
 ) (target.Facts, map[string]string, error) {
 	id, err := target.ParseID(request.TargetID)
 	if err != nil {
@@ -365,7 +388,7 @@ func certificationTarget(
 	} else {
 		facts, err = probeCertificationTarget(
 			id,
-			request.ExpectedGuestCreationNonce,
+			expectedGuestCreationNonce,
 		)
 	}
 	if err != nil {
@@ -389,8 +412,9 @@ func certificationTarget(
 	if facts.ImageProvenance != "" {
 		environment["MDS_IMAGE_PROVENANCE"] = facts.ImageProvenance
 	}
-	if facts.ImageCreationNonce != "" {
-		environment["MDS_IMAGE_CREATION_NONCE"] = facts.ImageCreationNonce
+	if facts.ImageCreationNonceCommitment != "" {
+		environment["MDS_IMAGE_CREATION_NONCE_COMMITMENT"] =
+			facts.ImageCreationNonceCommitment
 	}
 	return facts, environment, nil
 }
@@ -498,11 +522,19 @@ func probeCertificationTarget(
 	); err != nil {
 		return target.Facts{}, err
 	}
+	commitment, err := target.GuestCreationNonceCommitment(
+		observedImage.CreationNonce,
+	)
+	if err != nil {
+		return target.Facts{}, errors.New(
+			"provisioned guest creation identity is invalid",
+		)
+	}
 	return target.Facts{
 		ID: id, OS: "linux", Architecture: runtime.GOARCH, Reachable: true,
-		ImageRevision:      observedImage.Revision,
-		ImageProvenance:    observedImage.Provenance,
-		ImageCreationNonce: observedImage.CreationNonce,
+		ImageRevision:                observedImage.Revision,
+		ImageProvenance:              observedImage.Provenance,
+		ImageCreationNonceCommitment: commitment,
 	}, nil
 }
 

@@ -90,12 +90,6 @@ func newCertifyCommand(stdout io.Writer) *cobra.Command {
 		"",
 		"SHA-256 of the exact release mds binary being certified",
 	)
-	flags.StringVar(
-		&request.ExpectedGuestCreationNonce,
-		"expected-guest-creation-nonce",
-		"",
-		"guest creation nonce from the host committed ownership record",
-	)
 	flags.BoolVar(&request.All, "all", false, "certify every target-eligible component")
 	flags.StringVar(&request.Profile, "profile", "", "certify a named profile")
 	flags.StringSliceVar(

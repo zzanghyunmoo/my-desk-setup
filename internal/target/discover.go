@@ -34,9 +34,16 @@ func DiscoverLocal(
 ) (Facts, error) {
 	imageRevision := strings.TrimSpace(environment.Getenv("MDS_IMAGE_REVISION"))
 	imageProvenance := strings.TrimSpace(environment.Getenv("MDS_IMAGE_PROVENANCE"))
-	imageCreationNonce := strings.TrimSpace(
-		environment.Getenv("MDS_IMAGE_CREATION_NONCE"),
+	imageCreationNonceCommitment := strings.TrimSpace(
+		environment.Getenv("MDS_IMAGE_CREATION_NONCE_COMMITMENT"),
 	)
+	if imageCreationNonceCommitment != "" {
+		if err := ValidateGuestCreationNonceCommitment(
+			imageCreationNonceCommitment,
+		); err != nil {
+			return Facts{}, err
+		}
+	}
 	switch goos {
 	case "darwin":
 		id, _ := NewID(KindMacOSHost, "local")
@@ -53,7 +60,7 @@ func DiscoverLocal(
 			return Facts{
 				ID: id, OS: "linux", Architecture: goarch, Reachable: true,
 				ImageRevision: imageRevision, ImageProvenance: imageProvenance,
-				ImageCreationNonce: imageCreationNonce,
+				ImageCreationNonceCommitment: imageCreationNonceCommitment,
 			}, nil
 		}
 		if instance := strings.TrimSpace(environment.Getenv("LIMA_INSTANCE")); instance != "" {
@@ -64,7 +71,7 @@ func DiscoverLocal(
 			return Facts{
 				ID: id, OS: "linux", Architecture: goarch, Reachable: true,
 				ImageRevision: imageRevision, ImageProvenance: imageProvenance,
-				ImageCreationNonce: imageCreationNonce,
+				ImageCreationNonceCommitment: imageCreationNonceCommitment,
 			}, nil
 		}
 		return Facts{}, errors.New("native Linux is not a v1 target; use a WSL or Lima guest")

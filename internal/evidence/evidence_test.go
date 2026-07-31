@@ -51,6 +51,51 @@ func TestCertifyAndVerifyReadyActualTarget(t *testing.T) {
 	}
 }
 
+func TestCertifyPublishesCommitmentWithoutRawGuestNonce(t *testing.T) {
+	bundle := certifyFixture(t, true)
+	rawNonce := []byte(strings.Repeat("a", 64))
+	for _, name := range expectedFiles {
+		content, err := os.ReadFile(filepath.Join(bundle, name))
+		if err != nil {
+			t.Fatalf("ReadFile(%s): %v", name, err)
+		}
+		if strings.Contains(string(content), string(rawNonce)) {
+			t.Fatalf("%s contains raw guest creation nonce", name)
+		}
+		if strings.Contains(string(content), `"image_creation_nonce"`) ||
+			strings.Contains(string(content), `"creation_nonce"`) {
+			t.Fatalf("%s contains a raw nonce field", name)
+		}
+	}
+	planContent, err := os.ReadFile(filepath.Join(bundle, PlanFile))
+	if err != nil {
+		t.Fatalf("ReadFile(plan): %v", err)
+	}
+	if !strings.Contains(
+		string(planContent),
+		`"image_creation_nonce_commitment": "sha256:`,
+	) {
+		t.Fatalf("plan does not contain nonce commitment: %s", planContent)
+	}
+}
+
+func TestVerifyRejectsLegacyRawGuestNonceField(t *testing.T) {
+	bundle := certifyFixture(t, true)
+	path := filepath.Join(bundle, PlanFile)
+	var document map[string]any
+	readJSON(t, path, &document)
+	targetDocument, ok := document["target"].(map[string]any)
+	if !ok {
+		t.Fatalf("plan target = %#v", document["target"])
+	}
+	targetDocument["image_creation_nonce"] = strings.Repeat("a", 64)
+	writeJSON(t, path, document)
+	writeChecksums(t, bundle)
+
+	_, err := Verify(bundle, VerifyOptions{})
+	assertErrorContains(t, err, "raw guest creation nonce")
+}
+
 func TestCertifyAcceptsActionRequiredDoctorReport(t *testing.T) {
 	bundle := certifyFixture(t, false)
 
@@ -501,12 +546,12 @@ func TestCertificationTargetPropagatesIndependentlyProbedGuestIdentity(t *testin
 		t.Fatalf("NewID(): %v", err)
 	}
 	facts := target.Facts{
-		ID:                 id,
-		OS:                 "linux",
-		Architecture:       "arm64",
-		ImageRevision:      "sha256:image",
-		ImageProvenance:    "https://example.invalid/ubuntu.img",
-		ImageCreationNonce: strings.Repeat("a", 64),
+		ID:                           id,
+		OS:                           "linux",
+		Architecture:                 "arm64",
+		ImageRevision:                "sha256:image",
+		ImageProvenance:              "https://example.invalid/ubuntu.img",
+		ImageCreationNonceCommitment: fixtureNonceCommitment(t, strings.Repeat("a", 64)),
 	}
 	certified, environment, err := certificationTarget(CertifyRequest{
 		TargetID: id.String(),
@@ -516,7 +561,7 @@ func TestCertificationTargetPropagatesIndependentlyProbedGuestIdentity(t *testin
 			}
 			return facts, nil
 		},
-	})
+	}, strings.Repeat("a", 64))
 	if err != nil {
 		t.Fatalf("certificationTarget(): %v", err)
 	}
@@ -526,8 +571,8 @@ func TestCertificationTargetPropagatesIndependentlyProbedGuestIdentity(t *testin
 	if environment["LIMA_INSTANCE"] != "mds" ||
 		environment["MDS_IMAGE_REVISION"] != "sha256:image" ||
 		environment["MDS_IMAGE_PROVENANCE"] != facts.ImageProvenance ||
-		environment["MDS_IMAGE_CREATION_NONCE"] !=
-			facts.ImageCreationNonce {
+		environment["MDS_IMAGE_CREATION_NONCE_COMMITMENT"] !=
+			facts.ImageCreationNonceCommitment {
 		t.Fatalf("certification environment = %#v", environment)
 	}
 }
@@ -557,9 +602,12 @@ func TestTargetIdentityCompletenessKeepsPartialTargetsBlocked(t *testing.T) {
 	facts := target.Facts{
 		ID: id, OS: "linux", OSVersion: "26.04", Architecture: "arm64",
 		RuntimeVersion: "1.0.0", ImageRevision: "sha256:image",
-		ImageProvenance:    "https://example.invalid/ubuntu.img",
-		ImageCreationNonce: strings.Repeat("a", 64),
-		Reachable:          true, CLIRevision: fixtureCLIRevision,
+		ImageProvenance: "https://example.invalid/ubuntu.img",
+		ImageCreationNonceCommitment: fixtureNonceCommitment(
+			t,
+			strings.Repeat("a", 64),
+		),
+		Reachable: true, CLIRevision: fixtureCLIRevision,
 		CatalogRevision: fixtureCatalogRevision,
 	}
 	if !targetIdentityComplete(facts) {
@@ -586,12 +634,17 @@ func TestCertifyRejectsRepeatApplyMutationAfterDistinctFirstApply(t *testing.T) 
 	readJSON(t, filepath.Join(root, "fixture-plan.json"), &plan)
 
 	_, err := Certify(context.Background(), CertifyRequest{
-		MDSPath:                    filepath.Join(root, "fake-mds"),
-		TargetID:                   plan.Target.ID.String(),
-		OutputDir:                  filepath.Join(root, "mutating-repeat-bundle"),
-		Components:                 []string{"go"},
-		ExpectedGuestCreationNonce: plan.Target.ImageCreationNonce,
-		Now:                        func() time.Time { return time.Unix(1<<40, 0).UTC() },
+		MDSPath:    filepath.Join(root, "fake-mds"),
+		TargetID:   plan.Target.ID.String(),
+		OutputDir:  filepath.Join(root, "mutating-repeat-bundle"),
+		Components: []string{"go"},
+		Getenv: func(key string) string {
+			if key == "MDS_EXPECTED_GUEST_CREATION_NONCE" {
+				return strings.Repeat("a", 64)
+			}
+			return ""
+		},
+		Now: func() time.Time { return time.Unix(1<<40, 0).UTC() },
 		RuntimeProbe: func(id target.ID) (target.Facts, error) {
 			if id != plan.Target.ID {
 				return target.Facts{}, errors.New("unexpected target")
@@ -636,10 +689,13 @@ func certifyFixtureWithReport(
 	facts := target.Facts{
 		ID: targetID, OS: "linux", OSVersion: "26.04", Architecture: "arm64",
 		RuntimeVersion: "1.0.0", ImageRevision: "sha256:image",
-		ImageProvenance:    "https://example.invalid/ubuntu.img",
-		ImageCreationNonce: strings.Repeat("a", 64),
-		SystemdSupported:   true,
-		SystemdActive:      true, Reachable: true,
+		ImageProvenance: "https://example.invalid/ubuntu.img",
+		ImageCreationNonceCommitment: fixtureNonceCommitment(
+			t,
+			strings.Repeat("a", 64),
+		),
+		SystemdSupported: true,
+		SystemdActive:    true, Reachable: true,
 		CLIRevision: fixtureCLIRevision, CatalogRevision: fixtureCatalogRevision,
 	}
 	plan := planning.Plan{
@@ -749,9 +805,14 @@ esac
 	bundle := filepath.Join(root, "bundle")
 	manifest, err := Certify(context.Background(), CertifyRequest{
 		MDSPath: binaryPath, TargetID: targetID.String(), OutputDir: bundle,
-		Components:                 []string{"go"},
-		ExpectedGuestCreationNonce: facts.ImageCreationNonce,
-		Now:                        func() time.Time { return time.Unix(1<<40, 0).UTC() },
+		Components: []string{"go"},
+		Getenv: func(key string) string {
+			if key == "MDS_EXPECTED_GUEST_CREATION_NONCE" {
+				return strings.Repeat("a", 64)
+			}
+			return ""
+		},
+		Now: func() time.Time { return time.Unix(1<<40, 0).UTC() },
 		RuntimeProbe: func(id target.ID) (target.Facts, error) {
 			if id != plan.Target.ID {
 				return target.Facts{}, errors.New("unexpected target")
@@ -770,6 +831,15 @@ esac
 		t.Fatalf("Certify() status = %q, want %q", manifest.Status, expectedStatus)
 	}
 	return bundle
+}
+
+func fixtureNonceCommitment(t *testing.T, nonce string) string {
+	t.Helper()
+	commitment, err := target.GuestCreationNonceCommitment(nonce)
+	if err != nil {
+		t.Fatalf("GuestCreationNonceCommitment(): %v", err)
+	}
+	return commitment
 }
 
 type evidenceDoctorAdapter struct {

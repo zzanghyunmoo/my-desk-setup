@@ -22,13 +22,15 @@ Use the self-hosted `Actual target` lane in
 `.github/workflows/target-certification.yml`, or run:
 
 ```bash
+IFS= read -r -s MDS_EXPECTED_GUEST_CREATION_NONCE </dev/tty
+export MDS_EXPECTED_GUEST_CREATION_NONCE
 scripts/certify-target.sh \
   --mds /absolute/path/to/mds \
   --target lima-guest:mds \
   --output target-evidence/run-manual-001 \
   --expected-binary-sha256 '<release-binary-sha256>' \
-  --expected-guest-creation-nonce '<host-ownership-creation-nonce>' \
   --profile certification-lima-guest
+unset MDS_EXPECTED_GUEST_CREATION_NONCE
 
 scripts/verify-target-evidence.sh \
   --bundle target-evidence/run-manual-001 \
@@ -42,11 +44,12 @@ scripts/verify-target-evidence.sh \
 ```
 
 For a manual WSL/Lima run, read the expected nonce from the host's committed
-ownership record and confirm the provider/name before passing it. The
+ownership record and confirm the provider/name before exposing it only through
+the protected process environment. The
 self-hosted workflow does not accept this value from the dispatcher: its
 dedicated guest runner service must inherit the target-specific, root-owned
-`MDS_EXPECTED_GUEST_CREATION_NONCE`. Host certification omits the nonce flag
-and host runner services must not define that environment variable.
+`MDS_EXPECTED_GUEST_CREATION_NONCE`. Host certifier processes and runner
+services must not define that environment variable.
 
 The workflow maps each exact target ID to one target-specific certification
 profile and runner label. The mapping is closed: dispatchers cannot supply a

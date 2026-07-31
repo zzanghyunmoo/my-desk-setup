@@ -47,3 +47,40 @@ func TestRequireVerifiedRequiresExternalReleaseExpectations(t *testing.T) {
 		)
 	}
 }
+
+func TestCertifyRejectsLegacyNonceFlagWithoutEchoingRawValue(t *testing.T) {
+	rawNonce := strings.Repeat("a", 64)
+	var stdout, stderr bytes.Buffer
+	exitCode := run(
+		[]string{
+			"certify",
+			"--expected-guest-creation-nonce",
+			rawNonce,
+		},
+		&stdout,
+		&stderr,
+	)
+	if exitCode == 0 ||
+		!strings.Contains(stderr.String(), "unknown flag") {
+		t.Fatalf(
+			"exit=%d stderr=%q, want legacy flag rejection",
+			exitCode,
+			stderr.String(),
+		)
+	}
+	if strings.Contains(stderr.String(), rawNonce) ||
+		strings.Contains(stdout.String(), rawNonce) {
+		t.Fatal("legacy nonce flag rejection echoed raw nonce")
+	}
+}
+
+func TestCertifyHelpDoesNotExposeRawNonceFlag(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	exitCode := run([]string{"certify", "--help"}, &stdout, &stderr)
+	if exitCode != 0 {
+		t.Fatalf("exit=%d stderr=%q", exitCode, stderr.String())
+	}
+	if strings.Contains(stdout.String(), "expected-guest-creation-nonce") {
+		t.Fatalf("certify help exposes removed raw nonce flag:\n%s", stdout.String())
+	}
+}
