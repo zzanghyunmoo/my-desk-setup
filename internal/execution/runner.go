@@ -252,7 +252,14 @@ func (runner Runner) apply(
 		if err != nil || finalObservation.State != adapters.StateReady {
 			outcome.Status = "failed"
 			outcome.ReasonCode = "post-verification-not-ready"
-			outcome.Reason = "post-verify observation is not ready"
+			if err != nil {
+				outcome.Reason = "post-verify observation: " + transport.SanitizeDiagnostic(err.Error())
+			} else {
+				outcome.Reason = "post-verify observation is " + string(finalObservation.State)
+				if finalObservation.Detail != "" {
+					outcome.Reason += ": " + finalObservation.Detail
+				}
+			}
 			statuses[action.ID] = outcome.Status
 			outcomes = append(outcomes, outcome)
 			continue

@@ -30,6 +30,7 @@ func newApplyCommand(streams Streams, system Runtime) *cobra.Command {
 	var catalogPath string
 	var expectedDigest string
 	var stateRoot string
+	var adoptNvChad bool
 
 	command := &cobra.Command{
 		Use:   "apply",
@@ -90,11 +91,16 @@ func newApplyCommand(streams Streams, system Runtime) *cobra.Command {
 			if err := execution.VerifyPlan(plan, expectedDigest); err != nil {
 				return stalePlan(err)
 			}
+			if adoptNvChad && !planSelectsComponent(plan, "nvchad") {
+				return invalidInput(errors.New("--adopt-nvchad requires selecting nvchad"))
+			}
 			home, err := runtimeHome(system)
 			if err != nil {
 				return err
 			}
-			componentAdapter, err := currentAdapter(environment, facts, home, system, false)
+			componentAdapter, err := currentAdapter(
+				environment, facts, home, system, false, adoptNvChad,
+			)
 			if err != nil {
 				return err
 			}
@@ -163,6 +169,12 @@ func newApplyCommand(streams Streams, system Runtime) *cobra.Command {
 	flags.StringVar(&stateRoot, "state-root", "", "override target-local state root")
 	flags.StringVar(&format, "format", "human", "output format: human or json")
 	flags.StringVar(&catalogPath, "catalog", "", "override the embedded catalog directory")
+	flags.BoolVar(
+		&adoptNvChad,
+		"adopt-nvchad",
+		false,
+		"back up and adopt a user-owned ~/.config/nvim when nvchad is selected",
+	)
 	return command
 }
 
@@ -172,6 +184,7 @@ func currentAdapter(
 	home string,
 	system Runtime,
 	allowReplace bool,
+	allowAdopt bool,
 ) (adapters.Component, error) {
 	port := transport.NewLocal()
 	switch facts.ID.Kind {
@@ -199,10 +212,20 @@ func currentAdapter(
 			&http.Client{Timeout: 5 * time.Minute},
 			now,
 			allowReplace,
+			allowAdopt,
 		), nil
 	default:
 		return nil, fmt.Errorf("no adapter for target %s", facts.ID.String())
 	}
+}
+
+func planSelectsComponent(plan planning.Plan, componentID string) bool {
+	for _, action := range plan.Actions {
+		if action.ComponentID == componentID {
+			return true
+		}
+	}
+	return false
 }
 
 func runtimeHome(system Runtime) (string, error) {

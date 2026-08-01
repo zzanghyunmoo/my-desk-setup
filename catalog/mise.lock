@@ -4,6 +4,10 @@
 version = "3.44.4"
 backend = "http:flutter"
 
+[tools.flutter."platforms.linux-x64"]
+checksum = "sha256:c853cda0312a162854c481fe6a1bc286d84fbb74bfab7037c39750061dc9b466"
+url = "https://storage.googleapis.com/flutter_infra_release/releases/stable/linux/flutter_linux_3.44.4-stable.tar.xz"
+
 [[tools.go]]
 version = "1.26.5"
 backend = "core:go"
@@ -35,6 +39,14 @@ backend = "http:flutter"
 [[tools."http:neovim"]]
 version = "0.11.5"
 backend = "http:neovim"
+
+[tools."http:neovim"."platforms.linux-arm64"]
+checksum = "sha256:ea4f9a31b11cc1477ff014aebb7b207684e7280f94ffa97abdab6cacd9b98519"
+url = "https://github.com/neovim/neovim/releases/download/v0.11.5/nvim-linux-arm64.tar.gz"
+
+[tools."http:neovim"."platforms.linux-x64"]
+checksum = "sha256:b2f91117be5b5ea39edd7297156dc2a4a8df4add6c95a90809a8df19e7ab6f52"
+url = "https://github.com/neovim/neovim/releases/download/v0.11.5/nvim-linux-x86_64.tar.gz"
 
 [[tools.java]]
 version = "temurin-25.0.4+7.0.LTS"

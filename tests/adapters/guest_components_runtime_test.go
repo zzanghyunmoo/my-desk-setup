@@ -144,6 +144,42 @@ func TestExplicitUpdateReplacesOnlyManagedEditorConfiguration(t *testing.T) {
 	}
 }
 
+func TestExplicitAdoptionBacksUpUserOwnedEditorConfiguration(t *testing.T) {
+	home := t.TempDir()
+	root := filepath.Join(home, ".config", "nvim")
+	if err := os.MkdirAll(root, 0o700); err != nil {
+		t.Fatalf("create user config: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "init.lua"), []byte("-- user configuration\n"), 0o600); err != nil {
+		t.Fatalf("write user config: %v", err)
+	}
+	port := &recordingPort{result: func(command transport.Command) transport.Result {
+		if command.Executable == "git" && len(command.Arguments) >= 3 && command.Arguments[2] == "rev-parse" {
+			return transport.Result{Stdout: nvchadAction().Version + "\n"}
+		}
+		return transport.Result{}
+	}}
+	editor := guestadapter.Editor{
+		Home: home, Port: port, Delegate: readyComponent{}, AllowAdopt: true,
+		Now: func() time.Time { return time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC) },
+	}
+	if err := editor.Apply(context.Background(), nvchadAction()); err != nil {
+		t.Fatalf("Apply(adopt): %v", err)
+	}
+	backupMatches, err := filepath.Glob(filepath.Join(home, ".config", ".nvim-mds-backup-*"))
+	if err != nil || len(backupMatches) != 1 {
+		t.Fatalf("backup paths = %v, err = %v", backupMatches, err)
+	}
+	backupContent, err := os.ReadFile(filepath.Join(backupMatches[0], "init.lua"))
+	if err != nil || string(backupContent) != "-- user configuration\n" {
+		t.Fatalf("backup content = %q, err = %v", backupContent, err)
+	}
+	managed, err := os.ReadFile(filepath.Join(root, "lua", "configs", "lspconfig.lua"))
+	if err != nil || !strings.Contains(string(managed), "pyright") {
+		t.Fatalf("managed LSP config = %q, err = %v", managed, err)
+	}
+}
+
 func TestDockerRequiresActiveSystemdBeforeMutation(t *testing.T) {
 	port := &recordingPort{}
 	docker := guestadapter.Docker{

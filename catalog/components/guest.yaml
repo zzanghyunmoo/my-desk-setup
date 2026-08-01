@@ -323,7 +323,7 @@ components:
     name: Neovim
     kind: editor
     provides: [neovim, nvim]
-    dependencies: [base-cli, mise]
+    dependencies: [base-cli]
     version_policy:
       mode: pinned
       lock_key: neovim
@@ -339,12 +339,12 @@ components:
         reason: The primary editor belongs to the Linux guest.
       wsl-guest:
         status: supported
-        installer: mise
-        package: http:neovim
+        installer: vendor
+        package: neovim
       lima-guest:
         status: supported
-        installer: mise
-        package: http:neovim
+        installer: vendor
+        package: neovim
 
   - id: nvchad
     name: NvChad-derived Configuration
@@ -371,6 +371,58 @@ components:
         status: supported
         installer: script
         package: nvchad-derived
+
+  - id: nvim-ide-tools
+    name: C++ Go Python Neovim IDE Tools
+    kind: editor
+    provides: [nvim-ide-tools, cxx-lsp, go-lsp, nvim-debugger, nvim-linter, nvim-formatter]
+    dependencies: [c-toolchain, go, python, nvchad, pyright]
+    version_policy:
+      mode: manager
+    verification:
+      command: [clangd, --version]
+      functional: [gopls, version]
+    targets:
+      macos-host:
+        status: unsupported
+        reason: The managed IDE tooling belongs to the Linux guest.
+      windows-host:
+        status: unsupported
+        reason: The managed IDE tooling belongs to the Linux guest.
+      wsl-guest:
+        status: supported
+        installer: apt
+        package: clangd clang-format clang-tidy lldb gopls delve python3-ruff python3-debugpy
+      lima-guest:
+        status: supported
+        installer: apt
+        package: clangd clang-format clang-tidy lldb gopls delve python3-ruff python3-debugpy
+
+  - id: pyright
+    name: Pyright Python Language Server
+    kind: editor
+    provides: [pyright, python-lsp]
+    dependencies: [bun]
+    version_policy:
+      mode: pinned
+      lock_key: pyright
+    verification:
+      command: [pyright, --version]
+    targets:
+      macos-host:
+        status: unsupported
+        reason: The managed IDE tooling belongs to the Linux guest.
+      windows-host:
+        status: unsupported
+        reason: The managed IDE tooling belongs to the Linux guest.
+      wsl-guest:
+        status: supported
+        installer: bun
+        package: pyright
+      lima-guest:
+        status: supported
+        installer: bun
+        package: pyright
 
   - id: herdr
     name: Herdr

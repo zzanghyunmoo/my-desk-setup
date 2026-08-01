@@ -161,6 +161,7 @@ func newUpdateCommand(streams Streams, system Runtime) *cobra.Command {
 				home,
 				system,
 				true,
+				false,
 			)
 			if err != nil {
 				return updateError(err)

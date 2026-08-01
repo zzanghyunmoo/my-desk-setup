@@ -201,7 +201,7 @@ func TestPackageAdapterPublishesStableGuestLauncher(t *testing.T) {
 	}
 }
 
-func TestExplicitUpdateMayReplacePinnedPackageButNormalApplyMayNot(t *testing.T) {
+func TestPinnedMisePackageUsesMissingManagedLauncherAsInstallBoundary(t *testing.T) {
 	port := &recordingPort{
 		result: func(transport.Command) transport.Result {
 			return transport.Result{Stdout: "tool 1.0.0\n"}
@@ -234,8 +234,8 @@ func TestExplicitUpdateMayReplacePinnedPackageButNormalApplyMayNot(t *testing.T)
 	if err != nil {
 		t.Fatalf("normal Observe(): %v", err)
 	}
-	if observation.State != adapters.StateConflict {
-		t.Fatalf("normal observation = %+v, want conflict", observation)
+	if observation.State != adapters.StateAbsent {
+		t.Fatalf("normal observation = %+v, want absent managed launcher", observation)
 	}
 	explicit := normal
 	explicit.AllowReplace = true

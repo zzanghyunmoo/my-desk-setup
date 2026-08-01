@@ -106,7 +106,7 @@ func TestPublishMiseConfigUsesReviewedEnvironmentBytes(t *testing.T) {
 	}
 	for path, want := range map[string]string{
 		filepath.Join(home, ".config", "mise", "config.toml"): environment.Mise.Config,
-		filepath.Join(home, ".config", "mise", "config.lock"): environment.Mise.Lock,
+		filepath.Join(home, ".config", "mise", "mise.lock"):   environment.Mise.Lock,
 	} {
 		got, err := os.ReadFile(path)
 		if err != nil {
@@ -120,7 +120,7 @@ func TestPublishMiseConfigUsesReviewedEnvironmentBytes(t *testing.T) {
 
 func TestPublishMiseConfigPreflightsBothFilesBeforeMutation(t *testing.T) {
 	t.Parallel()
-	for _, conflict := range []string{"config.toml", "config.lock"} {
+	for _, conflict := range []string{"config.toml", "mise.lock"} {
 		conflict := conflict
 		t.Run(conflict, func(t *testing.T) {
 			t.Parallel()
@@ -144,7 +144,7 @@ func TestPublishMiseConfigPreflightsBothFilesBeforeMutation(t *testing.T) {
 			if err == nil {
 				t.Fatal("PublishMiseConfig() accepted user-owned file")
 			}
-			other := "config.lock"
+			other := "mise.lock"
 			if conflict == other {
 				other = "config.toml"
 			}

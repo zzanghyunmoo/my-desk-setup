@@ -48,6 +48,7 @@ func (adapter Adapter) verifyFunctionalToolchain(
 			Timeout:          5 * time.Minute,
 			OutputLimit:      transport.DefaultOutputLimit,
 		}
+		command = adapter.commandWithManagedLauncher(action, command)
 		result, err := adapter.execute(ctx, command)
 		if err != nil {
 			return fmt.Errorf(

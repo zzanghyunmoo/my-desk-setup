@@ -23,6 +23,7 @@ func New(
 	client *http.Client,
 	now func() time.Time,
 	allowReplace bool,
+	allowAdopt bool,
 ) adapters.Component {
 	packageAdapter := packages.Adapter{
 		Environment:  environment,
@@ -41,7 +42,7 @@ func New(
 			"codex":       Agent{Home: home, Delegate: packageAdapter},
 			"nvchad": Editor{
 				Home: home, Port: port, Delegate: packageAdapter, Now: now,
-				AllowReplace: allowReplace,
+				AllowReplace: allowReplace, AllowAdopt: allowAdopt,
 			},
 			"docker-engine": Docker{
 				Facts: facts, Port: port, Delegate: packageAdapter, Client: client,

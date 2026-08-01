@@ -21,6 +21,7 @@ type Editor struct {
 	Delegate     adapters.Component
 	Now          func() time.Time
 	AllowReplace bool
+	AllowAdopt   bool
 }
 
 type editorMarker struct {
@@ -51,6 +52,12 @@ func (editor Editor) Observe(
 	markerPath := filepath.Join(root, ".mds-managed.json")
 	content, err := os.ReadFile(markerPath)
 	if errors.Is(err, os.ErrNotExist) {
+		if editor.AllowAdopt {
+			return adapters.Observation{
+				State:  adapters.StateAbsent,
+				Detail: "user-owned Neovim config will move through explicit adoption",
+			}, nil
+		}
 		return adapters.Observation{
 			State:  adapters.StateConflict,
 			Detail: "existing ~/.config/nvim is user-owned; it will not be overwritten",
@@ -97,24 +104,31 @@ func (editor Editor) Apply(
 	}
 	target := filepath.Join(configDirectory, "nvim")
 	replaceExisting := false
-	if info, err := os.Lstat(target); !errors.Is(err, os.ErrNotExist) {
-		if err != nil {
-			return fmt.Errorf("inspect existing Neovim config: %w", err)
+	info, err := os.Lstat(target)
+	switch {
+	case errors.Is(err, os.ErrNotExist):
+	case err != nil:
+		return fmt.Errorf("inspect existing Neovim config: %w", err)
+	case info.Mode()&os.ModeSymlink != 0 || !info.IsDir():
+		return errors.New("existing ~/.config/nvim is not a regular directory")
+	default:
+		markerContent, markerErr := os.ReadFile(filepath.Join(target, ".mds-managed.json"))
+		if errors.Is(markerErr, os.ErrNotExist) {
+			if !editor.AllowAdopt {
+				return errors.New("existing ~/.config/nvim will not be overwritten")
+			}
+			replaceExisting = true
+			break
 		}
-		if !editor.AllowReplace {
-			return errors.New("existing ~/.config/nvim will not be overwritten")
-		}
-		if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
-			return errors.New("existing ~/.config/nvim is not a managed directory")
-		}
-		markerContent, err := os.ReadFile(filepath.Join(target, ".mds-managed.json"))
-		if err != nil {
-			return errors.New("existing ~/.config/nvim is not mds-managed")
+		if markerErr != nil {
+			return fmt.Errorf("read Neovim ownership marker: %w", markerErr)
 		}
 		var marker editorMarker
-		if json.Unmarshal(markerContent, &marker) != nil ||
-			marker.ComponentID != action.ComponentID {
+		if json.Unmarshal(markerContent, &marker) != nil || marker.ComponentID != action.ComponentID {
 			return errors.New("existing ~/.config/nvim is not mds-managed")
+		}
+		if !editor.AllowReplace {
+			return errors.New("managed ~/.config/nvim requires explicit update")
 		}
 		replaceExisting = true
 	}
@@ -190,6 +204,9 @@ func (editor Editor) Apply(
 	); err != nil {
 		return fmt.Errorf("write Neovim ownership marker: %w", err)
 	}
+	if err := writeIDEConfiguration(temporary); err != nil {
+		return err
+	}
 	if !replaceExisting {
 		if err := os.Rename(temporary, target); err != nil {
 			return fmt.Errorf("publish Neovim config: %w", err)
@@ -220,9 +237,6 @@ func (editor Editor) Apply(
 			)
 		}
 		return fmt.Errorf("publish Neovim config: %w", err)
-	}
-	if err := os.RemoveAll(backup); err != nil {
-		return fmt.Errorf("remove replaced managed Neovim config: %w", err)
 	}
 	return nil
 }
