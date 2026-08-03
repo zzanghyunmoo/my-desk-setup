@@ -45,10 +45,10 @@ func New(
 			"opencode":    Agent{Home: home, Delegate: packageAdapter},
 			"codex":       Agent{Home: home, Delegate: packageAdapter},
 			"nvchad": Editor{
-				Home: home, Port: port, Delegate: packageAdapter, Now: now,
+				Home: home, Port: port, Now: now,
 				AllowReplace: options.AllowReplace, AllowAdopt: options.AllowAdopt,
 			},
-			"nvim-ide-tools": IDE{Home: home, Delegate: packageAdapter},
+			"nvim-ide-tools": IDE{Home: home, Port: port, Delegate: packageAdapter},
 			"docker-engine": Docker{
 				Facts: facts, Port: port, Delegate: packageAdapter, Client: client,
 			},

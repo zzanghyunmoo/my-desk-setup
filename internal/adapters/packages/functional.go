@@ -15,7 +15,20 @@ import (
 
 type functionalScenario struct {
 	files    map[string]string
-	commands [][]string
+	commands []functionalCommand
+}
+
+type functionalCommand struct {
+	argv           []string
+	expectedStdout string
+}
+
+func functionalStep(argv ...string) functionalCommand {
+	return functionalCommand{argv: argv}
+}
+
+func functionalOutput(expected string, argv ...string) functionalCommand {
+	return functionalCommand{argv: argv, expectedStdout: expected}
 }
 
 func (adapter Adapter) verifyFunctionalToolchain(
@@ -39,10 +52,10 @@ func (adapter Adapter) verifyFunctionalToolchain(
 			return fmt.Errorf("write functional verification source %s: %w", name, err)
 		}
 	}
-	for index, argv := range scenario.commands {
+	for _, step := range scenario.commands {
 		command := transport.Command{
-			Executable:       argv[0],
-			Arguments:        append([]string(nil), argv[1:]...),
+			Executable:       step.argv[0],
+			Arguments:        append([]string(nil), step.argv[1:]...),
 			Environment:      adapter.environment(),
 			WorkingDirectory: root,
 			Timeout:          5 * time.Minute,
@@ -54,16 +67,17 @@ func (adapter Adapter) verifyFunctionalToolchain(
 			return fmt.Errorf(
 				"functional verification for %s with %s: %w",
 				action.ID,
-				argv[0],
+				step.argv[0],
 				err,
 			)
 		}
-		if index == len(scenario.commands)-1 &&
-			strings.TrimSpace(result.Stdout) != "ok" {
+		if step.expectedStdout != "" &&
+			strings.TrimSpace(result.Stdout) != step.expectedStdout {
 			return fmt.Errorf(
-				"functional verification for %s returned %q instead of ok",
+				"functional verification for %s returned %q instead of %q",
 				action.ID,
 				strings.TrimSpace(result.Stdout),
+				step.expectedStdout,
 			)
 		}
 	}
@@ -78,52 +92,55 @@ var functionalScenarios = map[string]functionalScenario{
 }
 `,
 		},
-		commands: [][]string{
-			{"javac", "Main.java"},
-			{"java", "-cp", ".", "Main"},
+		commands: []functionalCommand{
+			functionalStep("javac", "Main.java"),
+			functionalOutput("ok", "java", "-cp", ".", "Main"),
 		},
 	},
 	"kotlin": {
 		files: map[string]string{
 			"Main.kt": "fun main() { println(\"ok\") }\n",
 		},
-		commands: [][]string{
-			{"kotlinc", "Main.kt", "-include-runtime", "-d", "main.jar"},
-			{"java", "-jar", "main.jar"},
+		commands: []functionalCommand{
+			functionalStep("kotlinc", "Main.kt", "-include-runtime", "-d", "main.jar"),
+			functionalOutput("ok", "java", "-jar", "main.jar"),
 		},
 	},
 	"go": {
 		files: map[string]string{
 			"main.go": "package main\n\nimport \"fmt\"\n\nfunc main() { fmt.Println(\"ok\") }\n",
 		},
-		commands: [][]string{{"go", "run", "main.go"}},
+		commands: []functionalCommand{functionalOutput("ok", "go", "run", "main.go")},
 	},
 	"python": {
-		commands: [][]string{{"python", "-c", "print('ok')"}},
+		commands: []functionalCommand{functionalOutput("ok", "python", "-c", "print('ok')")},
 	},
 	"typescript": {
 		files: map[string]string{
 			"main.ts": "console.log('ok')\n",
 		},
-		commands: [][]string{
-			{"tsc", "--outDir", "out", "main.ts"},
-			{"bun", "out/main.js"},
+		commands: []functionalCommand{
+			functionalStep("tsc", "--outDir", "out", "main.ts"),
+			functionalOutput("ok", "bun", "out/main.js"),
 		},
 	},
 	"c-toolchain": {
 		files: map[string]string{
-			"main.c": "#include <stdio.h>\nint main(void) { puts(\"ok\"); return 0; }\n",
+			"main.c":   "#include <stdio.h>\nint main(void) { puts(\"ok\"); return 0; }\n",
+			"main.cpp": "#include <iostream>\nint main() { std::cout << \"ok\\n\"; }\n",
 		},
-		commands: [][]string{
-			{"cc", "main.c", "-o", "mds-c-smoke"},
-			{"./mds-c-smoke"},
+		commands: []functionalCommand{
+			functionalStep("cc", "main.c", "-o", "mds-c-smoke"),
+			functionalOutput("ok", "./mds-c-smoke"),
+			functionalStep("c++", "main.cpp", "-o", "mds-cxx-smoke"),
+			functionalOutput("ok", "./mds-cxx-smoke"),
 		},
 	},
 	"flutter": {
 		files: map[string]string{
 			"main.dart": "void main() { print('ok'); }\n",
 		},
-		commands: [][]string{{"dart", "run", "main.dart"}},
+		commands: []functionalCommand{functionalOutput("ok", "dart", "run", "main.dart")},
 	},
 	"gradle": {
 		files: map[string]string{
@@ -132,18 +149,18 @@ var functionalScenarios = map[string]functionalScenario{
 }
 `,
 		},
-		commands: [][]string{{
-			"gradle", "--offline", "--no-daemon", "-q", "mdsSmoke",
-		}},
+		commands: []functionalCommand{functionalOutput(
+			"ok", "gradle", "--offline", "--no-daemon", "-q", "mdsSmoke",
+		)},
 	},
 	"nvim-ide-tools": {
-		commands: [][]string{
-			{"clang-format", "--version"},
-			{"clang-tidy", "--version"},
-			{"lldb-dap", "--version"},
-			{"dlv", "version"},
-			{"ruff", "--version"},
-			{"python3", "-c", "import debugpy; print('ok')"},
+		commands: []functionalCommand{
+			functionalStep("clang-format", "--version"),
+			functionalStep("clang-tidy", "--version"),
+			functionalStep("lldb-dap", "--version"),
+			functionalStep("dlv", "version"),
+			functionalStep("ruff", "--version"),
+			functionalOutput("ok", "/usr/bin/python3", "-c", "import debugpy; print('ok')"),
 		},
 	},
 }

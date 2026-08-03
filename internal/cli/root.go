@@ -33,6 +33,7 @@ type Runtime struct {
 	HomeDir       func() (string, error)
 	Now           func() time.Time
 	ObserveTarget func(context.Context, target.Facts) (target.Facts, error)
+	newAdapter    adapterFactory
 }
 
 func DefaultStreams() Streams {

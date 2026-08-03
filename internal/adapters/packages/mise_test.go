@@ -97,6 +97,24 @@ func TestFunctionalScenariosCoverEveryCompileRunComponent(t *testing.T) {
 	}
 }
 
+func TestIDEAndCToolchainFunctionalScenariosExerciseReviewedRuntimes(t *testing.T) {
+	cCommands := functionalScenarios["c-toolchain"].commands
+	if !reflect.DeepEqual(cCommands, []functionalCommand{
+		functionalStep("cc", "main.c", "-o", "mds-c-smoke"),
+		functionalOutput("ok", "./mds-c-smoke"),
+		functionalStep("c++", "main.cpp", "-o", "mds-cxx-smoke"),
+		functionalOutput("ok", "./mds-cxx-smoke"),
+	}) {
+		t.Fatalf("C/C++ functional commands = %#v", cCommands)
+	}
+	ideCommands := functionalScenarios["nvim-ide-tools"].commands
+	if got := ideCommands[len(ideCommands)-1]; !reflect.DeepEqual(got, functionalOutput(
+		"ok", "/usr/bin/python3", "-c", "import debugpy; print('ok')",
+	)) {
+		t.Fatalf("debugpy verification command = %#v, want system Python", got)
+	}
+}
+
 func TestPublishMiseConfigUsesReviewedEnvironmentBytes(t *testing.T) {
 	environment, err := catalog.LoadFS(catalogdata.FS)
 	if err != nil {

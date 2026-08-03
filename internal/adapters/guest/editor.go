@@ -18,7 +18,6 @@ import (
 type Editor struct {
 	Home         string
 	Port         transport.Port
-	Delegate     adapters.Component
 	Now          func() time.Time
 	AllowReplace bool
 	AllowAdopt   bool
@@ -32,7 +31,7 @@ type editorMarker struct {
 }
 
 func (editor Editor) Observe(
-	_ context.Context,
+	ctx context.Context,
 	action planning.Action,
 ) (adapters.Observation, error) {
 	root := filepath.Join(editor.Home, ".config", "nvim")
@@ -73,7 +72,9 @@ func (editor Editor) Observe(
 			Detail: "existing Neovim ownership marker is invalid",
 		}, nil
 	}
-	if marker.ComponentID != action.ComponentID || marker.Revision != action.Version {
+	if marker.SchemaVersion != editorOwnershipSchema ||
+		marker.ComponentID != action.ComponentID ||
+		marker.Revision != action.Version {
 		if editor.AllowReplace && marker.ComponentID == action.ComponentID {
 			return adapters.Observation{
 				State:            adapters.StateAbsent,
@@ -85,6 +86,30 @@ func (editor Editor) Observe(
 			State:  adapters.StateConflict,
 			Detail: "managed Neovim config revision differs; use explicit update",
 		}, nil
+	}
+	includeIDE, ready, detail, err := inspectEditorConfiguration(root)
+	if err != nil {
+		return adapters.Observation{}, err
+	}
+	if !ready {
+		return adapters.Observation{
+			State:            adapters.StateAbsent,
+			InstalledVersion: marker.Revision,
+			Detail:           detail,
+		}, nil
+	}
+	if !includeIDE {
+		ready, detail, err = inspectPluginRuntime(ctx, editor.Home, editor.Port, basePluginSet)
+		if err != nil {
+			return adapters.Observation{}, err
+		}
+		if !ready {
+			return adapters.Observation{
+				State:            adapters.StateAbsent,
+				InstalledVersion: marker.Revision,
+				Detail:           detail,
+			}, nil
+		}
 	}
 	return adapters.Observation{
 		State: adapters.StateReady, InstalledVersion: marker.Revision,
@@ -124,8 +149,16 @@ func (editor Editor) Apply(
 			return fmt.Errorf("read Neovim ownership marker: %w", markerErr)
 		}
 		var marker editorMarker
-		if json.Unmarshal(markerContent, &marker) != nil || marker.ComponentID != action.ComponentID {
+		if json.Unmarshal(markerContent, &marker) != nil ||
+			marker.SchemaVersion != editorOwnershipSchema ||
+			marker.ComponentID != action.ComponentID {
 			return errors.New("existing ~/.config/nvim is not mds-managed")
+		}
+		if marker.Revision == action.Version {
+			if err := writeEditorConfiguration(target); err != nil {
+				return err
+			}
+			return preparePluginRuntime(ctx, editor.Home, editor.Port, basePluginSet)
 		}
 		if !editor.AllowReplace {
 			return errors.New("managed ~/.config/nvim requires explicit update")
@@ -188,7 +221,7 @@ func (editor Editor) Apply(
 		return fmt.Errorf("remove NvChad transport metadata: %w", err)
 	}
 	marker := editorMarker{
-		SchemaVersion: "mds.ownership/v1",
+		SchemaVersion: editorOwnershipSchema,
 		ComponentID:   action.ComponentID,
 		Revision:      action.Version,
 		InstalledAt:   editor.Now().UTC(),
@@ -203,6 +236,12 @@ func (editor Editor) Apply(
 		0o600,
 	); err != nil {
 		return fmt.Errorf("write Neovim ownership marker: %w", err)
+	}
+	if err := writeEditorConfiguration(temporary); err != nil {
+		return err
+	}
+	if err := preparePluginRuntime(ctx, editor.Home, editor.Port, basePluginSet); err != nil {
+		return err
 	}
 	if !replaceExisting {
 		if err := os.Rename(temporary, target); err != nil {
@@ -248,13 +287,25 @@ func (editor Editor) Verify(
 	if err != nil {
 		return err
 	}
-	if observation.State != adapters.StateReady {
+	if observation.State == adapters.StateConflict ||
+		(observation.InstalledVersion != "" && observation.InstalledVersion != action.Version) {
 		return fmt.Errorf("neovim config is not ready: %s", observation.Detail)
 	}
-	if editor.Delegate == nil {
-		return errors.New("editor verification delegate is required")
+	root, err := managedEditorRoot(editor.Home)
+	if err != nil {
+		return err
 	}
-	return editor.Delegate.Verify(ctx, action)
+	includeIDE, ready, detail, err := inspectEditorConfiguration(root)
+	if err != nil {
+		return err
+	}
+	if !ready {
+		return fmt.Errorf("managed editor configuration is not ready: %s", detail)
+	}
+	if includeIDE {
+		return nil
+	}
+	return verifyManagedNeovim(ctx, editor.Home, editor.Port, basePluginSet)
 }
 
 func ensureDirectory(path string) error {

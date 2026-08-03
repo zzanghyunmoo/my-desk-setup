@@ -1,7 +1,6 @@
 package guest
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -11,6 +10,7 @@ import (
 
 	"github.com/zzanghyunmoo/my-desk-setup/internal/adapters"
 	"github.com/zzanghyunmoo/my-desk-setup/internal/planning"
+	"github.com/zzanghyunmoo/my-desk-setup/internal/transport"
 )
 
 // IDE owns only the generated language-tool configuration. The NvChad
@@ -18,6 +18,7 @@ import (
 // references to tools that were not selected.
 type IDE struct {
 	Home     string
+	Port     transport.Port
 	Delegate adapters.Component
 }
 
@@ -42,6 +43,16 @@ func (ide IDE) Observe(
 			InstalledVersion: observation.InstalledVersion,
 		}, nil
 	}
+	ready, detail, err = inspectPluginRuntime(ctx, ide.Home, ide.Port, idePluginSet)
+	if err != nil {
+		return adapters.Observation{}, err
+	}
+	if !ready {
+		return adapters.Observation{
+			State: adapters.StateAbsent, Detail: detail,
+			InstalledVersion: observation.InstalledVersion,
+		}, nil
+	}
 	return observation, nil
 }
 
@@ -49,14 +60,27 @@ func (ide IDE) Apply(ctx context.Context, action planning.Action) error {
 	if ide.Delegate == nil {
 		return errors.New("IDE package delegate is required")
 	}
-	if err := ide.Delegate.Apply(ctx, action); err != nil {
+	observation, err := ide.Delegate.Observe(ctx, action)
+	if err != nil {
 		return err
+	}
+	switch observation.State {
+	case adapters.StateReady:
+	case adapters.StateAbsent:
+		if err := ide.Delegate.Apply(ctx, action); err != nil {
+			return err
+		}
+	default:
+		return fmt.Errorf("IDE package dependencies are not repairable: %s", observation.Detail)
 	}
 	root, err := managedEditorRoot(ide.Home)
 	if err != nil {
 		return err
 	}
-	return writeIDEConfiguration(root)
+	if err := writeIDEConfiguration(root); err != nil {
+		return err
+	}
+	return preparePluginRuntime(ctx, ide.Home, ide.Port, idePluginSet)
 }
 
 func (ide IDE) Verify(ctx context.Context, action planning.Action) error {
@@ -73,7 +97,7 @@ func (ide IDE) Verify(ctx context.Context, action planning.Action) error {
 	if !ready {
 		return fmt.Errorf("managed IDE configuration is not ready: %s", detail)
 	}
-	return nil
+	return verifyManagedNeovim(ctx, ide.Home, ide.Port, idePluginSet)
 }
 
 func inspectIDEConfiguration(home string) (bool, string, error) {
@@ -84,24 +108,20 @@ func inspectIDEConfiguration(home string) (bool, string, error) {
 	if err != nil {
 		return false, "", err
 	}
+	includeIDE, ready, detail, err := inspectEditorConfiguration(root)
+	if err != nil || !ready {
+		return false, detail, err
+	}
+	if !includeIDE {
+		return false, "managed IDE plugin specification is missing", nil
+	}
 	for relativePath, expected := range ideConfiguration {
-		path := filepath.Join(root, filepath.FromSlash(relativePath))
-		info, err := os.Lstat(path)
-		if errors.Is(err, os.ErrNotExist) {
-			return false, "managed IDE configuration is missing " + relativePath, nil
+		if relativePath == "lua/plugins/init.lua" {
+			continue
 		}
-		if err != nil {
-			return false, "", fmt.Errorf("inspect managed IDE configuration %s: %w", relativePath, err)
-		}
-		if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
-			return false, "", fmt.Errorf("managed IDE configuration %s is not a regular file", relativePath)
-		}
-		content, err := os.ReadFile(path)
-		if err != nil {
-			return false, "", fmt.Errorf("read managed IDE configuration %s: %w", relativePath, err)
-		}
-		if !bytes.Equal(content, []byte(expected)) {
-			return false, "managed IDE configuration differs at " + relativePath, nil
+		ready, detail, err := inspectConfigurationFile(root, relativePath, expected)
+		if err != nil || !ready {
+			return false, detail, err
 		}
 	}
 	return true, "", nil
@@ -130,7 +150,7 @@ func managedEditorRoot(home string) (string, error) {
 	}
 	var marker editorMarker
 	if json.Unmarshal(content, &marker) != nil ||
-		marker.SchemaVersion != "mds.ownership/v1" ||
+		marker.SchemaVersion != editorOwnershipSchema ||
 		marker.ComponentID != "nvchad" {
 		return "", errors.New("Neovim configuration is not owned by mds NvChad")
 	}

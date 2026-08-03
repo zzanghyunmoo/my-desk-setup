@@ -209,6 +209,14 @@ type adapterOptions struct {
 	GuestBootstrapArchive string
 }
 
+type adapterFactory func(
+	environment catalog.Environment,
+	facts target.Facts,
+	home string,
+	system Runtime,
+	options adapterOptions,
+) (adapters.Component, error)
+
 func currentAdapter(
 	environment catalog.Environment,
 	facts target.Facts,
@@ -216,6 +224,9 @@ func currentAdapter(
 	system Runtime,
 	options adapterOptions,
 ) (adapters.Component, error) {
+	if system.newAdapter != nil {
+		return system.newAdapter(environment, facts, home, system, options)
+	}
 	port := transport.NewLocal()
 	switch facts.ID.Kind {
 	case target.KindMacOSHost, target.KindWindowsHost:

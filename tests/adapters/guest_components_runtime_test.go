@@ -45,22 +45,12 @@ func TestEditorPublishesExactManagedRevision(t *testing.T) {
 	home := t.TempDir()
 	port := &recordingPort{
 		result: func(command transport.Command) transport.Result {
-			if command.Executable == "git" &&
-				len(command.Arguments) >= 3 &&
-				command.Arguments[2] == "rev-parse" {
-				return transport.Result{Stdout: nvchadAction().Version + "\n"}
-			}
-			return transport.Result{}
+			return managedEditorCommandResult(t, home, nvchadAction().Version, command)
 		},
 	}
 	editor := guestadapter.Editor{
 		Home: home,
 		Port: port,
-		Delegate: readyComponent{
-			observation: adapters.Observation{
-				State: adapters.StateReady, InstalledVersion: nvchadAction().Version,
-			},
-		},
 		Now: func() time.Time {
 			return time.Date(2026, 7, 29, 8, 0, 0, 0, time.UTC)
 		},
@@ -68,6 +58,7 @@ func TestEditorPublishesExactManagedRevision(t *testing.T) {
 	if err := editor.Apply(context.Background(), nvchadAction()); err != nil {
 		t.Fatalf("Apply(): %v", err)
 	}
+	materializeManagedPluginPaths(t, home, false)
 	observation, err := editor.Observe(context.Background(), nvchadAction())
 	if err != nil {
 		t.Fatalf("Observe(after apply): %v", err)
@@ -75,6 +66,9 @@ func TestEditorPublishesExactManagedRevision(t *testing.T) {
 	if observation.State != adapters.StateReady ||
 		observation.InstalledVersion != nvchadAction().Version {
 		t.Fatalf("observation = %+v, want exact managed revision", observation)
+	}
+	if err := editor.Verify(context.Background(), nvchadAction()); err != nil {
+		t.Fatalf("Verify(): %v", err)
 	}
 	marker, err := os.ReadFile(filepath.Join(home, ".config", "nvim", ".mds-managed.json"))
 	if err != nil {
@@ -90,23 +84,48 @@ func TestEditorPublishesExactManagedRevision(t *testing.T) {
 	}
 }
 
+func TestEditorVerifyRestoresInitiallyMissingPluginCheckouts(t *testing.T) {
+	home := t.TempDir()
+	port := &recordingPort{}
+	port.result = func(command transport.Command) transport.Result {
+		if command.Executable == "nvim" && len(command.Arguments) >= 2 &&
+			command.Arguments[1] == "+Lazy! restore" {
+			materializeManagedPluginPaths(t, home, false)
+		}
+		return managedEditorCommandResult(t, home, nvchadAction().Version, command)
+	}
+	editor := guestadapter.Editor{
+		Home: home, Port: port,
+		Now: func() time.Time { return time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC) },
+	}
+	if err := editor.Apply(context.Background(), nvchadAction()); err != nil {
+		t.Fatalf("Apply(): %v", err)
+	}
+	observation, err := editor.Observe(context.Background(), nvchadAction())
+	if err != nil || observation.State != adapters.StateAbsent {
+		t.Fatalf("Observe(before restore) = %+v, err=%v, want absent", observation, err)
+	}
+	if err := editor.Verify(context.Background(), nvchadAction()); err != nil {
+		t.Fatalf("Verify(restore missing plugins): %v", err)
+	}
+	observation, err = editor.Observe(context.Background(), nvchadAction())
+	if err != nil || observation.State != adapters.StateReady {
+		t.Fatalf("Observe(after restore) = %+v, err=%v, want ready", observation, err)
+	}
+}
+
 func TestExplicitUpdateReplacesOnlyManagedEditorConfiguration(t *testing.T) {
 	home := t.TempDir()
 	revision := "1111111111111111111111111111111111111111"
 	port := &recordingPort{
 		result: func(command transport.Command) transport.Result {
-			if command.Executable == "git" &&
-				len(command.Arguments) >= 3 &&
-				command.Arguments[2] == "rev-parse" {
-				return transport.Result{Stdout: revision + "\n"}
-			}
-			return transport.Result{}
+			return managedEditorCommandResult(t, home, revision, command)
 		},
 	}
 	action := nvchadAction()
 	action.Version = revision
 	editor := guestadapter.Editor{
-		Home: home, Port: port, Delegate: readyComponent{},
+		Home: home, Port: port,
 		Now: func() time.Time {
 			return time.Date(2026, 7, 29, 8, 0, 0, 0, time.UTC)
 		},
@@ -114,12 +133,14 @@ func TestExplicitUpdateReplacesOnlyManagedEditorConfiguration(t *testing.T) {
 	if err := editor.Apply(context.Background(), action); err != nil {
 		t.Fatalf("Apply(initial): %v", err)
 	}
+	materializeManagedPluginPaths(t, home, false)
 	revision = "2222222222222222222222222222222222222222"
 	action.Version = revision
 	editor.AllowReplace = true
 	if err := editor.Apply(context.Background(), action); err != nil {
 		t.Fatalf("Apply(update): %v", err)
 	}
+	materializeManagedPluginPaths(t, home, false)
 	observation, err := editor.Observe(context.Background(), action)
 	if err != nil {
 		t.Fatalf("Observe(updated): %v", err)
@@ -155,18 +176,16 @@ func TestExplicitAdoptionBacksUpUserOwnedEditorConfiguration(t *testing.T) {
 		t.Fatalf("write user config: %v", err)
 	}
 	port := &recordingPort{result: func(command transport.Command) transport.Result {
-		if command.Executable == "git" && len(command.Arguments) >= 3 && command.Arguments[2] == "rev-parse" {
-			return transport.Result{Stdout: nvchadAction().Version + "\n"}
-		}
-		return transport.Result{}
+		return managedEditorCommandResult(t, home, nvchadAction().Version, command)
 	}}
 	editor := guestadapter.Editor{
-		Home: home, Port: port, Delegate: readyComponent{}, AllowAdopt: true,
+		Home: home, Port: port, AllowAdopt: true,
 		Now: func() time.Time { return time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC) },
 	}
 	if err := editor.Apply(context.Background(), nvchadAction()); err != nil {
 		t.Fatalf("Apply(adopt): %v", err)
 	}
+	materializeManagedPluginPaths(t, home, false)
 	backupMatches, err := filepath.Glob(filepath.Join(
 		home,
 		".config",
@@ -187,7 +206,10 @@ func TestExplicitAdoptionBacksUpUserOwnedEditorConfiguration(t *testing.T) {
 		t.Fatalf("Editor Observe(after adoption) = %+v, err = %v, want ready", editorObservation, err)
 	}
 
-	ide := guestadapter.IDE{Home: home, Delegate: readyComponent{}}
+	packageDelegate := &countingComponent{
+		observation: adapters.Observation{State: adapters.StateReady},
+	}
+	ide := guestadapter.IDE{Home: home, Port: port, Delegate: packageDelegate}
 	observation, err := ide.Observe(context.Background(), ideAction())
 	if err != nil || observation.State != adapters.StateAbsent {
 		t.Fatalf("IDE Observe(before apply) = %+v, err = %v, want absent", observation, err)
@@ -195,6 +217,10 @@ func TestExplicitAdoptionBacksUpUserOwnedEditorConfiguration(t *testing.T) {
 	if err := ide.Apply(context.Background(), ideAction()); err != nil {
 		t.Fatalf("IDE Apply(): %v", err)
 	}
+	if packageDelegate.applyCalls != 0 {
+		t.Fatalf("IDE config-only apply called ready package delegate %d times", packageDelegate.applyCalls)
+	}
+	materializeManagedPluginPaths(t, home, true)
 	if err := ide.Verify(context.Background(), ideAction()); err != nil {
 		t.Fatalf("IDE Verify(): %v", err)
 	}
@@ -216,34 +242,105 @@ func TestExplicitAdoptionBacksUpUserOwnedEditorConfiguration(t *testing.T) {
 	if err := ide.Apply(context.Background(), ideAction()); err != nil {
 		t.Fatalf("IDE Apply(repair): %v", err)
 	}
+	if packageDelegate.applyCalls != 0 {
+		t.Fatalf("IDE drift repair called ready package delegate %d times", packageDelegate.applyCalls)
+	}
 	if err := ide.Verify(context.Background(), ideAction()); err != nil {
 		t.Fatalf("IDE Verify(repaired): %v", err)
+	}
+	commands := recordedArgv(port.commands)
+	for _, expected := range []string{
+		"git -C " + filepath.Join(home, ".local", "share", "mds", "nvim", "p"),
+		"nvim --headless +Lazy! restore +qa",
+		"nvim --headless +checkhealth +qa",
+	} {
+		if !strings.Contains(commands, expected) {
+			t.Fatalf("managed IDE verification does not contain %q:\n%s", expected, commands)
+		}
 	}
 }
 
 func TestNvChadAloneDoesNotPublishIDEConfiguration(t *testing.T) {
 	home := t.TempDir()
 	port := &recordingPort{result: func(command transport.Command) transport.Result {
-		if command.Executable == "git" && len(command.Arguments) >= 3 && command.Arguments[2] == "rev-parse" {
-			return transport.Result{Stdout: nvchadAction().Version + "\n"}
-		}
-		return transport.Result{}
+		return managedEditorCommandResult(t, home, nvchadAction().Version, command)
 	}}
 	editor := guestadapter.Editor{
-		Home: home, Port: port, Delegate: readyComponent{},
+		Home: home, Port: port,
 		Now: func() time.Time { return time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC) },
 	}
 	if err := editor.Apply(context.Background(), nvchadAction()); err != nil {
 		t.Fatalf("Apply(): %v", err)
 	}
+	materializeManagedPluginPaths(t, home, false)
 	for relativePath := range map[string]bool{
-		"lazy-lock.json":            true,
 		"lua/configs/lspconfig.lua": true,
-		"lua/plugins/init.lua":      true,
 	} {
 		if _, err := os.Stat(filepath.Join(home, ".config", "nvim", filepath.FromSlash(relativePath))); !errors.Is(err, os.ErrNotExist) {
 			t.Fatalf("nvchad-only apply published %s: %v", relativePath, err)
 		}
+	}
+	pluginSpec, err := os.ReadFile(filepath.Join(home, ".config", "nvim", "lua", "plugins", "init.lua"))
+	if err != nil || string(pluginSpec) != "return {}\n" {
+		t.Fatalf("nvchad-only plugin spec = %q, err = %v", pluginSpec, err)
+	}
+	for _, plugin := range []string{
+		"conform.nvim", "nvim-dap", "nvim-dap-ui", "nvim-dap-virtual-text", "nvim-lint", "nvim-nio",
+	} {
+		paths, err := filepath.Glob(filepath.Join(
+			home, ".local", "share", "mds", "nvim", "p", "*", plugin,
+		))
+		if err != nil || len(paths) != 0 {
+			t.Fatalf("nvchad-only apply materialized IDE plugin %s at %v: %v", plugin, paths, err)
+		}
+	}
+}
+
+func TestIDERejectsAndRepairsDriftedManagedPluginCheckout(t *testing.T) {
+	home := t.TempDir()
+	drifted := false
+	port := &recordingPort{}
+	port.result = func(command transport.Command) transport.Result {
+		if drifted && command.Executable == "git" && len(command.Arguments) >= 3 &&
+			command.Arguments[2] == "rev-parse" && filepath.Base(command.Arguments[1]) == "NvChad" {
+			return transport.Result{Stdout: strings.Repeat("0", 40) + "\n"}
+		}
+		return managedEditorCommandResult(t, home, nvchadAction().Version, command)
+	}
+	editor := guestadapter.Editor{
+		Home: home, Port: port,
+		Now: func() time.Time { return time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC) },
+	}
+	if err := editor.Apply(context.Background(), nvchadAction()); err != nil {
+		t.Fatalf("Editor Apply(): %v", err)
+	}
+	materializeManagedPluginPaths(t, home, false)
+	ide := guestadapter.IDE{
+		Home: home, Port: port,
+		Delegate: readyComponent{observation: adapters.Observation{State: adapters.StateReady}},
+	}
+	if err := ide.Apply(context.Background(), ideAction()); err != nil {
+		t.Fatalf("IDE Apply(): %v", err)
+	}
+	materializeManagedPluginPaths(t, home, true)
+	drifted = true
+
+	observation, err := ide.Observe(context.Background(), ideAction())
+	if err != nil {
+		t.Fatalf("IDE Observe(drifted plugin): %v", err)
+	}
+	if observation.State != adapters.StateAbsent ||
+		!strings.Contains(observation.Detail, "NvChad checkout revision differs") {
+		t.Fatalf("observation=%+v, want exact plugin drift", observation)
+	}
+	if err := ide.Apply(context.Background(), ideAction()); err != nil {
+		t.Fatalf("IDE Apply(repair drift): %v", err)
+	}
+	paths, err := filepath.Glob(filepath.Join(
+		home, ".local", "share", "mds", "nvim", "p", "*", "NvChad",
+	))
+	if err != nil || len(paths) != 0 {
+		t.Fatalf("drifted NvChad checkout was not removed safely: paths=%v err=%v", paths, err)
 	}
 }
 
@@ -269,10 +366,7 @@ func TestGuestAdapterOptionsWireExplicitNvChadAdoption(t *testing.T) {
 		t.Fatalf("write user config: %v", err)
 	}
 	port := &recordingPort{result: func(command transport.Command) transport.Result {
-		if command.Executable == "git" && len(command.Arguments) >= 3 && command.Arguments[2] == "rev-parse" {
-			return transport.Result{Stdout: nvchadAction().Version + "\n"}
-		}
-		return transport.Result{}
+		return managedEditorCommandResult(t, home, nvchadAction().Version, command)
 	}}
 	component := guestadapter.New(
 		catalog.Environment{},
@@ -659,8 +753,8 @@ func assertPinnedIDEPluginGraph(t *testing.T, root string) {
 	if err := json.Unmarshal(content, &entries); err != nil {
 		t.Fatalf("decode lazy lock: %v", err)
 	}
-	if len(entries) != 32 {
-		t.Fatalf("lazy lock entries = %d, want 32", len(entries))
+	if len(entries) != 31 {
+		t.Fatalf("lazy lock entries = %d, want 31", len(entries))
 	}
 	for name, entry := range entries {
 		decoded, err := hex.DecodeString(entry.Commit)
@@ -668,27 +762,134 @@ func assertPinnedIDEPluginGraph(t *testing.T, root string) {
 			t.Fatalf("plugin %s is not pinned exactly: %+v, err=%v", name, entry, err)
 		}
 	}
-	for name, want := range map[string]string{
-		"lazy.nvim": "306a05526ada86a7b30af95c5cc81ffba93fef97",
-		"NvChad":    "add44b952d631981614bbb8cfc6f7002f296dfe6",
-	} {
-		if got := entries[name].Commit; got != want {
-			t.Fatalf("%s commit = %s, want %s", name, got, want)
-		}
+	if _, exists := entries["lazy.nvim"]; exists {
+		t.Fatal("lazy.nvim bootstrap revision is duplicated in the plugin lock")
+	}
+	if got, want := entries["NvChad"].Commit, "add44b952d631981614bbb8cfc6f7002f296dfe6"; got != want {
+		t.Fatalf("NvChad commit = %s, want %s", got, want)
 	}
 	initContent, err := os.ReadFile(filepath.Join(root, "init.lua"))
 	if err != nil {
 		t.Fatalf("read init.lua: %v", err)
 	}
-	for _, revision := range []string{
-		entries["lazy.nvim"].Commit,
-		entries["NvChad"].Commit,
-	} {
-		if !strings.Contains(string(initContent), revision) {
-			t.Fatalf("init.lua does not bind reviewed revision %s", revision)
+	if revisionPrefix := "306a05526ada"; !strings.Contains(string(initContent), revisionPrefix) {
+		t.Fatalf("init.lua does not bind reviewed lazy.nvim path %s", revisionPrefix)
+	}
+	if strings.Contains(string(initContent), entries["NvChad"].Commit) {
+		t.Fatal("init.lua duplicates the NvChad revision owned by lazy-lock.json")
+	}
+	pluginContent, err := os.ReadFile(filepath.Join(root, "lua", "plugins", "init.lua"))
+	if err != nil {
+		t.Fatalf("read plugin specification: %v", err)
+	}
+	if strings.Contains(string(pluginContent), "commit =") {
+		t.Fatalf("plugin specification duplicates lazy-lock authority:\n%s", pluginContent)
+	}
+}
+
+func managedEditorCommandResult(
+	t *testing.T,
+	home,
+	starterRevision string,
+	command transport.Command,
+) transport.Result {
+	t.Helper()
+	if command.Executable != "git" || len(command.Arguments) < 3 {
+		return transport.Result{}
+	}
+	if command.Arguments[0] != "-C" {
+		return transport.Result{}
+	}
+	path := command.Arguments[1]
+	switch command.Arguments[2] {
+	case "status":
+		return transport.Result{}
+	case "rev-parse":
+		if strings.Contains(path, filepath.Join("mds", "nvim", "l")) {
+			return transport.Result{Stdout: "306a05526ada86a7b30af95c5cc81ffba93fef97\n"}
+		}
+		if strings.Contains(path, filepath.Join("mds", "nvim", "p")) {
+			entries := readPluginLock(t, home)
+			entry, exists := entries[filepath.Base(path)]
+			if !exists {
+				t.Fatalf("plugin checkout %s has no lock entry", path)
+			}
+			return transport.Result{Stdout: entry.Commit + "\n"}
+		}
+		return transport.Result{Stdout: starterRevision + "\n"}
+	default:
+		return transport.Result{}
+	}
+}
+
+type testPluginLockEntry struct {
+	Branch string `json:"branch"`
+	Commit string `json:"commit"`
+}
+
+func readPluginLock(t *testing.T, home string) map[string]testPluginLockEntry {
+	t.Helper()
+	content, err := os.ReadFile(filepath.Join(home, ".config", "nvim", "lazy-lock.json"))
+	if err != nil {
+		t.Fatalf("read managed plugin lock: %v", err)
+	}
+	var entries map[string]testPluginLockEntry
+	if err := json.Unmarshal(content, &entries); err != nil {
+		t.Fatalf("decode managed plugin lock: %v", err)
+	}
+	return entries
+}
+
+func materializeManagedPluginPaths(t *testing.T, home string, includeIDE bool) {
+	t.Helper()
+	roots, err := filepath.Glob(filepath.Join(
+		home,
+		".local",
+		"share",
+		"mds",
+		"nvim",
+		"p",
+		"*",
+	))
+	if err != nil || len(roots) != 1 {
+		t.Fatalf("managed plugin roots = %v, err = %v", roots, err)
+	}
+	ideOnly := map[string]bool{
+		"conform.nvim":          true,
+		"nvim-dap":              true,
+		"nvim-dap-ui":           true,
+		"nvim-dap-virtual-text": true,
+		"nvim-lint":             true,
+		"nvim-nio":              true,
+	}
+	for name := range readPluginLock(t, home) {
+		if ideOnly[name] && !includeIDE {
+			continue
+		}
+		if err := os.MkdirAll(filepath.Join(roots[0], name), 0o700); err != nil {
+			t.Fatalf("materialize plugin %s: %v", name, err)
 		}
 	}
 }
+
+type countingComponent struct {
+	observation adapters.Observation
+	applyCalls  int
+}
+
+func (component *countingComponent) Observe(
+	context.Context,
+	planning.Action,
+) (adapters.Observation, error) {
+	return component.observation, nil
+}
+
+func (component *countingComponent) Apply(context.Context, planning.Action) error {
+	component.applyCalls++
+	return nil
+}
+
+func (*countingComponent) Verify(context.Context, planning.Action) error { return nil }
 
 func dockerAction() planning.Action {
 	return planning.Action{
