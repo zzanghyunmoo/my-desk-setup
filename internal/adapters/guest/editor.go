@@ -204,16 +204,15 @@ func (editor Editor) Apply(
 	); err != nil {
 		return fmt.Errorf("write Neovim ownership marker: %w", err)
 	}
-	if err := writeIDEConfiguration(temporary); err != nil {
-		return err
-	}
 	if !replaceExisting {
 		if err := os.Rename(temporary, target); err != nil {
 			return fmt.Errorf("publish Neovim config: %w", err)
 		}
 		return nil
 	}
-	backupFile, err := os.CreateTemp(configDirectory, ".nvim-mds-backup-*")
+	backupPrefix := ".nvim-mds-backup-" +
+		editor.Now().UTC().Format("20060102T150405Z") + "-*"
+	backupFile, err := os.CreateTemp(configDirectory, backupPrefix)
 	if err != nil {
 		return fmt.Errorf("reserve Neovim backup path: %w", err)
 	}

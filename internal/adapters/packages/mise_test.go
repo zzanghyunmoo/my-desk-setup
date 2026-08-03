@@ -41,14 +41,15 @@ func TestMiseInstallUsesStrictLockedPackageAndReshim(t *testing.T) {
 
 func TestToolchainVerificationCompilesAndRunsFixedSources(t *testing.T) {
 	identityCommands := map[string][]string{
-		"java":        {"java", "--version"},
-		"kotlin":      {"kotlinc", "-version"},
-		"go":          {"go", "version"},
-		"python":      {"python", "--version"},
-		"typescript":  {"tsc", "--version"},
-		"c-toolchain": {"cc", "--version"},
-		"flutter":     {"flutter", "--version"},
-		"gradle":      {"gradle", "--version"},
+		"java":           {"java", "--version"},
+		"kotlin":         {"kotlinc", "-version"},
+		"go":             {"go", "version"},
+		"python":         {"python", "--version"},
+		"typescript":     {"tsc", "--version"},
+		"c-toolchain":    {"cc", "--version"},
+		"flutter":        {"flutter", "--version"},
+		"gradle":         {"gradle", "--version"},
+		"nvim-ide-tools": {"clangd", "--version"},
 	}
 	for componentID, scenario := range functionalScenarios {
 		componentID := componentID
@@ -88,6 +89,7 @@ func TestFunctionalScenariosCoverEveryCompileRunComponent(t *testing.T) {
 		"c-toolchain",
 		"flutter",
 		"gradle",
+		"nvim-ide-tools",
 	} {
 		if _, exists := functionalScenarios[componentID]; !exists {
 			t.Errorf("functional scenario is missing for %s", componentID)

@@ -136,4 +136,14 @@ var functionalScenarios = map[string]functionalScenario{
 			"gradle", "--offline", "--no-daemon", "-q", "mdsSmoke",
 		}},
 	},
+	"nvim-ide-tools": {
+		commands: [][]string{
+			{"clang-format", "--version"},
+			{"clang-tidy", "--version"},
+			{"lldb-dap", "--version"},
+			{"dlv", "version"},
+			{"ruff", "--version"},
+			{"python3", "-c", "import debugpy; print('ok')"},
+		},
+	},
 }

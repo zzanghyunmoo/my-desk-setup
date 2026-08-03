@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -166,7 +167,11 @@ func TestExplicitAdoptionBacksUpUserOwnedEditorConfiguration(t *testing.T) {
 	if err := editor.Apply(context.Background(), nvchadAction()); err != nil {
 		t.Fatalf("Apply(adopt): %v", err)
 	}
-	backupMatches, err := filepath.Glob(filepath.Join(home, ".config", ".nvim-mds-backup-*"))
+	backupMatches, err := filepath.Glob(filepath.Join(
+		home,
+		".config",
+		".nvim-mds-backup-20260801T000000Z-*",
+	))
 	if err != nil || len(backupMatches) != 1 {
 		t.Fatalf("backup paths = %v, err = %v", backupMatches, err)
 	}
@@ -174,9 +179,122 @@ func TestExplicitAdoptionBacksUpUserOwnedEditorConfiguration(t *testing.T) {
 	if err != nil || string(backupContent) != "-- user configuration\n" {
 		t.Fatalf("backup content = %q, err = %v", backupContent, err)
 	}
+	if _, err := os.Stat(filepath.Join(root, "lua", "configs", "lspconfig.lua")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("nvchad-only apply published IDE config: %v", err)
+	}
+	editorObservation, err := editor.Observe(context.Background(), nvchadAction())
+	if err != nil || editorObservation.State != adapters.StateReady {
+		t.Fatalf("Editor Observe(after adoption) = %+v, err = %v, want ready", editorObservation, err)
+	}
+
+	ide := guestadapter.IDE{Home: home, Delegate: readyComponent{}}
+	observation, err := ide.Observe(context.Background(), ideAction())
+	if err != nil || observation.State != adapters.StateAbsent {
+		t.Fatalf("IDE Observe(before apply) = %+v, err = %v, want absent", observation, err)
+	}
+	if err := ide.Apply(context.Background(), ideAction()); err != nil {
+		t.Fatalf("IDE Apply(): %v", err)
+	}
+	if err := ide.Verify(context.Background(), ideAction()); err != nil {
+		t.Fatalf("IDE Verify(): %v", err)
+	}
 	managed, err := os.ReadFile(filepath.Join(root, "lua", "configs", "lspconfig.lua"))
 	if err != nil || !strings.Contains(string(managed), "pyright") {
 		t.Fatalf("managed LSP config = %q, err = %v", managed, err)
+	}
+	assertPinnedIDEPluginGraph(t, root)
+
+	lspPath := filepath.Join(root, "lua", "configs", "lspconfig.lua")
+	if err := os.WriteFile(lspPath, []byte("-- drifted\n"), 0o600); err != nil {
+		t.Fatalf("drift managed IDE config: %v", err)
+	}
+	observation, err = ide.Observe(context.Background(), ideAction())
+	if err != nil || observation.State != adapters.StateAbsent ||
+		!strings.Contains(observation.Detail, "differs") {
+		t.Fatalf("IDE Observe(drifted) = %+v, err = %v, want absent", observation, err)
+	}
+	if err := ide.Apply(context.Background(), ideAction()); err != nil {
+		t.Fatalf("IDE Apply(repair): %v", err)
+	}
+	if err := ide.Verify(context.Background(), ideAction()); err != nil {
+		t.Fatalf("IDE Verify(repaired): %v", err)
+	}
+}
+
+func TestNvChadAloneDoesNotPublishIDEConfiguration(t *testing.T) {
+	home := t.TempDir()
+	port := &recordingPort{result: func(command transport.Command) transport.Result {
+		if command.Executable == "git" && len(command.Arguments) >= 3 && command.Arguments[2] == "rev-parse" {
+			return transport.Result{Stdout: nvchadAction().Version + "\n"}
+		}
+		return transport.Result{}
+	}}
+	editor := guestadapter.Editor{
+		Home: home, Port: port, Delegate: readyComponent{},
+		Now: func() time.Time { return time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC) },
+	}
+	if err := editor.Apply(context.Background(), nvchadAction()); err != nil {
+		t.Fatalf("Apply(): %v", err)
+	}
+	for relativePath := range map[string]bool{
+		"lazy-lock.json":            true,
+		"lua/configs/lspconfig.lua": true,
+		"lua/plugins/init.lua":      true,
+	} {
+		if _, err := os.Stat(filepath.Join(home, ".config", "nvim", filepath.FromSlash(relativePath))); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("nvchad-only apply published %s: %v", relativePath, err)
+		}
+	}
+}
+
+func TestIDEObservesAbsentWhenManagedNvChadIsNotInstalled(t *testing.T) {
+	ide := guestadapter.IDE{Home: t.TempDir(), Delegate: readyComponent{}}
+	observation, err := ide.Observe(context.Background(), ideAction())
+	if err != nil {
+		t.Fatalf("Observe(): %v", err)
+	}
+	if observation.State != adapters.StateAbsent ||
+		!strings.Contains(observation.Detail, "starter is missing") {
+		t.Fatalf("observation = %+v, want missing starter as absent", observation)
+	}
+}
+
+func TestGuestAdapterOptionsWireExplicitNvChadAdoption(t *testing.T) {
+	home := t.TempDir()
+	root := filepath.Join(home, ".config", "nvim")
+	if err := os.MkdirAll(root, 0o700); err != nil {
+		t.Fatalf("create user config: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "init.lua"), []byte("-- user\n"), 0o600); err != nil {
+		t.Fatalf("write user config: %v", err)
+	}
+	port := &recordingPort{result: func(command transport.Command) transport.Result {
+		if command.Executable == "git" && len(command.Arguments) >= 3 && command.Arguments[2] == "rev-parse" {
+			return transport.Result{Stdout: nvchadAction().Version + "\n"}
+		}
+		return transport.Result{}
+	}}
+	component := guestadapter.New(
+		catalog.Environment{},
+		target.Facts{},
+		port,
+		home,
+		"linux",
+		"amd64",
+		http.DefaultClient,
+		func() time.Time { return time.Date(2026, 8, 1, 1, 2, 3, 0, time.UTC) },
+		guestadapter.Options{AllowAdopt: true},
+	)
+	if err := component.Apply(context.Background(), nvchadAction()); err != nil {
+		t.Fatalf("Apply(): %v", err)
+	}
+	matches, err := filepath.Glob(filepath.Join(
+		home,
+		".config",
+		".nvim-mds-backup-20260801T010203Z-*",
+	))
+	if err != nil || len(matches) != 1 {
+		t.Fatalf("backup paths = %v, err = %v", matches, err)
 	}
 }
 
@@ -513,6 +631,62 @@ func nvchadAction() planning.Action {
 		Verification: [][]string{
 			{"nvim", "--headless", "+checkhealth", "+quit"},
 		},
+	}
+}
+
+func ideAction() planning.Action {
+	return planning.Action{
+		ID:          "lima-guest:mds/nvim-ide-tools",
+		ComponentID: "nvim-ide-tools",
+		Version:     "manager-owned",
+		Verification: [][]string{
+			{"clangd", "--version"},
+			{"gopls", "version"},
+		},
+	}
+}
+
+func assertPinnedIDEPluginGraph(t *testing.T, root string) {
+	t.Helper()
+	content, err := os.ReadFile(filepath.Join(root, "lazy-lock.json"))
+	if err != nil {
+		t.Fatalf("read lazy lock: %v", err)
+	}
+	var entries map[string]struct {
+		Branch string `json:"branch"`
+		Commit string `json:"commit"`
+	}
+	if err := json.Unmarshal(content, &entries); err != nil {
+		t.Fatalf("decode lazy lock: %v", err)
+	}
+	if len(entries) != 32 {
+		t.Fatalf("lazy lock entries = %d, want 32", len(entries))
+	}
+	for name, entry := range entries {
+		decoded, err := hex.DecodeString(entry.Commit)
+		if err != nil || len(decoded) != 20 || entry.Branch == "" {
+			t.Fatalf("plugin %s is not pinned exactly: %+v, err=%v", name, entry, err)
+		}
+	}
+	for name, want := range map[string]string{
+		"lazy.nvim": "306a05526ada86a7b30af95c5cc81ffba93fef97",
+		"NvChad":    "add44b952d631981614bbb8cfc6f7002f296dfe6",
+	} {
+		if got := entries[name].Commit; got != want {
+			t.Fatalf("%s commit = %s, want %s", name, got, want)
+		}
+	}
+	initContent, err := os.ReadFile(filepath.Join(root, "init.lua"))
+	if err != nil {
+		t.Fatalf("read init.lua: %v", err)
+	}
+	for _, revision := range []string{
+		entries["lazy.nvim"].Commit,
+		entries["NvChad"].Commit,
+	} {
+		if !strings.Contains(string(initContent), revision) {
+			t.Fatalf("init.lua does not bind reviewed revision %s", revision)
+		}
 	}
 }
 

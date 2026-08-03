@@ -477,6 +477,38 @@ func TestGuestAllExcludesGUI(t *testing.T) {
 	}
 }
 
+func TestNvimIDEProfileResolvesOnlyReviewedGuestToolGraph(t *testing.T) {
+	environment := loadCatalog(t)
+	resolved, err := catalog.ResolveProfile(
+		environment,
+		"nvim-ide",
+		catalog.TargetWSLGuest,
+	)
+	if err != nil {
+		t.Fatalf("ResolveProfile(nvim-ide): %v", err)
+	}
+	want := map[string]bool{
+		"base-cli":       true,
+		"bun":            true,
+		"c-toolchain":    true,
+		"go":             true,
+		"mise":           true,
+		"neovim":         true,
+		"nvchad":         true,
+		"nvim-ide-tools": true,
+		"pyright":        true,
+		"python":         true,
+	}
+	if got := resolvedIDs(resolved); !reflect.DeepEqual(got, want) {
+		t.Fatalf("nvim-ide resolved ids = %v, want exactly %v", got, want)
+	}
+	for _, item := range resolved {
+		if item.Component.Kind == "agent" || item.Component.Kind == "gui" {
+			t.Fatalf("nvim-ide resolved forbidden %s component %q", item.Component.Kind, item.Component.ID)
+		}
+	}
+}
+
 func TestCertificationProfilesAreReachableOnExactTargets(t *testing.T) {
 	environment := loadCatalog(t)
 	tests := []struct {

@@ -106,14 +106,15 @@ func newApplyCommand(streams Streams, system Runtime) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			componentAdapter, err := currentAdapterWithOptions(
+			componentAdapter, err := currentAdapter(
 				environment,
 				facts,
 				home,
 				system,
-				false,
-				adoptNvChad,
-				guestBootstrapArchive,
+				adapterOptions{
+					AllowAdopt:            adoptNvChad,
+					GuestBootstrapArchive: guestBootstrapArchive,
+				},
 			)
 			if err != nil {
 				var archiveError *hostadapter.GuestBootstrapArchiveError
@@ -202,33 +203,18 @@ func newApplyCommand(streams Streams, system Runtime) *cobra.Command {
 	return command
 }
 
+type adapterOptions struct {
+	AllowReplace          bool
+	AllowAdopt            bool
+	GuestBootstrapArchive string
+}
+
 func currentAdapter(
 	environment catalog.Environment,
 	facts target.Facts,
 	home string,
 	system Runtime,
-	allowReplace bool,
-	allowAdopt bool,
-) (adapters.Component, error) {
-	return currentAdapterWithOptions(
-		environment,
-		facts,
-		home,
-		system,
-		allowReplace,
-		allowAdopt,
-		"",
-	)
-}
-
-func currentAdapterWithOptions(
-	environment catalog.Environment,
-	facts target.Facts,
-	home string,
-	system Runtime,
-	allowReplace bool,
-	allowAdopt bool,
-	guestBootstrapArchive string,
+	options adapterOptions,
 ) (adapters.Component, error) {
 	port := transport.NewLocal()
 	switch facts.ID.Kind {
@@ -240,8 +226,8 @@ func currentAdapterWithOptions(
 			facts.OS,
 			facts.Architecture,
 			hostadapter.Options{
-				AllowReplace:          allowReplace,
-				GuestBootstrapArchive: guestBootstrapArchive,
+				AllowReplace:          options.AllowReplace,
+				GuestBootstrapArchive: options.GuestBootstrapArchive,
 			},
 		)
 	case target.KindWSLGuest, target.KindLimaGuest:
@@ -258,8 +244,10 @@ func currentAdapterWithOptions(
 			facts.Architecture,
 			&http.Client{Timeout: 5 * time.Minute},
 			now,
-			allowReplace,
-			allowAdopt,
+			guestadapter.Options{
+				AllowReplace: options.AllowReplace,
+				AllowAdopt:   options.AllowAdopt,
+			},
 		), nil
 	default:
 		return nil, fmt.Errorf("no adapter for target %s", facts.ID.String())
