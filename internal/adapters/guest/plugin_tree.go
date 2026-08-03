@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 	"time"
 
@@ -347,19 +348,24 @@ func ensurePluginRuntimeRoot(home string) (string, error) {
 	root := filepath.Join(parent, "nvim")
 	info, err := os.Lstat(root)
 	if errors.Is(err, os.ErrNotExist) {
-		if err := os.Mkdir(root, 0o700); err != nil {
-			return "", fmt.Errorf("create managed plugin runtime: %w", err)
+		staging, err := os.MkdirTemp(parent, ".nvim-runtime-*")
+		if err != nil {
+			return "", fmt.Errorf("create managed plugin runtime staging directory: %w", err)
 		}
+		defer os.RemoveAll(staging)
 		content, encodeErr := pluginRuntimeMarkerBytes()
 		if encodeErr != nil {
 			return "", encodeErr
 		}
 		if err := durable.WriteFileNoReplace(
-			filepath.Join(root, ".mds-managed.json"),
+			filepath.Join(staging, ".mds-managed.json"),
 			content,
 			0o600,
 		); err != nil {
 			return "", fmt.Errorf("write plugin runtime marker: %w", err)
+		}
+		if err := durable.PublishDirectory(staging, root); err != nil {
+			return "", fmt.Errorf("publish managed plugin runtime: %w", err)
 		}
 		return root, nil
 	}
@@ -512,7 +518,8 @@ func managedNeovimExecutable(home string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("inspect managed Neovim launcher: %w", err)
 	}
-	if !info.Mode().IsRegular() || info.Mode().Perm()&0o111 == 0 {
+	if !info.Mode().IsRegular() ||
+		(runtime.GOOS != "windows" && info.Mode().Perm()&0o111 == 0) {
 		return "", errors.New("managed Neovim launcher is not a regular executable file")
 	}
 	return executable, nil

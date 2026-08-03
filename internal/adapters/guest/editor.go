@@ -97,7 +97,7 @@ func (editor Editor) Observe(
 			Detail: "managed Neovim config revision differs; use explicit update",
 		}, nil
 	}
-	includeIDE, ready, detail, err := inspectEditorConfiguration(root)
+	_, ready, detail, err := inspectEditorConfiguration(root)
 	if err != nil {
 		return adapters.Observation{}, err
 	}
@@ -108,11 +108,7 @@ func (editor Editor) Observe(
 			Detail:           detail,
 		}, nil
 	}
-	runtimeSet := basePluginSet
-	if includeIDE {
-		runtimeSet = idePluginSet
-	}
-	ready, detail, err = inspectPluginRuntime(ctx, editor.Home, editor.Port, runtimeSet)
+	ready, detail, err = inspectPluginRuntime(ctx, editor.Home, editor.Port, basePluginSet)
 	if err != nil {
 		return adapters.Observation{}, err
 	}
