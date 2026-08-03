@@ -117,18 +117,13 @@ if [ "$#" -ge 4 ] && [ "$1" = -u ] && [ "$2" = -r ]; then
 fi
 exit 2
 `)
-	command := exec.Command(
-		"bash",
-		append(
-			[]string{
-				filepath.Join(root, "scripts", "certification-clock.sh"),
-			},
-			arguments...,
-		)...,
+	command := bashFixtureCommand(
+		root,
+		bin,
+		filepath.Join(root, "scripts", "certification-clock.sh"),
+		arguments...,
 	)
-	command.Dir = root
 	command.Env = environmentWith(map[string]string{
-		"PATH":                  bin + string(os.PathListSeparator) + os.Getenv("PATH"),
 		"MDS_FAKE_LOCAL_EPOCH":  localEpoch,
 		"MDS_FAKE_SERVER_EPOCH": serverEpoch,
 		"MDS_FAKE_DATE_HEADER":  dateHeader,
@@ -575,13 +570,12 @@ esac
 		artifactSize = "33554433"
 	}
 	commit := strings.Repeat("a", 40)
-	command := exec.Command(
-		"bash",
+	command := bashFixtureCommand(
+		root,
+		bin,
 		filepath.Join(root, "scripts", "download-target-evidence.sh"),
 	)
-	command.Dir = root
 	command.Env = environmentWith(map[string]string{
-		"PATH":                     bin + string(os.PathListSeparator) + os.Getenv("PATH"),
 		"GH_TOKEN":                 "fixture-token",
 		"GITHUB_REPOSITORY":        "example/my-desk-setup",
 		"MDS_COMMIT":               commit,
@@ -881,6 +875,31 @@ func writeExecutable(t *testing.T, path, content string) {
 	if err := os.WriteFile(path, []byte(content), 0o700); err != nil {
 		t.Fatalf("WriteFile(%s): %v", path, err)
 	}
+}
+
+func bashFixtureCommand(
+	root,
+	fixtureBin,
+	script string,
+	arguments ...string,
+) *exec.Cmd {
+	const wrapper = `
+fixture_bin=$1
+script=$2
+shift 2
+if command -v cygpath >/dev/null 2>&1; then
+  fixture_bin=$(cygpath -u "$fixture_bin")
+  script=$(cygpath -u "$script")
+fi
+PATH="$fixture_bin:$PATH"
+export PATH
+exec bash "$script" "$@"
+`
+	commandArguments := []string{"-c", wrapper, "mds-contract", fixtureBin, script}
+	commandArguments = append(commandArguments, arguments...)
+	command := exec.Command("bash", commandArguments...)
+	command.Dir = root
+	return command
 }
 
 func environmentWith(overrides map[string]string) []string {
