@@ -91,8 +91,11 @@ func TestCLIExplicitCurrentGuestPreservesObservedImageIdentity(t *testing.T) {
 					return "sha256:" + digest
 				case "MDS_IMAGE_PROVENANCE":
 					return "https://example.invalid/ubuntu.wsl"
-				case "MDS_IMAGE_CREATION_NONCE":
-					return strings.Repeat("b", 64)
+				case "MDS_IMAGE_CREATION_NONCE_COMMITMENT":
+					commitment, _ := target.GuestCreationNonceCommitment(
+						strings.Repeat("b", 64),
+					)
+					return commitment
 				default:
 					return ""
 				}
@@ -115,7 +118,7 @@ func TestCLIExplicitCurrentGuestPreservesObservedImageIdentity(t *testing.T) {
 	}
 	if observed.ImageRevision != "sha256:"+digest ||
 		observed.ImageProvenance != "https://example.invalid/ubuntu.wsl" ||
-		observed.ImageCreationNonce != strings.Repeat("b", 64) {
+		observed.ImageCreationNonceCommitment == "" {
 		t.Fatalf("ObserveTarget input lost guest image identity: %+v", observed)
 	}
 }
@@ -446,6 +449,163 @@ func TestCLIApplyRejectsStaleDigestBeforeStateMutation(t *testing.T) {
 	}
 }
 
+func TestCLIApplyRejectsGuestBootstrapArchiveOutsideHostGuestLifecycle(t *testing.T) {
+	home := t.TempDir()
+	privatePath := filepath.Join(home, "private-release-name.tar.gz")
+	system := cli.Runtime{
+		GOOS: "darwin", GOARCH: "arm64",
+		Getenv:  func(string) string { return "" },
+		HomeDir: func() (string, error) { return home, nil },
+	}
+	plan := cliPlanForComponent(t, system, "xcode")
+	stateRoot := filepath.Join(home, "state")
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	code := cli.Run(
+		[]string{
+			"apply",
+			"--target", "macos-host:local",
+			"--component", "xcode",
+			"--plan-digest", plan.Digest,
+			"--guest-bootstrap-archive", privatePath,
+			"--state-root", stateRoot,
+			"--format", "json",
+		},
+		cli.Streams{
+			Input: strings.NewReader(""), Output: &stdout, Error: &stderr,
+		},
+		system,
+	)
+	if code != cli.ExitInvalidInput {
+		t.Fatalf(
+			"apply code=%d stderr=%q, want invalid-input exit %d",
+			code,
+			stderr.String(),
+			cli.ExitInvalidInput,
+		)
+	}
+	envelope := decodeCLIError(t, stderr.Bytes())
+	if !strings.Contains(
+		envelope.Details.Cause,
+		"requires a selected Lima or WSL guest lifecycle component",
+	) {
+		t.Fatalf("apply error = %+v, want lifecycle selection rejection", envelope)
+	}
+	if strings.Contains(stderr.String(), privatePath) ||
+		strings.Contains(stderr.String(), filepath.Base(privatePath)) {
+		t.Fatalf("apply error leaks guest archive path: %q", stderr.String())
+	}
+	if _, err := os.Stat(stateRoot); !os.IsNotExist(err) {
+		t.Fatalf("state root exists after rejected archive flag: %v", err)
+	}
+}
+
+func TestCLIApplyRejectsRelativeGuestBootstrapArchiveBeforeMutation(t *testing.T) {
+	home := t.TempDir()
+	system := cli.Runtime{
+		GOOS: "darwin", GOARCH: "arm64",
+		Getenv:  func(string) string { return "" },
+		HomeDir: func() (string, error) { return home, nil },
+	}
+	plan := cliPlanForComponent(t, system, "lima")
+	stateRoot := filepath.Join(home, "state")
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	code := cli.Run(
+		[]string{
+			"apply",
+			"--target", "macos-host:local",
+			"--component", "lima",
+			"--plan-digest", plan.Digest,
+			"--guest-bootstrap-archive", "private-release-name.tar.gz",
+			"--state-root", stateRoot,
+			"--format", "json",
+		},
+		cli.Streams{
+			Input: strings.NewReader(""), Output: &stdout, Error: &stderr,
+		},
+		system,
+	)
+	if code != cli.ExitInvalidInput {
+		t.Fatalf(
+			"apply code=%d stderr=%q, want invalid-input exit %d",
+			code,
+			stderr.String(),
+			cli.ExitInvalidInput,
+		)
+	}
+	envelope := decodeCLIError(t, stderr.Bytes())
+	if !strings.Contains(envelope.Details.Cause, "requires an absolute path") {
+		t.Fatalf("apply error = %+v, want absolute-path rejection", envelope)
+	}
+	if strings.Contains(stderr.String(), "private-release-name") {
+		t.Fatalf("apply error leaks guest archive path: %q", stderr.String())
+	}
+	if _, err := os.Stat(stateRoot); !os.IsNotExist(err) {
+		t.Fatalf("state root exists after rejected relative archive: %v", err)
+	}
+}
+
+func TestCLIApplyClassifiesUnsafeGuestBootstrapArchiveAsInvalidInput(t *testing.T) {
+	home := t.TempDir()
+	privatePath := filepath.Join(home, "private-release-missing.tar.gz")
+	originalURL := version.GuestLinuxARM64URL
+	originalSHA256 := version.GuestLinuxARM64SHA256
+	version.GuestLinuxARM64URL = "https://example.invalid/mds-linux-arm64.tar.gz"
+	version.GuestLinuxARM64SHA256 = strings.Repeat("a", 64)
+	t.Cleanup(func() {
+		version.GuestLinuxARM64URL = originalURL
+		version.GuestLinuxARM64SHA256 = originalSHA256
+	})
+	system := cli.Runtime{
+		GOOS: "darwin", GOARCH: "arm64",
+		Getenv:  func(string) string { return "" },
+		HomeDir: func() (string, error) { return home, nil },
+	}
+	plan := cliPlanForComponent(t, system, "lima")
+	stateRoot := filepath.Join(home, "state")
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	code := cli.Run(
+		[]string{
+			"apply",
+			"--target", "macos-host:local",
+			"--component", "lima",
+			"--plan-digest", plan.Digest,
+			"--guest-bootstrap-archive", privatePath,
+			"--state-root", stateRoot,
+			"--format", "json",
+		},
+		cli.Streams{
+			Input: strings.NewReader(""), Output: &stdout, Error: &stderr,
+		},
+		system,
+	)
+	if code != cli.ExitInvalidInput {
+		t.Fatalf(
+			"apply code=%d stderr=%q, want invalid-input exit %d",
+			code,
+			stderr.String(),
+			cli.ExitInvalidInput,
+		)
+	}
+	envelope := decodeCLIError(t, stderr.Bytes())
+	if envelope.Code != "invalid-input" ||
+		!strings.Contains(envelope.Details.Cause, "cannot be opened safely") {
+		t.Fatalf("apply error = %+v, want archive invalid-input", envelope)
+	}
+	if strings.Contains(stderr.String(), privatePath) ||
+		strings.Contains(stderr.String(), filepath.Base(privatePath)) {
+		t.Fatalf("apply error leaks guest archive path: %q", stderr.String())
+	}
+	if _, err := os.Stat(stateRoot); !os.IsNotExist(err) {
+		t.Fatalf("state root exists after rejected archive: %v", err)
+	}
+}
+
 func TestCLIApplyEmitsActionRequiredWithoutAuth(t *testing.T) {
 	home := t.TempDir()
 	system := cli.Runtime{
@@ -555,6 +715,33 @@ func TestCLIDoctorPartialReportRemainsSingleJSONDocument(t *testing.T) {
 	if envelope.Code != "action-required" {
 		t.Fatalf("error envelope = %+v, want action-required", envelope)
 	}
+}
+
+func cliPlanForComponent(
+	t *testing.T,
+	system cli.Runtime,
+	component string,
+) planning.Plan {
+	t.Helper()
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	if code := cli.Run(
+		[]string{
+			"plan",
+			"--target", "macos-host:local",
+			"--component", component,
+			"--format", "json",
+		},
+		cli.Streams{
+			Input: strings.NewReader(""), Output: &stdout, Error: &stderr,
+		},
+		system,
+	); code != cli.ExitSuccess {
+		t.Fatalf("plan code=%d stderr=%q", code, stderr.String())
+	}
+	var plan planning.Plan
+	decodeSingleJSON(t, stdout.Bytes(), &plan)
+	return plan
 }
 
 func decodeCLIError(t *testing.T, content []byte) cli.ErrorEnvelope {

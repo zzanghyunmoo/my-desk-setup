@@ -1,0 +1,15 @@
+schema_version: 1
+id: certification-macos-host
+description: Reachable macOS host release certification surface.
+selection:
+  - bun
+  - chrome
+  - claude-code
+  - codex
+  - kakaotalk
+  - lima
+  - linear-desktop
+  - notion-desktop
+  - opencode
+  - slack
+  - wezterm

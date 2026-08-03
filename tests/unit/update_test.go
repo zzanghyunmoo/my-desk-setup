@@ -230,6 +230,11 @@ func TestUpdateErrorsClassifyLocalValidationAndStalePlan(t *testing.T) {
 	} else if got := updateflow.KindOf(err); got != updateflow.ErrorStale {
 		t.Fatalf("Verify() kind = %q, want %q; err=%v", got, updateflow.ErrorStale, err)
 	}
+	versionOne := updateflow.Plan{SchemaVersion: "mds.update/v1"}
+	if err := updateflow.Verify(versionOne, "sha256:not-reviewed"); err == nil ||
+		!strings.Contains(err.Error(), "unsupported update plan schema") {
+		t.Fatalf("Verify(v1) error = %v", err)
+	}
 
 	_, err = updateflow.Discover(
 		context.Background(),

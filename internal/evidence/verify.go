@@ -68,6 +68,12 @@ func Verify(root string, options VerifyOptions) (Manifest, error) {
 	if err != nil {
 		return Manifest{}, err
 	}
+	cohortCommitPrefix, err := CertificationCohortCommitPrefix(manifest.Cohort)
+	if err != nil || cohortCommitPrefix != cli.Commit[:8] {
+		return Manifest{}, errors.New(
+			"certification cohort does not match the production CLI commit",
+		)
+	}
 	components, err := validatePlanDoctor(plan, snapshot, cli, manifest.Target.ID)
 	if err != nil {
 		return Manifest{}, err
@@ -135,10 +141,11 @@ func Verify(root string, options VerifyOptions) (Manifest, error) {
 			expectedStatus,
 		)
 	}
-	if options.RequirePublicationAcceptable {
-		if err := validatePublicationAcceptable(manifest, plan, snapshot); err != nil {
-			return Manifest{}, err
-		}
+	if options.RequireVerified && manifest.Status != StatusVerified {
+		return Manifest{}, fmt.Errorf(
+			"actual target evidence status is %s, not verified",
+			manifest.Status,
+		)
 	}
 	return manifest, nil
 }
@@ -163,6 +170,9 @@ func validateManifest(manifest Manifest, options VerifyOptions) error {
 			"actual target evidence cannot claim status %q",
 			manifest.Status,
 		)
+	}
+	if err := ValidateCertificationCohort(manifest.Cohort); err != nil {
+		return err
 	}
 	if exactartifact.ValidateSHA256(manifest.BinarySHA256) != nil {
 		return errors.New(
@@ -225,58 +235,11 @@ func validateManifest(manifest Manifest, options VerifyOptions) error {
 			options.ExpectedBinarySHA256,
 		)
 	}
-	return nil
-}
-
-func validatePublicationAcceptable(
-	manifest Manifest,
-	plan planning.Plan,
-	snapshot DoctorSnapshot,
-) error {
-	if manifest.Status == StatusVerified {
-		return nil
-	}
-	if manifest.Status != StatusBlocked {
+	if options.ExpectedCohort != "" && manifest.Cohort != options.ExpectedCohort {
 		return fmt.Errorf(
-			"evidence status %q is not publication acceptable",
-			manifest.Status,
-		)
-	}
-	if !targetIdentityComplete(plan.Target) {
-		return errors.New(
-			"blocked evidence with incomplete target identity is not publication acceptable",
-		)
-	}
-	if len(plan.Actions) != len(snapshot.Checks) {
-		return errors.New(
-			"blocked evidence does not cover every requested component",
-		)
-	}
-	actionRequired := 0
-	checks := make(map[string]ComponentCheck, len(snapshot.Checks))
-	for _, check := range snapshot.Checks {
-		checks[check.ActionID] = check
-	}
-	for _, action := range plan.Actions {
-		check := checks[action.ID]
-		if check.Status == "ready" {
-			continue
-		}
-		if action.Status != planning.ActionActionRequired ||
-			check.Status != "action-required" ||
-			check.ReasonCode != "action-required" {
-			return fmt.Errorf(
-				"component %q outcome %q/%q is not publication acceptable",
-				action.ComponentID,
-				action.Status,
-				check.Status,
-			)
-		}
-		actionRequired++
-	}
-	if actionRequired == 0 {
-		return errors.New(
-			"blocked evidence has no honest action-required outcome",
+			"wrong certification cohort: evidence=%q expected=%q",
+			manifest.Cohort,
+			options.ExpectedCohort,
 		)
 	}
 	return nil
@@ -586,7 +549,9 @@ func targetIdentityComplete(facts target.Facts) bool {
 			facts.RuntimeVersion != "" &&
 			facts.ImageRevision != "" &&
 			facts.ImageProvenance != "" &&
-			facts.ImageCreationNonce != ""
+			target.ValidateGuestCreationNonceCommitment(
+				facts.ImageCreationNonceCommitment,
+			) == nil
 	default:
 		return false
 	}

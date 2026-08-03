@@ -4,10 +4,16 @@ set -euo pipefail
 : "${GH_TOKEN:?set GH_TOKEN for GitHub Actions artifact reads}"
 : "${GITHUB_REPOSITORY:?set GITHUB_REPOSITORY to owner/repository}"
 : "${MDS_COMMIT:?set MDS_COMMIT to the exact release commit}"
+: "${MDS_CERTIFICATION_COHORT:?set MDS_CERTIFICATION_COHORT to the selected certification cohort}"
 : "${MDS_EVIDENCE_ROOT:?set MDS_EVIDENCE_ROOT to a new evidence directory}"
 
 if [[ ! "$MDS_COMMIT" =~ ^[0-9a-f]{40}$|^[0-9a-f]{64}$ ]]; then
   echo "MDS_COMMIT must be a full lowercase commit SHA" >&2
+  exit 2
+fi
+if [[ ! "$MDS_CERTIFICATION_COHORT" =~ ^cert-[0-9]{8}T[0-9]{6}Z-[0-9a-f]{8}$ ]] ||
+  [[ "${MDS_CERTIFICATION_COHORT##*-}" != "${MDS_COMMIT:0:8}" ]]; then
+  echo "MDS_CERTIFICATION_COHORT must be canonical and match MDS_COMMIT" >&2
   exit 2
 fi
 if [[ -e "$MDS_EVIDENCE_ROOT" ]]; then
@@ -18,19 +24,30 @@ fi
 mds_tmp=$(mktemp -d)
 trap 'rm -rf -- "$mds_tmp"' EXIT
 
-gh api --paginate --slurp \
+gh api \
   "repos/$GITHUB_REPOSITORY/actions/workflows/target-certification.yml/runs?event=workflow_dispatch&status=completed&head_sha=$MDS_COMMIT&per_page=100" \
   > "$mds_tmp/runs.json"
 
 jq --arg commit "$MDS_COMMIT" \
-  '[.[].workflow_runs[]
+  --arg cohort_time "${MDS_CERTIFICATION_COHORT:5:16}" \
+  '($cohort_time | strptime("%Y%m%dT%H%M%SZ") | mktime) as $cohort_start
+   | [.workflow_runs[]
     | select(.head_sha == $commit and .event == "workflow_dispatch" and .conclusion == "success")]
+    | map(select(
+        (.created_at | fromdateiso8601) >= ($cohort_start - 300) and
+        (.created_at | fromdateiso8601) <= ($cohort_start + 14400)
+      ))
    | unique_by(.id)
    | .[].id' \
-  "$mds_tmp/runs.json" > "$mds_tmp/run-ids.txt"
+  "$mds_tmp/runs.json" | tr -d '\r' > "$mds_tmp/run-ids.txt"
 
 if [[ ! -s "$mds_tmp/run-ids.txt" ]]; then
   echo "no successful target-certification runs found for $MDS_COMMIT" >&2
+  exit 1
+fi
+mds_run_count=$(wc -l < "$mds_tmp/run-ids.txt" | tr -d ' ')
+if ((mds_run_count > 16)); then
+  echo "certification cohort has too many successful run candidates: $mds_run_count" >&2
   exit 1
 fi
 
@@ -38,60 +55,87 @@ fi
 while IFS= read -r mds_run_id; do
   mds_run_attempt=$(
     jq -er --arg run_id "$mds_run_id" \
-      '[.[].workflow_runs[]
+      '[.workflow_runs[]
         | select((.id | tostring) == $run_id)
         | .run_attempt]
        | unique
        | if length == 1 then .[0] else error("ambiguous run attempt") end' \
-      "$mds_tmp/runs.json"
+      "$mds_tmp/runs.json" | tr -d '\r'
   )
-  gh api --paginate --slurp \
+  gh api \
     "repos/$GITHUB_REPOSITORY/actions/runs/$mds_run_id/artifacts?per_page=100" \
     > "$mds_tmp/artifacts-$mds_run_id.json"
   jq -r \
     --arg commit "$MDS_COMMIT" \
+    --arg cohort "$MDS_CERTIFICATION_COHORT" \
     --arg run_id "$mds_run_id" \
     --arg run_attempt "$mds_run_attempt" \
-    '.[].artifacts[]
+    '.artifacts[]
      | select(.expired == false)
      | select(.name
        | test("^target-evidence-(macos-host|windows-host|wsl-guest|lima-guest)-"
-              + $commit + "-" + $run_id + "-" + $run_attempt + "$"))
-     | [.name, (.id | tostring)] | @tsv' \
-    "$mds_tmp/artifacts-$mds_run_id.json" >> "$mds_tmp/artifacts.tsv"
+              + $commit + "-" + $cohort + "-" + $run_id + "-" + $run_attempt + "$"))
+     | [.name, (.id | tostring), (.size_in_bytes | tostring)] | @tsv' \
+    "$mds_tmp/artifacts-$mds_run_id.json" | tr -d '\r' >> "$mds_tmp/artifacts.tsv"
 done < "$mds_tmp/run-ids.txt"
 
-mkdir -m 700 "$MDS_EVIDENCE_ROOT"
+case "$(uname -s)" in
+  MINGW* | MSYS* | CYGWIN*)
+    mkdir "$MDS_EVIDENCE_ROOT"
+    ;;
+  *)
+    mkdir -m 700 "$MDS_EVIDENCE_ROOT"
+    ;;
+esac
 for mds_kind in macos-host windows-host wsl-guest lima-guest; do
-  mds_prefix="target-evidence-$mds_kind-$MDS_COMMIT-"
+  mds_prefix="target-evidence-$mds_kind-$MDS_COMMIT-$MDS_CERTIFICATION_COHORT-"
   mapfile -t mds_matches < <(
     awk -F '\t' -v prefix="$mds_prefix" \
-      'index($1, prefix) == 1 { print $1 "\t" $2 }' \
+      'index($1, prefix) == 1 { print $1 "\t" $2 "\t" $3 }' \
       "$mds_tmp/artifacts.tsv"
   )
   if [[ ${#mds_matches[@]} -ne 1 ]]; then
-    echo "expected exactly one $mds_kind artifact for $MDS_COMMIT; found ${#mds_matches[@]}" >&2
+    echo "expected exactly one $mds_kind artifact for $MDS_COMMIT and $MDS_CERTIFICATION_COHORT; found ${#mds_matches[@]}" >&2
     exit 1
   fi
-  IFS=$'\t' read -r mds_name mds_artifact_id <<< "${mds_matches[0]}"
-  if [[ ! "$mds_name" =~ ^target-evidence-$mds_kind-$MDS_COMMIT-[0-9]+-[0-9]+$ ]]; then
+  IFS=$'\t' read -r mds_name mds_artifact_id mds_artifact_size <<< "${mds_matches[0]}"
+  if [[ ! "$mds_name" =~ ^target-evidence-$mds_kind-$MDS_COMMIT-$MDS_CERTIFICATION_COHORT-[0-9]+-[0-9]+$ ]]; then
     echo "artifact name is not canonical: $mds_name" >&2
     exit 1
   fi
-  mds_zip="$mds_tmp/$mds_kind.zip"
-  gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$mds_artifact_id/zip" > "$mds_zip"
-  unzip -Z1 "$mds_zip" | LC_ALL=C sort > "$mds_tmp/$mds_kind-entries.txt"
-  printf '%s\n' \
-    checksums.txt \
-    doctor.json \
-    manifest.json \
-    plan.json > "$mds_tmp/expected-entries.txt"
-  if ! cmp -s \
-    "$mds_tmp/expected-entries.txt" \
-    "$mds_tmp/$mds_kind-entries.txt"; then
-    echo "evidence artifact $mds_name does not contain the exact four-file bundle" >&2
+  if [[ ! "$mds_artifact_size" =~ ^[0-9]+$ ]] ||
+    ((mds_artifact_size == 0 || mds_artifact_size > 33554432)); then
+    echo "evidence artifact $mds_name exceeds the 32 MiB archive limit" >&2
     exit 1
   fi
-  mkdir -m 700 "$MDS_EVIDENCE_ROOT/$mds_kind"
-  unzip -q "$mds_zip" -d "$MDS_EVIDENCE_ROOT/$mds_kind"
+  mds_zip="$mds_tmp/$mds_kind.zip"
+  mds_download_status=(0 0)
+  if (ulimit -f 65536) 2>/dev/null; then
+    (
+      ulimit -f 65536
+      gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$mds_artifact_id/zip"
+    ) > "$mds_zip"
+  else
+    set +e
+    gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$mds_artifact_id/zip" |
+      head -c 33554433 > "$mds_zip"
+    mds_download_status=("${PIPESTATUS[@]}")
+    set -e
+    if ((mds_download_status[1] != 0)); then
+      echo "failed to bound downloaded evidence artifact $mds_name" >&2
+      exit 1
+    fi
+  fi
+  mds_zip_size=$(wc -c < "$mds_zip")
+  if ((mds_download_status[0] != 0 && mds_zip_size <= 33554432)); then
+    echo "failed to download evidence artifact $mds_name" >&2
+    exit 1
+  fi
+  if [[ ! -s "$mds_zip" ]] || ((mds_zip_size > 33554432)); then
+    echo "downloaded evidence artifact $mds_name exceeds the 32 MiB archive limit" >&2
+    exit 1
+  fi
+  go run ./cmd/mds-release extract-evidence \
+    --archive "$mds_zip" \
+    --output "$MDS_EVIDENCE_ROOT/$mds_name"
 done

@@ -72,7 +72,7 @@ mds update \
   --format json
 ```
 
-출력 `mds.update/v1`에서 다음을 검토한다.
+출력 `mds.update/v2`에서 다음을 검토한다.
 
 - `component_id`, `lock_key`
 - `before_catalog_revision`, `after_catalog_revision`

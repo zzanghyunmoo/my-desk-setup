@@ -27,7 +27,7 @@ import (
 )
 
 const (
-	SchemaVersion = "mds.release/v1"
+	SchemaVersion = "mds.release/v2"
 
 	manifestName  = "release-manifest.json"
 	checksumsName = "checksums.txt"
@@ -71,6 +71,7 @@ type Manifest struct {
 	Date            string      `json:"date"`
 	CatalogRevision string      `json:"catalog_revision"`
 	Artifacts       []Artifact  `json:"artifacts"`
+	Certifiers      []Certifier `json:"certifiers"`
 	Bootstraps      []Bootstrap `json:"bootstraps"`
 }
 
@@ -154,6 +155,7 @@ func Build(ctx context.Context, options Options) (returnErr error) {
 		Date:            options.Date.UTC().Format(time.RFC3339),
 		CatalogRevision: catalogRevision,
 		Artifacts:       make([]Artifact, 0, len(releaseTargets)),
+		Certifiers:      make([]Certifier, 0, len(releaseTargets)),
 		Bootstraps:      make([]Bootstrap, 0, len(releaseBootstraps)),
 	}
 	for _, releaseTarget := range releaseTargets {
@@ -195,6 +197,13 @@ func Build(ctx context.Context, options Options) (returnErr error) {
 			SHA256:        digest,
 			Size:          size,
 		})
+		certifier, err := stageCertifier(
+			ctx, sourceRoot, staging, releaseTarget, manifest,
+		)
+		if err != nil {
+			return err
+		}
+		manifest.Certifiers = append(manifest.Certifiers, certifier)
 	}
 	for _, expected := range releaseBootstraps {
 		source := filepath.Join(sourceRoot, "bootstrap", expected.name)
@@ -251,6 +260,9 @@ func Verify(directory string) (Manifest, error) {
 	for _, artifact := range manifest.Artifacts {
 		expectedFiles[artifact.Name] = true
 	}
+	for _, certifier := range manifest.Certifiers {
+		expectedFiles[certifier.Name] = true
+	}
 	for _, bootstrap := range manifest.Bootstraps {
 		expectedFiles[bootstrap.Name] = true
 	}
@@ -261,11 +273,11 @@ func Verify(directory string) (Manifest, error) {
 	if err != nil {
 		return Manifest{}, err
 	}
-	if len(checksums) != len(manifest.Artifacts)+len(manifest.Bootstraps) {
+	if len(checksums) != len(manifest.Artifacts)+len(manifest.Certifiers)+len(manifest.Bootstraps) {
 		return Manifest{}, fmt.Errorf(
 			"checksums file has %d entries, want %d",
 			len(checksums),
-			len(manifest.Artifacts)+len(manifest.Bootstraps),
+			len(manifest.Artifacts)+len(manifest.Certifiers)+len(manifest.Bootstraps),
 		)
 	}
 	for _, artifact := range manifest.Artifacts {
@@ -274,6 +286,11 @@ func Verify(directory string) (Manifest, error) {
 		}
 		if err := verifyArchive(filepath.Join(root, artifact.Name), artifact); err != nil {
 			return Manifest{}, fmt.Errorf("verify %s: %w", artifact.Name, err)
+		}
+	}
+	for _, certifier := range manifest.Certifiers {
+		if err := verifyFileIdentity(root, certifier.Name, certifier.SHA256, certifier.Size, checksums); err != nil {
+			return Manifest{}, err
 		}
 	}
 	for _, bootstrap := range manifest.Bootstraps {
@@ -310,13 +327,33 @@ func buildBinary(
 	releaseTarget target,
 	manifest Manifest,
 ) error {
+	return buildExecutable(
+		ctx,
+		sourceRoot,
+		output,
+		releaseTarget,
+		manifest,
+		"./cmd/mds",
+		true,
+	)
+}
+
+func buildExecutable(
+	ctx context.Context,
+	sourceRoot,
+	output string,
+	releaseTarget target,
+	manifest Manifest,
+	packagePath string,
+	includeGuestIdentity bool,
+) error {
 	ldflags := strings.Join([]string{
 		"-s", "-w",
 		"-X", "github.com/zzanghyunmoo/my-desk-setup/internal/version.Version=" + manifest.Version,
 		"-X", "github.com/zzanghyunmoo/my-desk-setup/internal/version.Commit=" + manifest.Commit,
 		"-X", "github.com/zzanghyunmoo/my-desk-setup/internal/version.Date=" + manifest.Date,
 	}, " ")
-	if releaseTarget.os != "linux" {
+	if includeGuestIdentity && releaseTarget.os != "linux" {
 		guestFlags, err := guestArtifactLDFlags(manifest)
 		if err != nil {
 			return fmt.Errorf(
@@ -335,7 +372,7 @@ func buildBinary(
 		"-buildvcs=false",
 		"-ldflags", ldflags,
 		"-o", output,
-		"./cmd/mds",
+		packagePath,
 	)
 	command.Dir = sourceRoot
 	command.Env = buildEnvironment(os.Environ(), map[string]string{
@@ -566,9 +603,12 @@ func writeManifest(root string, manifest Manifest) error {
 }
 
 func writeChecksums(root string, manifest Manifest) error {
-	values := make(map[string]string, len(manifest.Artifacts)+len(manifest.Bootstraps))
+	values := make(map[string]string, len(manifest.Artifacts)+len(manifest.Certifiers)+len(manifest.Bootstraps))
 	for _, artifact := range manifest.Artifacts {
 		values[artifact.Name] = artifact.SHA256
+	}
+	for _, certifier := range manifest.Certifiers {
+		values[certifier.Name] = certifier.SHA256
 	}
 	for _, bootstrap := range manifest.Bootstraps {
 		values[bootstrap.Name] = bootstrap.SHA256
@@ -668,6 +708,9 @@ func validateManifest(manifest Manifest) error {
 			artifact.Size <= 0 {
 			return fmt.Errorf("manifest artifact %q has invalid file identity", artifact.Name)
 		}
+	}
+	if err := validateCertifiers(manifest); err != nil {
+		return err
 	}
 	if len(manifest.Bootstraps) != len(releaseBootstraps) {
 		return fmt.Errorf(

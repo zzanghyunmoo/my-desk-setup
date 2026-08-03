@@ -14,6 +14,12 @@ mds_<version>_windows_amd64.zip
 mds_<version>_windows_arm64.zip
 mds_<version>_linux_amd64.tar.gz
 mds_<version>_linux_arm64.tar.gz
+mds-evidence_<version>_darwin_amd64
+mds-evidence_<version>_darwin_arm64
+mds-evidence_<version>_windows_amd64.exe
+mds-evidence_<version>_windows_arm64.exe
+mds-evidence_<version>_linux_amd64
+mds-evidence_<version>_linux_arm64
 macos.sh
 windows.ps1
 checksums.txt
@@ -21,7 +27,7 @@ release-manifest.json
 ```
 
 `release-manifest.json`은 release version, source commit, release timestamp와 각
-artifact identity를 기록한다. 여기에는 embedded catalog revision과 각 archive
+artifact 및 certifier identity를 기록한다. 여기에는 embedded catalog revision과 각 archive
 안의 실제 binary SHA-256도 포함된다. `checksums.txt`는 publish된 archive의
 SHA-256을 제공한다. manifest가 가리키지 않거나 archive 또는 내부 binary
 checksum이 맞지 않는 archive를 bootstrap 또는 target certification에 사용하지
@@ -40,7 +46,7 @@ macOS와 Windows host binary에는 같은 release의 Linux `amd64`/`arm64`
 archive URL과 SHA-256이 함께 embed된다. guest bootstrap은 이 exact identity만
 사용하며 `latest`나 별도 moving catalog를 조회하지 않는다. GitHub Release
 asset download는 최대 3회의 HTTPS redirect만 따르고, 최종 authority에
-userinfo가 없는지 확인하며, 512 MiB 제한과 exact SHA-256 검증을 모두
+userinfo가 없는지 확인하며, 256 MiB 제한과 exact SHA-256 검증을 모두
 통과해야 extraction을 시작한다. Windows downloader의 10분 cancellation
 token은 redirect와 response header뿐 아니라 비동기 body read 전체에도
 적용된다.
@@ -57,8 +63,8 @@ MDS_DATE='<RFC3339-release-timestamp>' \
 scripts/build-release.sh ./dist
 ```
 
-builder는 `mds.release/v1` manifest, 두 bootstrap과 여섯 OS/architecture
-archive를 staging directory에서 만든 뒤 자체 검증에 성공해야 output
+builder는 `mds.release/v2` manifest, 두 bootstrap, 여섯 OS/architecture
+archive와 여섯 `mds-evidence` certifier를 staging directory에서 만든 뒤 자체 검증에 성공해야 output
 directory를 publish한다.
 
 ## Release 검증
@@ -129,13 +135,22 @@ Lima만 별도로 검토하고 준비할 수도 있다.
 "$HOME/.local/bin/mds" apply \
   --component lima \
   --plan-digest 'sha256:<reviewed-lima-plan-digest>' \
+  --guest-bootstrap-archive '/absolute/path/to/mds_0.1.0_linux_arm64.tar.gz' \
   --format json
 ```
 
+첫 release처럼 공개 asset이 아직 없을 때만 apply 전용
+`--guest-bootstrap-archive`로 같은 release의 absolute local archive를
+지정할 수 있다. Host binary에 embedded된 현재 architecture의 SHA-256과
+일치하는 regular non-symlink file만 허용하며, 256 MiB 이하의 한 번 연
+handle snapshot만 guest에 전달한다. 경로는 plan digest, receipt와 state에
+저장되지 않는다. Flag를 생략하면 embedded canonical HTTPS URL을 사용한다.
+
 adapter는 pinned Ubuntu 26.04 image와 digest로 `mds`라는 Lima instance를
 생성한다. template은 선택 architecture의 단일 image URL·SHA-256과
-transaction별 creation nonce를 stdin으로 전달한다. 제품 ownership receipt가
-없거나 live root-owned marker의 nonce가 receipt와 다른 same-name instance는
+transaction별 creation nonce commitment를 stdin으로 전달한다. 원본 nonce는
+owner-only host record에만 기록한다. 제품 ownership receipt가 없거나 live
+root-owned marker의 commitment가 receipt에서 계산한 값과 다른 same-name instance는
 시작·bootstrap·재구성하지 않고 conflict/action-required로 중단한다. 기존
 instance가 stopped 상태면 mds가 먼저 시작하지 않으며, 사용자가 시작한 뒤
 marker를 재검증한다.
@@ -223,6 +238,7 @@ WSL만 별도로 계획할 수 있다.
 & $mds apply `
   --component wsl `
   --plan-digest "sha256:<reviewed-wsl-plan-digest>" `
+  --guest-bootstrap-archive "C:\absolute\path\to\mds_0.1.0_linux_amd64.tar.gz" `
   --format json
 ```
 
@@ -234,8 +250,9 @@ temporary file로 image를 streaming download하고 checksum을 검증한 뒤에
 사용하지 않으며 checksum mismatch는 설치 전에 hard failure다.
 제품 ownership receipt가 없는 `Ubuntu-26.04` distribution이 이미 있으면
 image identity가 우연히 같더라도 자동 재구성하지 않고 사용자의 결정을
-요청한다. committed receipt가 있더라도 root-owned marker의 creation nonce가
-다르면 삭제 뒤 같은 이름으로 교체된 외부 distribution으로 판정한다. stopped
+요청한다. committed receipt가 있더라도 root-owned marker의 creation nonce
+commitment가 receipt에서 계산한 값과 다르면 삭제 뒤 같은 이름으로 교체된 외부
+distribution으로 판정한다. stopped
 distribution은 mds가 자동 시작하지 않고 사용자가 먼저 launch한 뒤 marker를
 확인한다.
 
@@ -293,31 +310,69 @@ actual evidence 후보가 된다.
 - `blocked`: 실제 target에서 prerequisite/readiness가 남음
 - `verified`: 해당 실제 target의 모든 필수 probe 통과
 
-actual bundle은 `mds.target-evidence/v1`,
+actual bundle은 `mds.target-evidence/v2`,
 `capture_kind: actual-target`이어야 한다. production `mds`의 absolute,
 regular, non-symlink path와 아직 존재하지 않는 output directory를 사용한다.
+Certifier는 production path를 no-follow/reparse 거부로 한 번 열어 owner-only
+private snapshot을 만들고 SHA-256을 검증한 뒤 모든 subprocess에서 그 exact
+snapshot만 실행한다.
+Certifier 자체도 같은 release manifest가 가리키는 raw `mds-evidence` asset을
+고정 path에 설치하고 manifest SHA-256을 전달해야 한다. Wrapper는 그 파일을
+private snapshot으로 복사해 다시 hash한 뒤 실행하므로 checkout의 Go toolchain이나
+`go run`을 인증 authority로 사용하지 않는다. POSIX 고정 path는
+`/usr/local/bin/mds-evidence`, Windows는
+`C:/ProgramData/my-desk-setup/bin/mds-evidence.exe`다.
 선택 방식은 `--all`, `--profile` 또는 하나 이상의 `--component` 중 하나다.
 
 ```sh
+scripts/prepare-target-certification.sh \
+  --mds-evidence /usr/local/bin/mds-evidence \
+  --expected-mds-evidence-sha256 '<release-certifier-sha256>' \
+  --mds /usr/local/bin/mds \
+  --target macos-host:local \
+  --expected-binary-sha256 '<release-binary-sha256>' \
+  --profile certification-macos-host > preparation.json
+
 scripts/certify-target.sh \
-  --mds "$HOME/.local/bin/mds" \
+  --mds-evidence /usr/local/bin/mds-evidence \
+  --expected-mds-evidence-sha256 '<release-certifier-sha256>' \
+  --mds /usr/local/bin/mds \
   --target macos-host:local \
   --output ./target-evidence/macos-host \
+  --cohort 'cert-20260731T120000Z-<commit8>' \
   --expected-binary-sha256 '<release-binary-sha256>' \
-  --all
+  --expected-plan-digest 'sha256:<reviewed-plan-digest>' \
+  --profile certification-macos-host
 ```
 
-WSL/Lima guest를 수동 인증할 때는 host의 committed ownership record에서 읽은
-creation nonce를 target/name과 대조한 뒤 명시한다.
+WSL/Lima guest를 수동 인증할 때는 host의 committed ownership record와 live
+marker를 먼저 대조하고 host `doctor`의 guest ownership action이 `ready`인지
+확인한다. 이어 exact guest에서 released `mds-evidence prepare`를 실행하고 그 JSON의
+top-level `guest_creation_nonce_commitment`만 dispatch input으로 전달한다. Host plan은
+commitment source가 아니다. Raw nonce는 runner/process environment나 GitHub input에
+넣지 않는다. WSL은 `WSL_DISTRO_NAME=Ubuntu-26.04`, Lima는 `LIMA_INSTANCE=mds` exact
+target identity에서 read-only preparation과 certification을 실행한다.
 
 ```sh
+scripts/prepare-target-certification.sh \
+  --mds-evidence /usr/local/bin/mds-evidence \
+  --expected-mds-evidence-sha256 '<release-certifier-sha256>' \
+  --mds /usr/local/bin/mds \
+  --target lima-guest:mds \
+  --expected-binary-sha256 '<release-binary-sha256>' \
+  --profile certification-lima-guest > preparation.json
+
 scripts/certify-target.sh \
-  --mds "$HOME/.local/bin/mds" \
+  --mds-evidence /usr/local/bin/mds-evidence \
+  --expected-mds-evidence-sha256 '<release-certifier-sha256>' \
+  --mds /usr/local/bin/mds \
   --target lima-guest:mds \
   --output ./target-evidence/lima-guest \
+  --cohort 'cert-20260731T120000Z-<commit8>' \
   --expected-binary-sha256 '<release-binary-sha256>' \
-  --expected-guest-creation-nonce '<host-ownership-creation-nonce>' \
-  --all
+  --expected-plan-digest 'sha256:<reviewed-plan-digest>' \
+  --expected-guest-creation-nonce-commitment 'sha256:<host-reviewed-commitment>' \
+  --profile certification-lima-guest
 ```
 
 certifier는 production binary로 read-only `plan`을 만든 뒤 exact digest의
@@ -333,14 +388,17 @@ bundle을 publication identity와 함께 다시 검증한다.
 
 ```sh
 scripts/verify-target-evidence.sh \
+  --mds-evidence /usr/local/bin/mds-evidence \
+  --expected-mds-evidence-sha256 '<release-certifier-sha256>' \
   --bundle ./target-evidence/macos-host \
   --expected-cli-revision '<exact-cli-revision>' \
   --expected-catalog-revision 'sha256:<expected-catalog-revision>' \
   --expected-plan-digest 'sha256:<reviewed-plan-digest>' \
   --expected-target macos-host:local \
   --expected-binary-sha256 '<release-binary-sha256>' \
+  --expected-cohort 'cert-20260731T120000Z-<commit8>' \
   --max-age 24h \
-  --require-publication-acceptable
+  --require-verified
 ```
 
 `<exact-cli-revision>`은 production `mds --version`의 `mds version ` 뒤에
@@ -350,18 +408,25 @@ identity, on-disk binary SHA-256과 recomputed status를 확인한다.
 manifest에 포함된 first/repeat receipt도 reviewed action 순서·version·target·
 catalog·plan digest 및 complete/no-op 의미와 다시 대조한다.
 
-`--require-publication-acceptable`은 `blocked`를 `verified`로 바꾸지 않는다.
-완전한 표준 target에서 모든 남은 결과가 사용자가 직접 해결해야 하는
-`action-required`일 때만 정직한 manual exception으로 허용한다. planned
-`unready`/`conflict`, `unsupported`, 불완전 target은 거부한다. 모든 component의
-완전한 실제 검증이 필요한 별도 검사에서는 `--require-verified`를 사용한다.
+Release promotion은 manual exception 없이 `--require-verified`만 사용한다.
+`blocked`, planned `unready`/`conflict`, `unsupported`와 불완전 target은 모두
+승격을 차단하고 runner-local 진단으로만 남긴다.
 
 tag workflow는 exact commit의 성공한 target-certification run만 GitHub Actions
-API로 조회한다. artifact 이름은
-`target-evidence-<kind>-<commit>-<run-id>-<attempt>`이며 네 표준 target별로
-정확히 하나여야 한다. 다운로드한 bundle은 Gitleaks 검사를 거친 뒤 release와
-재결합해 promotion한다. promotion report는 publish 단계에서 한 번 더 검증해
-stable `release-promotion.json` asset으로 게시한다.
+API로 조회한다. 한 번의 네-target 시도는
+`cert-<UTC YYYYMMDDThhmmssZ>-<commit8>` cohort를 공유하며 네 capture는 5분의
+clock skew를 제외하고 cohort timestamp부터 4시간 안에 끝나야 한다. Artifact 이름은
+`target-evidence-<kind>-<commit>-<cohort>-<run-id>-<attempt>`이며 선택한
+commit+cohort 안에서 네 표준 target별로 정확히 하나여야 한다. 다운로드한
+bundle은 Gitleaks와 raw-nonce-field 검사를 거친 뒤 release와 재결합해
+promotion한다. Protected annotated tag message에는 정확히 한 줄의
+`Certification-Cohort: <cohort>`를 넣는다. Tag workflow는 같은 tag의 draft
+release를 재사용하고 모든 remote asset bytes를 다시 비교한 뒤에만 publish한다.
+Promotion report는 target별 `captured_at_unix`, 원본 Actions artifact 이름,
+결정론적 evidence ZIP 이름과 SHA-256을 포함한 stable
+`mds.release-promotion/v2` `release-promotion.json` asset으로 게시한다. 네
+verified bundle ZIP도 release asset으로 함께 게시해 Actions retention 뒤에도
+원본 evidence를 다시 검증할 수 있게 한다.
 
 actual-target job은 `target-certification` 보호 environment와 다음 네
 allowlisted label만 사용한다.
@@ -374,21 +439,20 @@ allowlisted label만 사용한다.
 target ID와 runner label은 workflow 안에서 exact pair로 다시 검증한다.
 self-hosted guest certifier는 WSL의 exact distribution 환경과 Microsoft kernel,
 또는 Lima의 exact instance 환경과 root-owned runtime marker를 확인한다. 두 guest
-모두 생성 시 provision된 root-owned `/etc/mds/image-identity-v1`을 독립적으로
-읽어 embedded catalog의 URL·SHA-256과 host ownership record의 creation
-nonce를 runner service의 `MDS_EXPECTED_GUEST_CREATION_NONCE`와 대조한 뒤 그
-관측 identity를 자식 `mds` process에
-전달한다. nonce는 guest plan target fingerprint에도 포함된다. 일반
+모두 생성 시 provision된 root-owned `/etc/mds/image-identity-v1` v3 marker를 독립적으로
+읽어 embedded catalog의 URL·SHA-256과 공개된 domain-separated nonce
+commitment를 대조한 뒤 그 관측 identity의 commitment만 자식 `mds` process에
+전달한다. Commitment는 guest plan target fingerprint에도 포함되지만 raw
+nonce는 runner environment, GitHub metadata, argv, plan과 evidence에 포함되지 않는다. 일반
 handoff와 certification 모두 catalog 값만으로 실제 image identity를 합성하지
 않는다.
 self-hosted runner는 target별 전용 OS 계정과 전용 작업 디렉터리에서 실행하고,
 저장된 API key, browser session, SSH agent, cloud credential 또는 repository
 secret을 두지 않는다. workflow의 자동 `GITHUB_TOKEN`은 `contents: read`로만
-제한하고 environment에는 secret을 등록하지 않는다. guest runner service는
-host의 committed ownership record에서 읽은 nonce를 root-owned service
-configuration에 target별로 고정한다. workflow dispatcher input으로 nonce를
-받지 않으며, 값이 없거나 형식이 틀리면 guest certification을 실행하지 않는다.
-host runner service에는 이 환경값을 두지 않는다. 보호 environment reviewer는
+제한하고 environment에는 secret을 등록하지 않는다. guest one-job runner에는
+raw nonce를 설정하지 않는다. Dispatcher는 host doctor의 record↔marker 검증 뒤
+guest `prepare`가 출력한 commitment만 전달하며, 값이 없거나 형식이 틀리면 guest certification을 실행하지
+않는다. 보호 environment reviewer는
 `github.sha`, target, binary checksum과 runner label을 확인한 뒤 실행을
 허용한다. caller가 임의 expected commit을 전달할 수 없고 protected non-fork
 ref의 `github.sha`만 `persist-credentials: false`로 checkout한다. evidence는
@@ -397,7 +461,7 @@ commit SHA로 고정한다. actual-target job의 240분 상한은 내부 최대 
 180분에 checkout·compile·검증·upload를 위한 60분 여유를 둔다.
 
 전용 계정, exact label, protected environment, host ownership record 검증,
-guest systemd service의 root-owned nonce 주입과 rotation 순서는
+owner-only host record의 raw nonce와 공개 guest marker commitment rotation 순서는
 [actual-target runner 준비](target-certification-runner.md)를 따른다.
 
 현재 U11/final review head에는 macOS host, Windows host, WSL Ubuntu와

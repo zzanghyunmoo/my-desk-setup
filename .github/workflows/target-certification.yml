@@ -4,9 +4,16 @@ on:
   pull_request:
     paths:
       - ".github/workflows/target-certification.yml"
+      - "catalog/**"
       - "cmd/mds-evidence/**"
       - "internal/evidence/**"
+      - ".gitleaks.toml"
       - "scripts/certify-target.sh"
+      - "scripts/certification-clock.sh"
+      - "scripts/prepare-target-certification.sh"
+      - "scripts/run-release-certifier.sh"
+      - "scripts/install-gitleaks.sh"
+      - "scripts/install-gitleaks.ps1"
       - "scripts/verify-target-evidence.sh"
       - "tests/target-evidence/**"
   push:
@@ -14,19 +21,26 @@ on:
       - main
     paths:
       - ".github/workflows/target-certification.yml"
+      - "catalog/**"
       - "cmd/mds-evidence/**"
       - "internal/evidence/**"
+      - ".gitleaks.toml"
       - "scripts/certify-target.sh"
+      - "scripts/certification-clock.sh"
+      - "scripts/prepare-target-certification.sh"
+      - "scripts/run-release-certifier.sh"
+      - "scripts/install-gitleaks.sh"
+      - "scripts/install-gitleaks.ps1"
       - "scripts/verify-target-evidence.sh"
       - "tests/target-evidence/**"
   workflow_dispatch:
     inputs:
-      mds_path:
-        description: Absolute path to the production mds binary on the target
-        required: true
-        type: string
       target_id:
         description: Explicit target ID, for example lima-guest:mds
+        required: true
+        type: string
+      cohort:
+        description: Immutable cohort cert-YYYYMMDDThhmmssZ-commit8 shared by all four targets
         required: true
         type: string
       expected_cli_revision:
@@ -38,11 +52,19 @@ on:
         required: true
         type: string
       expected_plan_digest:
-        description: Exact reviewed target-eligible all-plan digest for this target
+        description: Exact reviewed certification profile plan digest for this target
         required: true
+        type: string
+      expected_guest_creation_nonce_commitment:
+        description: Host-reviewed sha256 commitment from mds-evidence prepare; guest targets only
+        required: false
         type: string
       expected_binary_sha256:
         description: SHA-256 of the exact release mds binary on this target
+        required: true
+        type: string
+      expected_mds_evidence_sha256:
+        description: SHA-256 of the exact release mds-evidence binary on this target
         required: true
         type: string
       runner_label:
@@ -60,7 +82,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: target-certification-${{ github.sha }}-${{ inputs.target_id || 'contract' }}
+  group: target-certification-${{ github.sha }}-${{ inputs.cohort || 'contract' }}-${{ inputs.target_id || 'contract' }}
   cancel-in-progress: false
 
 jobs:
@@ -85,6 +107,23 @@ jobs:
             echo "Hosted fixture status: \`implemented\`."
             echo "No actual target was certified and this job must not be read as \`verified\`."
           } >> "$GITHUB_STEP_SUMMARY"
+
+  fixture-contract-windows:
+    name: Fixture contract (Windows scanner)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install pinned Gitleaks
+        shell: powershell
+        run: scripts/install-gitleaks.ps1 -OutputDirectory "$env:RUNNER_TEMP/mds-tools"
+      - name: Scan fixture evidence
+        shell: pwsh
+        run: |
+          & "$env:RUNNER_TEMP/mds-tools/gitleaks.exe" dir `
+            --no-banner --redact --config .gitleaks.toml `
+            tests/target-evidence
 
   actual-target:
     name: Actual target
@@ -111,10 +150,6 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
           clean: true
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version-file: go.mod
-          cache: true
       - name: Validate immutable certification identity
         id: certification-identity
         shell: bash
@@ -122,6 +157,9 @@ jobs:
           EXPECTED_COMMIT: ${{ github.sha }}
           RUNNER_LABEL: ${{ inputs.runner_label }}
           TARGET_ID: ${{ inputs.target_id }}
+          CERTIFICATION_COHORT: ${{ inputs.cohort }}
+          EXPECTED_GUEST_CREATION_NONCE_COMMITMENT: ${{ inputs.expected_guest_creation_nonce_commitment }}
+          EXPECTED_MDS_EVIDENCE_SHA256: ${{ inputs.expected_mds_evidence_sha256 }}
         run: |
           if [[ ! "$EXPECTED_COMMIT" =~ ^[0-9a-f]{40}$|^[0-9a-f]{64}$ ]]; then
             echo "expected_commit must be a full lowercase commit SHA" >&2
@@ -129,22 +167,47 @@ jobs:
           fi
           test "$(git rev-parse HEAD)" = "$EXPECTED_COMMIT"
           test -z "$(git status --porcelain=v1 --untracked-files=all)"
+          if [[ ! "$EXPECTED_MDS_EVIDENCE_SHA256" =~ ^[0-9a-f]{64}$ ]]; then
+            echo "expected_mds_evidence_sha256 must be a lowercase SHA-256" >&2
+            exit 2
+          fi
+          if [[ ! "$CERTIFICATION_COHORT" =~ ^cert-[0-9]{8}T[0-9]{6}Z-[0-9a-f]{8}$ ]] ||
+            [[ "${CERTIFICATION_COHORT##*-}" != "${EXPECTED_COMMIT:0:8}" ]]; then
+            echo "certification cohort must be canonical and match the protected commit" >&2
+            exit 2
+          fi
           case "$TARGET_ID" in
             macos-host:local)
               target_kind=macos-host
               expected_runner_label=mds-macos-host
+              certification_profile=certification-macos-host
+              mds_path=/usr/local/bin/mds
+              mds_evidence_path=/usr/local/bin/mds-evidence
+              expected_guest_commitment=
               ;;
             windows-host:local)
               target_kind=windows-host
               expected_runner_label=mds-windows-host
+              certification_profile=certification-windows-host
+              mds_path=C:/ProgramData/my-desk-setup/bin/mds.exe
+              mds_evidence_path=C:/ProgramData/my-desk-setup/bin/mds-evidence.exe
+              expected_guest_commitment=
               ;;
             wsl-guest:Ubuntu-26.04)
               target_kind=wsl-guest
               expected_runner_label=mds-wsl-guest
+              certification_profile=certification-wsl-guest
+              mds_path=/usr/local/bin/mds
+              mds_evidence_path=/usr/local/bin/mds-evidence
+              expected_guest_commitment=$EXPECTED_GUEST_CREATION_NONCE_COMMITMENT
               ;;
             lima-guest:mds)
               target_kind=lima-guest
               expected_runner_label=mds-lima-guest
+              certification_profile=certification-lima-guest
+              mds_path=/usr/local/bin/mds
+              mds_evidence_path=/usr/local/bin/mds-evidence
+              expected_guest_commitment=$EXPECTED_GUEST_CREATION_NONCE_COMMITMENT
               ;;
             *)
               echo "unsupported promotion target ID: $TARGET_ID" >&2
@@ -152,45 +215,76 @@ jobs:
               ;;
           esac
           test "$RUNNER_LABEL" = "$expected_runner_label"
-          echo "target_kind=$target_kind" >> "$GITHUB_OUTPUT"
+          if [[ "$target_kind" == *-guest ]]; then
+            if [[ ! "$expected_guest_commitment" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+              echo "guest target requires the reviewed nonce commitment from mds-evidence prepare" >&2
+              exit 2
+            fi
+          elif test -n "$EXPECTED_GUEST_CREATION_NONCE_COMMITMENT"; then
+            echo "host target must not receive a guest nonce commitment" >&2
+            exit 2
+          fi
+          {
+            echo "target_kind=$target_kind"
+            echo "certification_profile=$certification_profile"
+            echo "cohort=$CERTIFICATION_COHORT"
+            echo "mds_path=$mds_path"
+            echo "mds_evidence_path=$mds_evidence_path"
+            echo "expected_guest_commitment=$expected_guest_commitment"
+          } >> "$GITHUB_OUTPUT"
       - name: Prepare target-local evidence path
         shell: bash
         run: |
           echo "EVIDENCE_OUTPUT=$RUNNER_TEMP/mds-target-evidence/run-$GITHUB_RUN_ID-attempt-$GITHUB_RUN_ATTEMPT" >> "$GITHUB_ENV"
+      - name: Verify runner clock against GitHub
+        shell: bash
+        run: scripts/certification-clock.sh verify
       - name: Capture actual target evidence
         continue-on-error: true
         shell: bash
         env:
-          MDS_PATH: ${{ inputs.mds_path }}
+          MDS_PATH: ${{ steps.certification-identity.outputs.mds_path }}
+          MDS_EVIDENCE_PATH: ${{ steps.certification-identity.outputs.mds_evidence_path }}
+          EXPECTED_MDS_EVIDENCE_SHA256: ${{ inputs.expected_mds_evidence_sha256 }}
           TARGET_ID: ${{ inputs.target_id }}
           EXPECTED_BINARY_SHA256: ${{ inputs.expected_binary_sha256 }}
+          CERTIFICATION_PROFILE: ${{ steps.certification-identity.outputs.certification_profile }}
+          CERTIFICATION_COHORT: ${{ steps.certification-identity.outputs.cohort }}
+          EXPECTED_PLAN_DIGEST: ${{ inputs.expected_plan_digest }}
+          EXPECTED_GUEST_CREATION_NONCE_COMMITMENT: ${{ steps.certification-identity.outputs.expected_guest_commitment }}
         run: |
-          nonce_args=()
           case "$TARGET_ID" in
-            wsl-guest:*|lima-guest:*)
-              if [[ ! "${MDS_EXPECTED_GUEST_CREATION_NONCE:-}" =~ ^[0-9a-f]{64}$ ]]; then
-                echo "guest runner service must provide a 64-character lowercase MDS_EXPECTED_GUEST_CREATION_NONCE" >&2
+            wsl-guest:Ubuntu-26.04)
+              if [[ "${WSL_DISTRO_NAME:-}" != Ubuntu-26.04 ]]; then
+                echo "WSL guest runner service must inherit WSL_DISTRO_NAME=Ubuntu-26.04" >&2
                 exit 2
               fi
-              nonce_args=(
-                --expected-guest-creation-nonce
-                "$MDS_EXPECTED_GUEST_CREATION_NONCE"
-              )
               ;;
-            *)
-              if test -n "${MDS_EXPECTED_GUEST_CREATION_NONCE:-}"; then
-                echo "host runner service must not provide MDS_EXPECTED_GUEST_CREATION_NONCE" >&2
+            lima-guest:mds)
+              if [[ "${LIMA_INSTANCE:-}" != mds ]]; then
+                echo "Lima guest runner service must inherit LIMA_INSTANCE=mds" >&2
                 exit 2
               fi
               ;;
           esac
+          commitment_arguments=()
+          if test -n "$EXPECTED_GUEST_CREATION_NONCE_COMMITMENT"; then
+            commitment_arguments=(
+              --expected-guest-creation-nonce-commitment
+              "$EXPECTED_GUEST_CREATION_NONCE_COMMITMENT"
+            )
+          fi
           scripts/certify-target.sh \
+            --mds-evidence "$MDS_EVIDENCE_PATH" \
+            --expected-mds-evidence-sha256 "$EXPECTED_MDS_EVIDENCE_SHA256" \
             --mds "$MDS_PATH" \
             --target "$TARGET_ID" \
             --output "$EVIDENCE_OUTPUT" \
+            --cohort "$CERTIFICATION_COHORT" \
             --expected-binary-sha256 "$EXPECTED_BINARY_SHA256" \
-            "${nonce_args[@]}" \
-            --all
+            --expected-plan-digest "$EXPECTED_PLAN_DIGEST" \
+            "${commitment_arguments[@]}" \
+            --profile "$CERTIFICATION_PROFILE"
       - name: Verify against reviewed release and plan
         if: always()
         shell: bash
@@ -199,17 +293,23 @@ jobs:
           EXPECTED_CATALOG_REVISION: ${{ inputs.expected_catalog_revision }}
           EXPECTED_PLAN_DIGEST: ${{ inputs.expected_plan_digest }}
           EXPECTED_BINARY_SHA256: ${{ inputs.expected_binary_sha256 }}
+          MDS_EVIDENCE_PATH: ${{ steps.certification-identity.outputs.mds_evidence_path }}
+          EXPECTED_MDS_EVIDENCE_SHA256: ${{ inputs.expected_mds_evidence_sha256 }}
           TARGET_ID: ${{ inputs.target_id }}
+          CERTIFICATION_COHORT: ${{ steps.certification-identity.outputs.cohort }}
         run: |
           scripts/verify-target-evidence.sh \
+            --mds-evidence "$MDS_EVIDENCE_PATH" \
+            --expected-mds-evidence-sha256 "$EXPECTED_MDS_EVIDENCE_SHA256" \
             --bundle "$EVIDENCE_OUTPUT" \
             --expected-cli-revision "$EXPECTED_CLI_REVISION" \
             --expected-catalog-revision "$EXPECTED_CATALOG_REVISION" \
             --expected-plan-digest "$EXPECTED_PLAN_DIGEST" \
             --expected-target "$TARGET_ID" \
             --expected-binary-sha256 "$EXPECTED_BINARY_SHA256" \
+            --expected-cohort "$CERTIFICATION_COHORT" \
             --max-age 45m \
-            --require-publication-acceptable
+            --require-verified
       - name: Verify runner workspace remained pristine
         if: always()
         shell: bash
@@ -220,11 +320,34 @@ jobs:
             echo "certification modified the checked-out runner workspace" >&2
             exit 1
           fi
-      - name: Preserve honest certification output
-        if: always()
+      - name: Install pinned Gitleaks on Windows
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: scripts/install-gitleaks.ps1 -OutputDirectory "$env:RUNNER_TEMP/mds-tools"
+      - name: Install pinned Gitleaks on POSIX
+        if: runner.os != 'Windows'
+        shell: bash
+        run: scripts/install-gitleaks.sh "$RUNNER_TEMP/mds-tools"
+      - name: Scan verified evidence before upload
+        shell: bash
+        run: |
+          mds_gitleaks="$RUNNER_TEMP/mds-tools/gitleaks"
+          if [[ "$RUNNER_OS" == Windows ]]; then
+            mds_gitleaks="$RUNNER_TEMP/mds-tools/gitleaks.exe"
+          fi
+          "$mds_gitleaks" dir \
+            --no-banner --redact --config .gitleaks.toml \
+            "$EVIDENCE_OUTPUT"
+          if grep -R -q -E '"(image_)?creation_nonce"[[:space:]]*:' \
+            "$EVIDENCE_OUTPUT"; then
+            echo "verified evidence contains a raw guest creation nonce field" >&2
+            exit 1
+          fi
+      - name: Upload verified certification output
+        if: success()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: target-evidence-${{ steps.certification-identity.outputs.target_kind }}-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          name: target-evidence-${{ steps.certification-identity.outputs.target_kind }}-${{ github.sha }}-${{ steps.certification-identity.outputs.cohort }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ env.EVIDENCE_OUTPUT }}
-          if-no-files-found: warn
+          if-no-files-found: error
           retention-days: 30

@@ -2,6 +2,8 @@ package host
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -117,7 +119,8 @@ func (runtime GuestRuntime) verifyGuestHandoffIdentity(
 			identity.Target.ImageProvenance,
 		)
 	}
-	if identity.Target.ImageCreationNonce != observedImage.CreationNonce {
+	if identity.Target.ImageCreationNonceCommitment !=
+		observedImage.CreationNonceCommitment {
 		return errors.New(
 			"guest creation identity is missing or differs from the observed ownership marker",
 		)
@@ -145,9 +148,9 @@ func (runtime GuestRuntime) guestHandoffCommand(
 	}
 	if observedImage.Revision != "" || observedImage.Provenance != "" {
 		guestCommand.Environment = map[string]string{
-			"MDS_IMAGE_REVISION":       observedImage.Revision,
-			"MDS_IMAGE_PROVENANCE":     observedImage.Provenance,
-			"MDS_IMAGE_CREATION_NONCE": observedImage.CreationNonce,
+			"MDS_IMAGE_REVISION":                  observedImage.Revision,
+			"MDS_IMAGE_PROVENANCE":                observedImage.Provenance,
+			"MDS_IMAGE_CREATION_NONCE_COMMITMENT": observedImage.CreationNonceCommitment,
 		}
 	}
 	switch action.ComponentID {
@@ -230,12 +233,19 @@ func (runtime GuestRuntime) guestBootstrapCommand(
 	action planning.Action,
 	artifact GuestBootstrapArtifact,
 ) (transport.Command, error) {
+	sourceMode := "url"
+	var stdin []byte
+	if len(artifact.Archive) > 0 {
+		sourceMode = "stdin"
+		stdin = artifact.Archive
+	}
 	guestCommand := transport.Command{
 		Executable: "/bin/sh",
 		Arguments: []string{
-			"-eu", "-s", "--", artifact.URL, artifact.SHA256,
+			"-eu", "-c", string(guestBootstrapScript), "mds-bootstrap",
+			sourceMode, artifact.URL, artifact.SHA256,
 		},
-		Stdin:       append([]byte(nil), guestBootstrapScript...),
+		Stdin:       stdin,
 		Timeout:     10 * time.Minute,
 		OutputLimit: transport.DefaultOutputLimit,
 	}
@@ -276,6 +286,14 @@ func validateGuestBootstrapArtifact(artifact GuestBootstrapArtifact) error {
 	}
 	if exactartifact.ValidateSHA256(artifact.SHA256) != nil {
 		return errors.New("artifact SHA-256 must contain exactly 64 lowercase hex characters")
+	}
+	if len(artifact.Archive) > 0 {
+		sum := sha256.Sum256(artifact.Archive)
+		if hex.EncodeToString(sum[:]) != artifact.SHA256 {
+			return errors.New(
+				"local artifact bytes do not match the embedded SHA-256",
+			)
+		}
 	}
 	return nil
 }

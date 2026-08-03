@@ -11,6 +11,7 @@ import (
 	hostadapter "github.com/zzanghyunmoo/my-desk-setup/internal/adapters/host"
 	"github.com/zzanghyunmoo/my-desk-setup/internal/guest"
 	"github.com/zzanghyunmoo/my-desk-setup/internal/planning"
+	"github.com/zzanghyunmoo/my-desk-setup/internal/target"
 	"github.com/zzanghyunmoo/my-desk-setup/internal/transport"
 )
 
@@ -254,11 +255,15 @@ func TestGuestRuntimeRefusesSameNameReplacementWithStaleOwnership(t *testing.T) 
 			); err != nil {
 				t.Fatalf("PublishOwnership(): %v", err)
 			}
-			replacementMarker := "schema=mds.guest-image/v2\n" +
-				"image_revision=sha256:" + image.SHA256 + "\n" +
-				"image_provenance=" + image.URL + "\n" +
-				"creation_nonce=" + strings.Repeat("c", 64) + "\n"
 			port := &recordingPort{
+				err: func(command transport.Command) error {
+					if isGuestImageIdentityReadCommand(command) {
+						return errors.New(
+							"guest creation identity does not match",
+						)
+					}
+					return nil
+				},
 				result: func(command transport.Command) transport.Result {
 					if command.Executable == "limactl" &&
 						reflect.DeepEqual(
@@ -271,9 +276,6 @@ func TestGuestRuntimeRefusesSameNameReplacementWithStaleOwnership(t *testing.T) 
 						len(command.Arguments) > 0 &&
 						command.Arguments[0] == "--list" {
 						return transport.Result{Stdout: test.inventory}
-					}
-					if isGuestImageIdentityReadCommand(command) {
-						return transport.Result{Stdout: replacementMarker}
 					}
 					return transport.Result{}
 				},
@@ -681,8 +683,12 @@ func guestImageIdentityMarkerFromOwnership(
 			err,
 		)
 	}
-	return "schema=mds.guest-image/v2\n" +
+	commitment, err := target.GuestCreationNonceCommitment(record.CreationNonce)
+	if err != nil {
+		t.Fatalf("GuestCreationNonceCommitment(): %v", err)
+	}
+	return "schema=mds.guest-image/v3\n" +
 		"image_revision=sha256:" + imageSHA + "\n" +
 		"image_provenance=" + imageURL + "\n" +
-		"creation_nonce=" + record.CreationNonce + "\n"
+		"creation_nonce_commitment=" + commitment + "\n"
 }
