@@ -50,17 +50,60 @@ func newRoot(stdout io.Writer) *cobra.Command {
 		SilenceErrors: true,
 	}
 	root.SetOut(stdout)
+	root.AddCommand(newPrepareCommand(stdout))
 	root.AddCommand(newCertifyCommand(stdout))
 	root.AddCommand(newVerifyCommand(stdout))
 	return root
+}
+
+func newPrepareCommand(stdout io.Writer) *cobra.Command {
+	var request evidence.PrepareRequest
+	command := &cobra.Command{
+		Use:   "prepare",
+		Short: "Derive the exact read-only certification identity",
+		Long: "Derive the exact target identity, production binary identity, catalog revision, and plan digest without applying changes. " +
+			"Review this bounded JSON before dispatching actual certification.",
+		Args: cobra.NoArgs,
+		RunE: func(command *cobra.Command, _ []string) error {
+			preparation, err := evidence.Prepare(command.Context(), request)
+			if err != nil {
+				return err
+			}
+			return writeJSON(stdout, preparation)
+		},
+	}
+	flags := command.Flags()
+	flags.StringVar(&request.MDSPath, "mds", "", "absolute production mds binary path")
+	flags.StringVar(&request.TargetID, "target", "", "explicit actual target ID")
+	flags.StringVar(
+		&request.ExpectedBinarySHA256,
+		"expected-binary-sha256",
+		"",
+		"SHA-256 of the exact release mds binary being prepared",
+	)
+	flags.BoolVar(&request.All, "all", false, "prepare every target-eligible component")
+	flags.StringVar(&request.Profile, "profile", "", "prepare a named profile")
+	flags.StringSliceVar(
+		&request.Components,
+		"component",
+		nil,
+		"prepare a component or capability",
+	)
+	_ = command.MarkFlagRequired("mds")
+	_ = command.MarkFlagRequired("target")
+	_ = command.MarkFlagRequired("expected-binary-sha256")
+	return command
 }
 
 func newCertifyCommand(stdout io.Writer) *cobra.Command {
 	var request evidence.CertifyRequest
 	command := &cobra.Command{
 		Use:   "certify",
-		Short: "Run read-only plan and doctor with a production mds binary",
-		Args:  cobra.NoArgs,
+		Short: "Plan, apply, repeat, and diagnose with a production mds binary",
+		Long: "Plan, apply, repeat, and diagnose an actual target with a production mds binary. " +
+			"Certification mutates the selected target using the reviewed plan digest, " +
+			"but it never performs authentication.",
+		Args: cobra.NoArgs,
 		RunE: func(command *cobra.Command, _ []string) error {
 			request.Now = time.Now
 			manifest, err := evidence.Certify(command.Context(), request)
@@ -85,16 +128,28 @@ func newCertifyCommand(stdout io.Writer) *cobra.Command {
 	flags.StringVar(&request.TargetID, "target", "", "explicit actual target ID")
 	flags.StringVar(&request.OutputDir, "output", "", "new evidence bundle directory")
 	flags.StringVar(
+		&request.Cohort,
+		"cohort",
+		"",
+		"immutable certification cohort shared by all four targets",
+	)
+	flags.StringVar(
 		&request.ExpectedBinarySHA256,
 		"expected-binary-sha256",
 		"",
 		"SHA-256 of the exact release mds binary being certified",
 	)
 	flags.StringVar(
-		&request.ExpectedGuestCreationNonce,
-		"expected-guest-creation-nonce",
+		&request.ExpectedPlanDigest,
+		"expected-plan-digest",
 		"",
-		"guest creation nonce from the host committed ownership record",
+		"reviewed plan digest that must match before apply",
+	)
+	flags.StringVar(
+		&request.ExpectedGuestCreationNonceCommitment,
+		"expected-guest-creation-nonce-commitment",
+		"",
+		"host-reviewed guest creation nonce commitment; required only for guest targets",
 	)
 	flags.BoolVar(&request.All, "all", false, "certify every target-eligible component")
 	flags.StringVar(&request.Profile, "profile", "", "certify a named profile")
@@ -107,6 +162,9 @@ func newCertifyCommand(stdout io.Writer) *cobra.Command {
 	_ = command.MarkFlagRequired("mds")
 	_ = command.MarkFlagRequired("target")
 	_ = command.MarkFlagRequired("output")
+	_ = command.MarkFlagRequired("cohort")
+	_ = command.MarkFlagRequired("expected-binary-sha256")
+	_ = command.MarkFlagRequired("expected-plan-digest")
 	return command
 }
 
@@ -114,28 +172,23 @@ func newVerifyCommand(stdout io.Writer) *cobra.Command {
 	var bundle string
 	var options evidence.VerifyOptions
 	var requireVerified bool
-	var requirePublicationAcceptable bool
 	command := &cobra.Command{
 		Use:   "verify",
 		Short: "Strictly verify an actual target evidence bundle",
 		Args:  cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
-			if requireVerified && requirePublicationAcceptable {
-				return errors.New(
-					"choose only one of --require-verified or --require-publication-acceptable",
-				)
-			}
-			if (requireVerified || requirePublicationAcceptable) &&
+			if requireVerified &&
 				(options.ExpectedCLIRevision == "" ||
 					options.ExpectedCatalogRevision == "" ||
 					options.ExpectedPlanDigest == "" ||
 					options.ExpectedTargetID == "" ||
-					options.ExpectedBinarySHA256 == "") {
+					options.ExpectedBinarySHA256 == "" ||
+					options.ExpectedCohort == "") {
 				return errors.New(
-					"strict publication verification requires expected CLI, catalog, plan digest, target, and binary SHA-256",
+					"strict publication verification requires expected CLI, catalog, plan digest, target, binary SHA-256, and cohort",
 				)
 			}
-			options.RequirePublicationAcceptable = requirePublicationAcceptable
+			options.RequireVerified = requireVerified
 			if options.MaxAge > 0 {
 				options.Now = time.Now().UTC()
 			}
@@ -145,12 +198,6 @@ func newVerifyCommand(stdout io.Writer) *cobra.Command {
 			}
 			if err := writeJSON(stdout, manifest); err != nil {
 				return err
-			}
-			if requireVerified && manifest.Status != evidence.StatusVerified {
-				return fmt.Errorf(
-					"actual target evidence status is %s, not verified",
-					manifest.Status,
-				)
 			}
 			return nil
 		},
@@ -187,6 +234,12 @@ func newVerifyCommand(stdout io.Writer) *cobra.Command {
 		"",
 		"exact release binary SHA-256 expected by the publication lane",
 	)
+	flags.StringVar(
+		&options.ExpectedCohort,
+		"expected-cohort",
+		"",
+		"immutable certification cohort expected by the publication lane",
+	)
 	flags.DurationVar(
 		&options.MaxAge,
 		"max-age",
@@ -198,12 +251,6 @@ func newVerifyCommand(stdout io.Writer) *cobra.Command {
 		"require-verified",
 		false,
 		"fail unless recomputed actual target status is verified",
-	)
-	flags.BoolVar(
-		&requirePublicationAcceptable,
-		"require-publication-acceptable",
-		false,
-		"accept verified evidence or blocked evidence whose only remaining outcomes are honest manual actions",
 	)
 	_ = command.MarkFlagRequired("bundle")
 	return command

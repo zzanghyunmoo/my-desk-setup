@@ -92,6 +92,9 @@ func TestBuildProducesDeterministicStrictRelease(t *testing.T) {
 	if got, want := len(firstManifest.Artifacts), 6; got != want {
 		t.Fatalf("artifact count = %d, want %d", got, want)
 	}
+	if got, want := len(firstManifest.Certifiers), 6; got != want {
+		t.Fatalf("certifier count = %d, want %d", got, want)
+	}
 	if got, want := len(firstManifest.Bootstraps), 2; got != want {
 		t.Fatalf("bootstrap count = %d, want %d", got, want)
 	}
@@ -149,6 +152,28 @@ func TestBuildProducesDeterministicStrictRelease(t *testing.T) {
 		if !strings.Contains(output, value) {
 			t.Fatalf("released --version = %q, want %q", output, value)
 		}
+	}
+	var nativeCertifier Certifier
+	for _, certifier := range firstManifest.Certifiers {
+		if certifier.OS == runtime.GOOS && certifier.Architecture == runtime.GOARCH {
+			nativeCertifier = certifier
+			break
+		}
+	}
+	if nativeCertifier.Name == "" {
+		t.Fatalf("native certifier not found for %s/%s", runtime.GOOS, runtime.GOARCH)
+	}
+	certifierPath := filepath.Join(first, nativeCertifier.Name)
+	certifierDigest, certifierSize := testFileIdentity(t, certifierPath)
+	if certifierDigest != nativeCertifier.SHA256 || certifierSize != nativeCertifier.Size {
+		t.Fatalf("native certifier identity does not match manifest")
+	}
+	if err := os.Chmod(certifierPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	certifierOutput, certifierErr := exec.Command(certifierPath, "prepare", "--help").CombinedOutput()
+	if certifierErr != nil || !strings.Contains(string(certifierOutput), "Derive the exact target identity") {
+		t.Fatalf("run released certifier: %v\n%s", certifierErr, certifierOutput)
 	}
 }
 
@@ -466,6 +491,9 @@ func refreshArtifactIdentity(t *testing.T, dist, name string) {
 	checksums := make(map[string]string)
 	for _, artifact := range manifest.Artifacts {
 		checksums[artifact.Name] = artifact.SHA256
+	}
+	for _, certifier := range manifest.Certifiers {
+		checksums[certifier.Name] = certifier.SHA256
 	}
 	for _, bootstrap := range manifest.Bootstraps {
 		checksums[bootstrap.Name] = bootstrap.SHA256

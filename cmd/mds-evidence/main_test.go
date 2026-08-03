@@ -47,3 +47,109 @@ func TestRequireVerifiedRequiresExternalReleaseExpectations(t *testing.T) {
 		)
 	}
 }
+
+func TestVerifyRejectsRemovedPublicationAcceptableFlag(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	exitCode := run(
+		[]string{
+			"verify",
+			"--bundle",
+			"unused",
+			"--require-publication-acceptable",
+		},
+		&stdout,
+		&stderr,
+	)
+
+	if exitCode == 0 || !strings.Contains(stderr.String(), "unknown flag") {
+		t.Fatalf(
+			"exit=%d stderr=%q, want removed flag rejection",
+			exitCode,
+			stderr.String(),
+		)
+	}
+}
+
+func TestCertifyRejectsLegacyNonceFlagWithoutEchoingRawValue(t *testing.T) {
+	rawNonce := strings.Repeat("a", 64)
+	var stdout, stderr bytes.Buffer
+	exitCode := run(
+		[]string{
+			"certify",
+			"--expected-guest-creation-nonce",
+			rawNonce,
+		},
+		&stdout,
+		&stderr,
+	)
+	if exitCode == 0 ||
+		!strings.Contains(stderr.String(), "unknown flag") {
+		t.Fatalf(
+			"exit=%d stderr=%q, want legacy flag rejection",
+			exitCode,
+			stderr.String(),
+		)
+	}
+	if strings.Contains(stderr.String(), rawNonce) ||
+		strings.Contains(stdout.String(), rawNonce) {
+		t.Fatal("legacy nonce flag rejection echoed raw nonce")
+	}
+}
+
+func TestCertifyHelpDoesNotExposeRawNonceFlag(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	exitCode := run([]string{"certify", "--help"}, &stdout, &stderr)
+	if exitCode != 0 {
+		t.Fatalf("exit=%d stderr=%q", exitCode, stderr.String())
+	}
+	if strings.Contains(
+		stdout.String(),
+		"--expected-guest-creation-nonce ",
+	) {
+		t.Fatalf("certify help exposes removed raw nonce flag:\n%s", stdout.String())
+	}
+	for _, required := range []string{
+		"Plan, apply, repeat, and diagnose",
+		"mutates the selected target",
+		"never performs authentication",
+	} {
+		if !strings.Contains(stdout.String(), required) {
+			t.Fatalf("certify help missing %q:\n%s", required, stdout.String())
+		}
+	}
+}
+
+func TestPrepareHelpDerivesCommitmentWithoutAnExpectedCommitment(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	exitCode := run([]string{"prepare", "--help"}, &stdout, &stderr)
+	if exitCode != 0 {
+		t.Fatalf("exit=%d stderr=%q", exitCode, stderr.String())
+	}
+	if strings.Contains(
+		stdout.String(),
+		"--expected-guest-creation-nonce-commitment",
+	) {
+		t.Fatalf("prepare help requires its own derived output as input:\n%s", stdout.String())
+	}
+	if !strings.Contains(stdout.String(), "without applying changes") {
+		t.Fatalf("prepare help omits read-only contract:\n%s", stdout.String())
+	}
+}
+
+func TestCertifyRequiresImmutableCohort(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	exitCode := run(
+		[]string{
+			"certify",
+			"--mds", "/unused/mds",
+			"--target", "macos-host:local",
+			"--output", "/unused/evidence",
+			"--all",
+		},
+		&stdout,
+		&stderr,
+	)
+	if exitCode == 0 || !strings.Contains(stderr.String(), "cohort") {
+		t.Fatalf("exit=%d stderr=%q, want cohort failure", exitCode, stderr.String())
+	}
+}

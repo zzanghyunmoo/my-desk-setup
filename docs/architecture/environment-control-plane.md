@@ -51,9 +51,10 @@ socket을 가리키면 conflict로 처리한다. Docker Desktop이나 host engin
 
 Guest lifecycle ownership은 `preparing`과 `committed` 두 단계다. provider
 생성 전에는 exact image intent만 `preparing`으로 기록하고, 생성·시작과
-무작위 creation nonce가 포함된 root-owned image identity marker 준비가
-성공한 뒤에만 `committed`로 전환한다. host record와 live guest marker의
-nonce가 다르면 같은 이름이더라도 다른 guest로 보고 ownership conflict로
+owner-only host record의 무작위 creation nonce에서 계산한 공개 commitment가
+포함된 root-owned image identity marker 준비가 성공한 뒤에만 `committed`로
+전환한다. host record에서 다시 계산한 값과 live guest marker의 commitment가
+다르면 같은 이름이더라도 다른 guest로 보고 ownership conflict로
 중단한다. 같은 이름의 live guest와 `preparing` record가 함께 발견되어도 과거
 실패의 늦은 성공인지 외부 생성인지 자동으로 구분하지 않는다. 중단된 기존
 guest는 marker를 mutation 없이 확인할 수 없으므로 mds가 자동 시작하지 않고
@@ -68,7 +69,7 @@ guest는 marker를 mutation 없이 확인할 수 없으므로 mds가 자동 시�
 2. embedded catalog 또는 명시한 `--catalog`를 strict schema로 읽는다.
 3. 현재 또는 명시한 stable target identity와 mutation preimage를 관찰한다.
 4. dependency expansion과 target eligibility를 계산한다.
-5. stable `mds.plan/v1` JSON과 canonical SHA-256 digest를 만든다.
+5. stable `mds.plan/v2` JSON과 canonical SHA-256 digest를 만든다.
 6. 사용자가 action, blocker, requested version과 digest를 검토한다.
 7. `apply`가 같은 선택과 `--plan-digest`로 계획을 다시 계산한다.
 8. digest와 hard target preimage를 첫 mutation 전에 재검증하고 reachability,
@@ -85,10 +86,10 @@ catalog/lock, stable target facts와 selection은 같은 ordered action과 diges
 
 | 명령 | 기본 경계 | 결과 |
 | --- | --- | --- |
-| `plan` | read-only | `mds.plan/v1`, action과 digest |
+| `plan` | read-only | `mds.plan/v2`, action과 digest |
 | `apply` | exact digest 뒤 mutation | target-local `mds.receipt/v1` |
-| `doctor` | read-only, no-auth observation and functional verification | `mds.doctor/v1` |
-| `update` preview | read-only | `mds.update/v1`, old/new lock diff와 digest |
+| `doctor` | read-only, no-auth observation and functional verification | `mds.doctor/v2` |
+| `update` preview | read-only | `mds.update/v2`, old/new lock diff와 digest |
 | `update --plan-digest` | exact update mutation | lock write와 target receipt |
 | `catalog` | read-only | `mds.catalog/v1`, agent-readable capability graph |
 | `version` | read-only | 기존 text와 machine-readable version envelope |
@@ -130,7 +131,7 @@ stable file의 OS advisory lease이며 process 종료 시 OS가 자동 해제한
   전에 실패한다. volatile readiness 실패는 `stale-plan`으로 위장하지 않는다.
 - receipt 없는 config나 launcher는 user-owned다. 명시적 managed ownership
   없이 덮어쓰거나 자동 backup/삭제하지 않는다.
-- receipt 없는 same-name WSL/Lima guest와 committed receipt의 creation nonce가
+- receipt 없는 same-name WSL/Lima guest와 committed receipt에서 계산한 commitment가
   root-owned marker와 다른 replacement guest는 user-owned다. 자동 생성·시작·
   bootstrap·재구성하지 않고 conflict/action-required로 중단한다.
 - command runner는 executable과 argv를 분리한다. 동적 값을 조합한 shell
@@ -159,8 +160,8 @@ stable file의 OS advisory lease이며 process 종료 시 OS가 자동 해제한
 - exact SHA-256에 고정된 GitHub Release/bootstrap artifact만 최대 3회의
   credential-free HTTPS redirect를 허용하며, 최종 URL과 body limit을 다시
   검사한 뒤 checksum을 검증한다.
-- 일반 guest handoff도 `/etc/mds/image-identity-v1`의 root ownership, mode,
-  image URL·SHA-256과 creation nonce를 먼저 검증하고 그 관측값만 guest-local
+- 일반 guest handoff도 `/etc/mds/image-identity-v1` v3의 root ownership, mode,
+  image URL·SHA-256과 공개 creation nonce commitment를 먼저 검증하고 그 관측값만 guest-local
   `mds`에 전달한다. catalog의 기대값을 실제 guest identity처럼 합성하지 않는다.
 - compiler/runtime verification은 version 문자열만 읽지 않고 고정된 작은
   source를 실제 compile/run한다. Gradle은 reviewed local state로 offline
@@ -177,8 +178,8 @@ stable file의 OS advisory lease이며 process 종료 시 OS가 자동 해제한
 
 ## Release와 target evidence
 
-Release는 OS/architecture별 archive, `checksums.txt`,
-`release-manifest.json`과 두 host bootstrap을 하나의 identity로 묶는다.
+Release는 OS/architecture별 archive와 raw `mds-evidence` certifier,
+`checksums.txt`, `release-manifest.json`과 두 host bootstrap을 하나의 identity로 묶는다.
 manifest는 source commit과 catalog revision뿐 아니라 archive 안의 실제
 `mds` binary SHA-256도 기록한다. manifest와 archive 내부 binary checksum이
 모두 검증된 production archive만 certification에 사용한다.
@@ -191,7 +192,7 @@ Evidence 상태는 다음 의미로만 사용한다.
 | `blocked` | 실제 target에서 certification을 시도했으나 prerequisite나 readiness가 남음 |
 | `verified` | reviewed apply가 complete이고 repeat apply가 전부 no-op이며 production artifact가 해당 실제 target의 필수 probe를 모두 통과함 |
 
-actual bundle은 `mds.target-evidence/v1`, `capture_kind: actual-target`이며
+actual bundle은 `mds.target-evidence/v2`, `capture_kind: actual-target`이며
 status로 `blocked` 또는 `verified`만 허용한다. `implemented`를 actual bundle에
 기록하면 verifier가 거부해야 한다.
 
@@ -211,19 +212,25 @@ Actions actual-target artifact를 찾아 다음 네 표준 target을 정확히 �
 
 각 bundle은 CLI commit, catalog revision, plan digest, target ID와 실제
 실행한 on-disk binary SHA-256을 release manifest에 다시 결합해 검증한다.
-guest bundle은 dispatcher가 설정할 수 없는 전용 runner service의
-`MDS_EXPECTED_GUEST_CREATION_NONCE`를 root-owned marker와 대조하고, nonce를
-target fingerprint와 plan digest에 포함한다. 이 service 환경값은 host의
-committed ownership record에서 provisioning하며 guest target/name에 전용이다.
+guest bundle은 host doctor의 committed record↔live marker 검증 뒤 guest
+`mds-evidence prepare`가 v3 marker에서 관측해 출력한 domain-separated 공개 nonce
+commitment인 top-level `guest_creation_nonce_commitment`를 workflow input으로 받는다.
+Host plan은 commitment를 출력하지 않는다.
+Raw nonce는 owner-only host record 밖이나 runner service 환경, GitHub metadata로
+전달하지 않는다. Mutation 전 `prepare`가 같은 runtime probe와 production binary
+snapshot으로 exact plan digest를 만들고, certify가 mutation 직전에 marker
+commitment를 다시 대조한다.
 증거가 없거나 오래됐거나 중복됐거나 identity가 다르면 publication은
-fail closed다. `verified`는 그대로 통과한다. `blocked`는 status를 바꾸지
-않으며, target identity가 완전하고 ready가 아닌 모든 outcome이 사용자의
-정직한 `action-required`인 경우에만 publication-acceptable이다. planned
-`unready`/`conflict`, `unsupported` 또는 불완전 target은 승격을 차단한다.
+fail closed다. 네 bundle은 동일한 immutable commit+cohort에 속하고 manifest
+capture 완료 시각이 24시간 이내이며 모두 `verified`여야 한다. `blocked`,
+`unready`/`conflict`, `unsupported` 또는 불완전 target은 예외 없이 승격을
+차단한다.
 
-promotion 결과는 deterministic `mds.release-promotion/v1` 보고서로 만들고
-publish 직전에 release manifest와 다시 대조한 뒤
-`release-promotion.json`이라는 영구 GitHub Release asset으로 함께 게시한다.
+promotion 결과는 deterministic `mds.release-promotion/v2` 보고서로 만들고
+publish 직전에 release manifest, 원본 Actions artifact identity와 네
+content-addressed evidence ZIP을 다시 대조한다. 보고서와 네 ZIP은
+`release-promotion.json` 및 durable certification GitHub Release asset으로
+함께 게시한다.
 
 현재 Windows host, WSL Ubuntu와 Lima Ubuntu의 실제 evidence는 없다. 이
 dependency가 해소되기 전에는 네 target 전체가 verified라고 주장할 수 없다.

@@ -100,8 +100,11 @@ func TestDiscoverLocalGuestDoesNotConfuseHost(t *testing.T) {
 			return "sha256:reviewed"
 		case "MDS_IMAGE_PROVENANCE":
 			return "https://example.invalid/ubuntu.wsl"
-		case "MDS_IMAGE_CREATION_NONCE":
-			return strings.Repeat("b", 64)
+		case "MDS_IMAGE_CREATION_NONCE_COMMITMENT":
+			commitment, _ := target.GuestCreationNonceCommitment(
+				strings.Repeat("b", 64),
+			)
+			return commitment
 		}
 		return ""
 	})
@@ -114,41 +117,80 @@ func TestDiscoverLocalGuestDoesNotConfuseHost(t *testing.T) {
 	}
 	if facts.ImageRevision != "sha256:reviewed" ||
 		facts.ImageProvenance != "https://example.invalid/ubuntu.wsl" ||
-		facts.ImageCreationNonce != strings.Repeat("b", 64) {
+		facts.ImageCreationNonceCommitment == "" {
 		t.Fatalf("image identity = %+v, want host-verified provenance and nonce", facts)
+	}
+}
+
+func TestGuestCreationNonceCommitmentUsesDomainSeparatedDecodedBytes(t *testing.T) {
+	const nonce = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	commitment, err := target.GuestCreationNonceCommitment(nonce)
+	if err != nil {
+		t.Fatalf("GuestCreationNonceCommitment(): %v", err)
+	}
+	const expected = "sha256:af9f154751dbcb69c5da74f3286c025e7d52cd256540b93bdb10116d33da5157"
+	if commitment != expected {
+		t.Fatalf("commitment = %q, want %q", commitment, expected)
+	}
+	if err := target.ValidateGuestCreationNonceCommitment(commitment); err != nil {
+		t.Fatalf("ValidateGuestCreationNonceCommitment(): %v", err)
+	}
+
+	for _, invalid := range []string{
+		"",
+		"short",
+		strings.ToUpper(nonce),
+		strings.Repeat("g", 64),
+	} {
+		if _, err := target.GuestCreationNonceCommitment(invalid); err == nil {
+			t.Fatalf("GuestCreationNonceCommitment(%q) succeeded", invalid)
+		}
+	}
+	for _, invalid := range []string{
+		strings.TrimPrefix(commitment, "sha256:"),
+		"sha256:" + strings.Repeat("A", 64),
+		"sha256:" + strings.Repeat("g", 64),
+	} {
+		if err := target.ValidateGuestCreationNonceCommitment(invalid); err == nil {
+			t.Fatalf("ValidateGuestCreationNonceCommitment(%q) succeeded", invalid)
+		}
 	}
 }
 
 func TestParseGuestImageIdentityRequiresExactPinnedIdentity(t *testing.T) {
 	digest := strings.Repeat("a", 64)
 	nonce := strings.Repeat("b", 64)
+	commitment, err := target.GuestCreationNonceCommitment(nonce)
+	if err != nil {
+		t.Fatalf("GuestCreationNonceCommitment(): %v", err)
+	}
 	identity, err := target.ParseImageIdentity([]byte(
-		"schema=mds.guest-image/v2\n" +
+		"schema=mds.guest-image/v3\n" +
 			"image_revision=sha256:" + digest + "\n" +
 			"image_provenance=https://cloud-images.example/ubuntu.img\n" +
-			"creation_nonce=" + nonce + "\n",
+			"creation_nonce_commitment=" + commitment + "\n",
 	))
 	if err != nil {
 		t.Fatalf("ParseImageIdentity(): %v", err)
 	}
 	if identity.Revision != "sha256:"+digest ||
 		identity.Provenance != "https://cloud-images.example/ubuntu.img" ||
-		identity.CreationNonce != nonce {
+		identity.CreationNonceCommitment != commitment {
 		t.Fatalf("image identity = %+v", identity)
 	}
 	for _, content := range []string{
-		"schema=mds.guest-image/v2\nimage_revision=sha256:" + digest +
+		"schema=mds.guest-image/v3\nimage_revision=sha256:" + digest +
 			"\nimage_provenance=https://user:secret@example.invalid/image\n" +
-			"creation_nonce=" + nonce + "\n",
-		"schema=mds.guest-image/v2\nimage_revision=sha256:short\n" +
+			"creation_nonce_commitment=" + commitment + "\n",
+		"schema=mds.guest-image/v3\nimage_revision=sha256:short\n" +
 			"image_provenance=https://example.invalid/image\n" +
-			"creation_nonce=" + nonce + "\n",
-		"schema=mds.guest-image/v2\nimage_revision=sha256:" + digest +
+			"creation_nonce_commitment=" + commitment + "\n",
+		"schema=mds.guest-image/v3\nimage_revision=sha256:" + digest +
 			"\nimage_provenance=https://example.invalid/image?moving=1\n" +
-			"creation_nonce=" + nonce + "\n",
-		"schema=mds.guest-image/v2\nimage_revision=sha256:" + digest +
+			"creation_nonce_commitment=" + commitment + "\n",
+		"schema=mds.guest-image/v3\nimage_revision=sha256:" + digest +
 			"\nimage_provenance=https://example.invalid/image\n" +
-			"creation_nonce=short\n",
+			"creation_nonce_commitment=sha256:short\n",
 	} {
 		if _, err := target.ParseImageIdentity([]byte(content)); err == nil {
 			t.Fatalf("ParseImageIdentity(%q) succeeded", content)

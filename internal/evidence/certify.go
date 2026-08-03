@@ -2,12 +2,9 @@ package evidence
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -45,53 +42,109 @@ var (
 	)
 )
 
-func Certify(ctx context.Context, request CertifyRequest) (Manifest, error) {
-	if err := validateCertifyRequest(request); err != nil {
-		return Manifest{}, err
-	}
-	binarySHA256, err := hashRegularFile(request.MDSPath)
-	if err != nil {
-		return Manifest{}, err
-	}
-	if request.ExpectedBinarySHA256 != "" &&
-		binarySHA256 != request.ExpectedBinarySHA256 {
-		return Manifest{}, fmt.Errorf(
-			"mds binary checksum mismatch: got=%s expected=%s",
-			binarySHA256,
-			request.ExpectedBinarySHA256,
-		)
-	}
-	cli, err := readCLIIdentity(ctx, request.MDSPath)
-	if err != nil {
-		return Manifest{}, err
-	}
-	selectionArgs, err := selectionArguments(request)
-	if err != nil {
-		return Manifest{}, err
-	}
-	certifiedTarget, environment, err := certificationTarget(request)
-	if err != nil {
-		return Manifest{}, err
-	}
-	common := append(
-		[]string{"--target", request.TargetID, "--format", "json"},
-		selectionArgs...,
-	)
+type certificationIdentity struct {
+	Target             target.ID
+	CohortCommitPrefix string
+}
 
-	planOutput, _, err := runMDS(
+type preparedCertificationPlan struct {
+	productionBinary productionBinarySnapshot
+	cli              CLIIdentity
+	plan             planning.Plan
+	planOutput       []byte
+	certifiedTarget  target.Facts
+	environment      map[string]string
+	commonArguments  []string
+}
+
+func Prepare(ctx context.Context, request PrepareRequest) (Preparation, error) {
+	certificationID, err := validatePrepareRequest(request)
+	if err != nil {
+		return Preparation{}, err
+	}
+	prepared, err := prepareCertificationPlan(
 		ctx,
 		request.MDSPath,
-		append([]string{"plan"}, common...),
-		environment,
-		false,
-		certificationReadTimeout,
+		request.TargetID,
+		request.All,
+		request.Profile,
+		request.Components,
+		request.ExpectedBinarySHA256,
+		"",
+		request.RuntimeProbe,
+		certificationID,
 	)
 	if err != nil {
-		return Manifest{}, fmt.Errorf("capture read-only plan: %w", err)
+		return Preparation{}, err
 	}
-	var plan planning.Plan
-	if err := decodeStrict(planOutput, &plan); err != nil {
-		return Manifest{}, fmt.Errorf("decode plan output: %w", err)
+	defer prepared.productionBinary.Remove()
+	if err := scanEvidenceMaterial(PlanFile, prepared.planOutput); err != nil {
+		return Preparation{}, err
+	}
+	finalBinarySHA256, err := hashRegularFile(request.MDSPath)
+	if err != nil {
+		return Preparation{}, err
+	}
+	if finalBinarySHA256 != prepared.productionBinary.SHA256 {
+		return Preparation{}, errors.New(
+			"mds binary changed while certification preparation was running",
+		)
+	}
+	identity, err := targetIdentity(prepared.plan.Target)
+	if err != nil {
+		return Preparation{}, err
+	}
+	return Preparation{
+		SchemaVersion:   PreparationSchema,
+		Target:          identity,
+		CLI:             prepared.cli,
+		BinarySHA256:    prepared.productionBinary.SHA256,
+		CatalogRevision: prepared.plan.CatalogRevision,
+		PlanDigest:      prepared.plan.Digest,
+		GuestCreationNonceCommitment: prepared.plan.Target.
+			ImageCreationNonceCommitment,
+	}, nil
+}
+
+func Certify(ctx context.Context, request CertifyRequest) (Manifest, error) {
+	identity, err := validateCertifyRequest(request)
+	if err != nil {
+		return Manifest{}, err
+	}
+	prepared, err := prepareCertificationPlan(
+		ctx,
+		request.MDSPath,
+		request.TargetID,
+		request.All,
+		request.Profile,
+		request.Components,
+		request.ExpectedBinarySHA256,
+		request.ExpectedGuestCreationNonceCommitment,
+		request.RuntimeProbe,
+		identity.Target,
+	)
+	if err != nil {
+		return Manifest{}, err
+	}
+	defer prepared.productionBinary.Remove()
+	productionBinary := prepared.productionBinary
+	binarySHA256 := productionBinary.SHA256
+	cli := prepared.cli
+	plan := prepared.plan
+	planOutput := prepared.planOutput
+	environment := prepared.environment
+	common := prepared.commonArguments
+	if identity.CohortCommitPrefix != prepared.cli.Commit[:8] {
+		return Manifest{}, errors.New(
+			"certification cohort does not match the production CLI commit",
+		)
+	}
+	if plan.Digest != request.ExpectedPlanDigest {
+		return Manifest{}, fmt.Errorf(
+			"reviewed plan digest mismatch before apply: got=%s expected=%s",
+			plan.Digest,
+			request.ExpectedPlanDigest,
+		)
 	}
 	applyArguments := append(
 		[]string{"apply", "--plan-digest", plan.Digest},
@@ -99,7 +152,7 @@ func Certify(ctx context.Context, request CertifyRequest) (Manifest, error) {
 	)
 	applyOutput, applyActionRequired, err := runMDS(
 		ctx,
-		request.MDSPath,
+		productionBinary.Path,
 		applyArguments,
 		environment,
 		true,
@@ -125,7 +178,7 @@ func Certify(ctx context.Context, request CertifyRequest) (Manifest, error) {
 	if applyReceipt.Complete {
 		repeatOutput, repeatActionRequired, err := runMDS(
 			ctx,
-			request.MDSPath,
+			productionBinary.Path,
 			applyArguments,
 			environment,
 			true,
@@ -151,7 +204,7 @@ func Certify(ctx context.Context, request CertifyRequest) (Manifest, error) {
 
 	doctorOutput, doctorActionRequired, err := runMDS(
 		ctx,
-		request.MDSPath,
+		productionBinary.Path,
 		append([]string{"doctor"}, common...),
 		environment,
 		true,
@@ -179,15 +232,6 @@ func Certify(ctx context.Context, request CertifyRequest) (Manifest, error) {
 	components, err := validatePlanDoctor(plan, snapshot, cli, request.TargetID)
 	if err != nil {
 		return Manifest{}, err
-	}
-	if plan.Target.ID != certifiedTarget.ID ||
-		plan.Target.Architecture != certifiedTarget.Architecture ||
-		plan.Target.ImageRevision != certifiedTarget.ImageRevision ||
-		plan.Target.ImageProvenance != certifiedTarget.ImageProvenance ||
-		plan.Target.ImageCreationNonce != certifiedTarget.ImageCreationNonce {
-		return Manifest{}, errors.New(
-			"captured plan target does not match independently certified runtime identity",
-		)
 	}
 	if err := scanEvidenceMaterial(PlanFile, planOutput); err != nil {
 		return Manifest{}, err
@@ -219,7 +263,7 @@ func Certify(ctx context.Context, request CertifyRequest) (Manifest, error) {
 	}
 	manifest := Manifest{
 		SchemaVersion: SchemaVersion, CaptureKind: CaptureKindActualTarget,
-		Status:         status,
+		Status: status, Cohort: request.Cohort,
 		CapturedAtUnix: json.Number(strconv.FormatInt(now.Unix(), 10)),
 		Target:         targetIdentity, CLI: cli,
 		BinarySHA256:    binarySHA256,
@@ -236,95 +280,140 @@ func Certify(ctx context.Context, request CertifyRequest) (Manifest, error) {
 		ExpectedPlanDigest:      plan.Digest,
 		ExpectedTargetID:        request.TargetID,
 		ExpectedBinarySHA256:    binarySHA256,
+		ExpectedCohort:          request.Cohort,
 	}); err != nil {
 		return Manifest{}, fmt.Errorf("verify captured evidence: %w", err)
 	}
 	return manifest, nil
 }
 
-func validateCertifyRequest(request CertifyRequest) error {
+func validateCertifyRequest(
+	request CertifyRequest,
+) (certificationIdentity, error) {
+	certificationID, err := validatePrepareRequest(PrepareRequest{
+		MDSPath: request.MDSPath, TargetID: request.TargetID,
+		All: request.All, Profile: request.Profile,
+		Components:           request.Components,
+		ExpectedBinarySHA256: request.ExpectedBinarySHA256,
+		RuntimeProbe:         request.RuntimeProbe,
+	})
+	if err != nil {
+		return certificationIdentity{}, err
+	}
+	if err := validateExpectedGuestCreationNonceCommitment(
+		certificationID,
+		request.ExpectedGuestCreationNonceCommitment,
+	); err != nil {
+		return certificationIdentity{}, err
+	}
+	if !strings.HasPrefix(request.ExpectedPlanDigest, "sha256:") ||
+		exactartifact.ValidateSHA256(strings.TrimPrefix(
+			request.ExpectedPlanDigest,
+			"sha256:",
+		)) != nil {
+		return certificationIdentity{}, errors.New(
+			"expected plan digest is required and must be sha256 followed by 64 lowercase hex characters",
+		)
+	}
+	cohortCommitPrefix, err := CertificationCohortCommitPrefix(
+		request.Cohort,
+	)
+	if err != nil {
+		return certificationIdentity{}, err
+	}
+	if request.OutputDir == "" {
+		return certificationIdentity{}, errors.New(
+			"evidence output directory is required",
+		)
+	}
+	if _, err := os.Lstat(request.OutputDir); err == nil {
+		return certificationIdentity{}, errors.New(
+			"evidence output directory already exists",
+		)
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return certificationIdentity{}, fmt.Errorf(
+			"inspect evidence output directory: %w",
+			err,
+		)
+	}
+	return certificationIdentity{
+		Target:             certificationID,
+		CohortCommitPrefix: cohortCommitPrefix,
+	}, nil
+}
+
+func validatePrepareRequest(request PrepareRequest) (target.ID, error) {
 	if request.MDSPath == "" {
-		return errors.New("mds binary path is required")
+		return target.ID{}, errors.New("mds binary path is required")
 	}
 	if !filepath.IsAbs(request.MDSPath) {
-		return errors.New("mds binary path must be absolute")
+		return target.ID{}, errors.New("mds binary path must be absolute")
 	}
 	info, err := os.Lstat(request.MDSPath)
 	if err != nil {
-		return fmt.Errorf("inspect mds binary: %w", err)
+		return target.ID{}, fmt.Errorf("inspect mds binary: %w", err)
 	}
 	if info.Mode()&os.ModeSymlink != 0 {
-		return errors.New("mds binary must not be a symlink")
+		return target.ID{}, errors.New("mds binary must not be a symlink")
 	}
 	if info.IsDir() || !info.Mode().IsRegular() {
-		return errors.New("mds binary must be a regular file")
+		return target.ID{}, errors.New("mds binary must be a regular file")
 	}
 	if reparse, err := isReparsePoint(request.MDSPath); err != nil {
-		return fmt.Errorf("inspect mds binary reparse state: %w", err)
+		return target.ID{}, fmt.Errorf(
+			"inspect mds binary reparse state: %w",
+			err,
+		)
 	} else if reparse {
-		return errors.New("mds binary must not be a reparse point")
+		return target.ID{}, errors.New("mds binary must not be a reparse point")
 	}
-	if request.ExpectedBinarySHA256 != "" &&
-		exactartifact.ValidateSHA256(request.ExpectedBinarySHA256) != nil {
-		return errors.New("expected mds binary SHA-256 must be 64 lowercase hex characters")
+	if exactartifact.ValidateSHA256(request.ExpectedBinarySHA256) != nil {
+		return target.ID{}, errors.New(
+			"expected mds binary SHA-256 is required and must be 64 lowercase hex characters",
+		)
 	}
-	id, err := target.ParseID(request.TargetID)
+	certificationID, err := target.ParseID(request.TargetID)
 	if err != nil {
-		return fmt.Errorf("invalid certification target: %w", err)
+		return target.ID{}, fmt.Errorf("invalid certification target: %w", err)
 	}
+	return certificationID, nil
+}
+
+func validateExpectedGuestCreationNonceCommitment(
+	id target.ID,
+	commitment string,
+) error {
+	commitment = strings.TrimSpace(commitment)
 	switch id.Kind {
 	case target.KindWSLGuest, target.KindLimaGuest:
-		if exactartifact.ValidateSHA256(
-			request.ExpectedGuestCreationNonce,
-		) != nil {
+		if target.ValidateGuestCreationNonceCommitment(commitment) != nil {
 			return errors.New(
-				"guest certification requires the 64-character lowercase creation nonce from the host ownership record",
+				"guest certification requires a valid reviewed guest creation nonce commitment",
 			)
 		}
 	default:
-		if request.ExpectedGuestCreationNonce != "" {
+		if commitment != "" {
 			return errors.New(
-				"host certification must not provide a guest creation nonce",
+				"host certification must not receive a guest creation nonce commitment",
 			)
 		}
-	}
-	if request.OutputDir == "" {
-		return errors.New("evidence output directory is required")
-	}
-	if _, err := os.Lstat(request.OutputDir); err == nil {
-		return errors.New("evidence output directory already exists")
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("inspect evidence output directory: %w", err)
 	}
 	return nil
 }
 
-func hashRegularFile(path string) (digest string, returnErr error) {
-	file, err := os.Open(path)
-	if err != nil {
-		return "", fmt.Errorf("open mds binary for hashing: %w", err)
-	}
-	defer func() {
-		if err := file.Close(); returnErr == nil && err != nil {
-			returnErr = fmt.Errorf("close mds binary after hashing: %w", err)
-		}
-	}()
-	hash := sha256.New()
-	if _, err := io.Copy(hash, file); err != nil {
-		return "", fmt.Errorf("hash mds binary: %w", err)
-	}
-	return hex.EncodeToString(hash.Sum(nil)), nil
-}
-
-func selectionArguments(request CertifyRequest) ([]string, error) {
+func selectionArguments(
+	all bool,
+	profile string,
+	components []string,
+) ([]string, error) {
 	sources := 0
-	if request.All {
+	if all {
 		sources++
 	}
-	if request.Profile != "" {
+	if profile != "" {
 		sources++
 	}
-	if len(request.Components) > 0 {
+	if len(components) > 0 {
 		sources++
 	}
 	if sources != 1 {
@@ -333,16 +422,16 @@ func selectionArguments(request CertifyRequest) ([]string, error) {
 		)
 	}
 	switch {
-	case request.All:
+	case all:
 		return []string{"--all"}, nil
-	case request.Profile != "":
-		if err := validateBoundedValue("profile", request.Profile); err != nil {
+	case profile != "":
+		if err := validateBoundedValue("profile", profile); err != nil {
 			return nil, err
 		}
-		return []string{"--profile", request.Profile}, nil
+		return []string{"--profile", profile}, nil
 	default:
-		arguments := make([]string, 0, len(request.Components)*2)
-		for _, component := range request.Components {
+		arguments := make([]string, 0, len(components)*2)
+		for _, component := range components {
 			if err := validateBoundedValue("component", component); err != nil {
 				return nil, err
 			}
@@ -352,20 +441,118 @@ func selectionArguments(request CertifyRequest) ([]string, error) {
 	}
 }
 
-func certificationTarget(
-	request CertifyRequest,
-) (target.Facts, map[string]string, error) {
-	id, err := target.ParseID(request.TargetID)
+func prepareCertificationPlan(
+	ctx context.Context,
+	mdsPath,
+	targetID string,
+	all bool,
+	profile string,
+	components []string,
+	expectedBinarySHA256,
+	expectedGuestCreationNonceCommitment string,
+	runtimeProbe func(target.ID) (target.Facts, error),
+	certificationID target.ID,
+) (preparedCertificationPlan, error) {
+	productionBinary, err := snapshotProductionBinary(mdsPath)
 	if err != nil {
-		return target.Facts{}, nil, err
+		return preparedCertificationPlan{}, err
 	}
+	failed := true
+	defer func() {
+		if failed {
+			productionBinary.Remove()
+		}
+	}()
+	if productionBinary.SHA256 != expectedBinarySHA256 {
+		return preparedCertificationPlan{}, fmt.Errorf(
+			"mds binary checksum mismatch: got=%s expected=%s",
+			productionBinary.SHA256,
+			expectedBinarySHA256,
+		)
+	}
+	cliIdentity, err := readCLIIdentity(ctx, productionBinary.Path)
+	if err != nil {
+		return preparedCertificationPlan{}, err
+	}
+	selectionArgs, err := selectionArguments(all, profile, components)
+	if err != nil {
+		return preparedCertificationPlan{}, err
+	}
+	certifiedTarget, environment, err := certificationTarget(
+		runtimeProbe,
+		certificationID,
+		expectedGuestCreationNonceCommitment,
+	)
+	if err != nil {
+		return preparedCertificationPlan{}, err
+	}
+	common := append(
+		[]string{"--target", targetID, "--format", "json"},
+		selectionArgs...,
+	)
+	planOutput, _, err := runMDS(
+		ctx,
+		productionBinary.Path,
+		append([]string{"plan"}, common...),
+		environment,
+		false,
+		certificationReadTimeout,
+	)
+	if err != nil {
+		return preparedCertificationPlan{}, fmt.Errorf(
+			"capture read-only plan: %w",
+			err,
+		)
+	}
+	var plan planning.Plan
+	if err := decodeStrict(planOutput, &plan); err != nil {
+		return preparedCertificationPlan{}, fmt.Errorf(
+			"decode plan output: %w",
+			err,
+		)
+	}
+	if err := validatePreparedPlanTarget(plan.Target, certifiedTarget); err != nil {
+		return preparedCertificationPlan{}, err
+	}
+	failed = false
+	return preparedCertificationPlan{
+		productionBinary: productionBinary,
+		cli:              cliIdentity,
+		plan:             plan,
+		planOutput:       planOutput,
+		certifiedTarget:  certifiedTarget,
+		environment:      environment,
+		commonArguments:  common,
+	}, nil
+}
+
+func validatePreparedPlanTarget(plan, certified target.Facts) error {
+	if plan.ID != certified.ID ||
+		plan.Architecture != certified.Architecture ||
+		plan.ImageRevision != certified.ImageRevision ||
+		plan.ImageProvenance != certified.ImageProvenance ||
+		plan.ImageCreationNonceCommitment !=
+			certified.ImageCreationNonceCommitment {
+		return errors.New(
+			"captured plan target does not match independently certified runtime identity",
+		)
+	}
+	return nil
+}
+
+func certificationTarget(
+	runtimeProbe func(target.ID) (target.Facts, error),
+	id target.ID,
+	expectedGuestCreationNonceCommitment string,
+) (target.Facts, map[string]string, error) {
 	var facts target.Facts
-	if request.RuntimeProbe != nil {
-		facts, err = request.RuntimeProbe(id)
+	var err error
+	if runtimeProbe != nil {
+		facts, err = runtimeProbe(id)
 	} else {
 		facts, err = probeCertificationTarget(
 			id,
-			request.ExpectedGuestCreationNonce,
+			expectedGuestCreationNonceCommitment,
 		)
 	}
 	if err != nil {
@@ -374,6 +561,14 @@ func certificationTarget(
 	if facts.ID != id {
 		return target.Facts{}, nil, errors.New(
 			"certification runtime probe returned a different target",
+		)
+	}
+	if (id.Kind == target.KindWSLGuest || id.Kind == target.KindLimaGuest) &&
+		expectedGuestCreationNonceCommitment != "" &&
+		facts.ImageCreationNonceCommitment !=
+			expectedGuestCreationNonceCommitment {
+		return target.Facts{}, nil, errors.New(
+			"certification runtime identity does not match the reviewed guest creation nonce commitment",
 		)
 	}
 	environment := make(map[string]string, 4)
@@ -389,15 +584,16 @@ func certificationTarget(
 	if facts.ImageProvenance != "" {
 		environment["MDS_IMAGE_PROVENANCE"] = facts.ImageProvenance
 	}
-	if facts.ImageCreationNonce != "" {
-		environment["MDS_IMAGE_CREATION_NONCE"] = facts.ImageCreationNonce
+	if facts.ImageCreationNonceCommitment != "" {
+		environment["MDS_IMAGE_CREATION_NONCE_COMMITMENT"] =
+			facts.ImageCreationNonceCommitment
 	}
 	return facts, environment, nil
 }
 
 func probeCertificationTarget(
 	id target.ID,
-	expectedGuestCreationNonce string,
+	expectedGuestCreationNonceCommitment string,
 ) (target.Facts, error) {
 	switch id.Kind {
 	case target.KindMacOSHost:
@@ -494,22 +690,22 @@ func probeCertificationTarget(
 	if err := validateCertifiedGuestImage(
 		observedImage,
 		image,
-		expectedGuestCreationNonce,
+		expectedGuestCreationNonceCommitment,
 	); err != nil {
 		return target.Facts{}, err
 	}
 	return target.Facts{
 		ID: id, OS: "linux", Architecture: runtime.GOARCH, Reachable: true,
-		ImageRevision:      observedImage.Revision,
-		ImageProvenance:    observedImage.Provenance,
-		ImageCreationNonce: observedImage.CreationNonce,
+		ImageRevision:                observedImage.Revision,
+		ImageProvenance:              observedImage.Provenance,
+		ImageCreationNonceCommitment: observedImage.CreationNonceCommitment,
 	}, nil
 }
 
 func validateCertifiedGuestImage(
 	observedImage target.ImageIdentity,
 	image catalog.ImageSpec,
-	expectedGuestCreationNonce string,
+	expectedGuestCreationNonceCommitment string,
 ) error {
 	expectedRevision := "sha256:" + image.SHA256
 	if observedImage.Revision != expectedRevision ||
@@ -522,9 +718,11 @@ func validateCertifiedGuestImage(
 			image.URL,
 		)
 	}
-	if observedImage.CreationNonce != expectedGuestCreationNonce {
+	if expectedGuestCreationNonceCommitment != "" &&
+		observedImage.CreationNonceCommitment !=
+			expectedGuestCreationNonceCommitment {
 		return errors.New(
-			"provisioned guest creation identity does not match the protected host ownership record",
+			"provisioned guest creation identity does not match the reviewed host ownership commitment",
 		)
 	}
 	return nil

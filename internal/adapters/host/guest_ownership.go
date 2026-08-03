@@ -150,7 +150,18 @@ func (runtime GuestRuntime) validateGuestOwnershipMarker(
 	action planning.Action,
 	record guest.Ownership,
 ) (target.ImageIdentity, error) {
-	command, err := runtime.guestImageIdentityReadCommand(action)
+	creationNonceCommitment, err := target.GuestCreationNonceCommitment(
+		record.CreationNonce,
+	)
+	if err != nil {
+		return target.ImageIdentity{}, errors.New(
+			"committed guest creation identity is invalid",
+		)
+	}
+	command, err := runtime.guestImageIdentityReadCommand(
+		action,
+		creationNonceCommitment,
+	)
 	if err != nil {
 		return target.ImageIdentity{}, err
 	}
@@ -174,7 +185,7 @@ func (runtime GuestRuntime) validateGuestOwnershipMarker(
 			record.Name,
 		)
 	}
-	if identity.CreationNonce != record.CreationNonce {
+	if identity.CreationNonceCommitment != creationNonceCommitment {
 		return target.ImageIdentity{}, fmt.Errorf(
 			"live %s guest %q creation identity does not match the committed ownership record",
 			record.Provider,
@@ -186,8 +197,10 @@ func (runtime GuestRuntime) validateGuestOwnershipMarker(
 
 func (runtime GuestRuntime) guestImageIdentityReadCommand(
 	action planning.Action,
+	expectedCreationNonceCommitment string,
 ) (transport.Command, error) {
 	const script = `set -eu
+IFS= read -r expected_creation_nonce_commitment
 path=/etc/mds/image-identity-v1
 [ -f "$path" ] && [ ! -L "$path" ] || exit 74
 metadata=$(/usr/bin/stat -c '%u:%g:%a' "$path")
@@ -195,11 +208,23 @@ case "$metadata" in
   0:0:600|0:0:640|0:0:644) ;;
   *) exit 74 ;;
 esac
-/bin/cat "$path"
+line_count=$(/usr/bin/wc -l < "$path")
+[ "$line_count" -eq 4 ] || exit 74
+schema=$(/usr/bin/sed -n 's/^schema=//p' "$path")
+revision=$(/usr/bin/sed -n 's/^image_revision=//p' "$path")
+provenance=$(/usr/bin/sed -n 's/^image_provenance=//p' "$path")
+creation_nonce_commitment=$(/usr/bin/sed -n 's/^creation_nonce_commitment=//p' "$path")
+[ -n "$schema" ] && [ -n "$revision" ] && [ -n "$provenance" ]
+[ "$creation_nonce_commitment" = "$expected_creation_nonce_commitment" ] || exit 74
+printf 'schema=%s\n' "$schema"
+printf 'image_revision=%s\n' "$revision"
+printf 'image_provenance=%s\n' "$provenance"
+printf 'creation_nonce_commitment=%s\n' "$creation_nonce_commitment"
 `
 	guestCommand := transport.Command{
 		Executable:  "/bin/sh",
 		Arguments:   []string{"-eu", "-c", script, "mds-image-identity"},
+		Stdin:       []byte(expectedCreationNonceCommitment + "\n"),
 		Timeout:     30 * time.Second,
 		OutputLimit: 4096,
 	}
@@ -224,6 +249,7 @@ esac
 	}
 	return transport.Command{
 		Executable: executable, Arguments: arguments,
+		Stdin:   guestCommand.Stdin,
 		Timeout: guestCommand.Timeout, OutputLimit: guestCommand.OutputLimit,
 	}, nil
 }

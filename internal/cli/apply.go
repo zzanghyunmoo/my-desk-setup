@@ -31,6 +31,7 @@ func newApplyCommand(streams Streams, system Runtime) *cobra.Command {
 	var expectedDigest string
 	var stateRoot string
 	var adoptNvChad bool
+	var guestBootstrapArchive string
 
 	command := &cobra.Command{
 		Use:   "apply",
@@ -94,14 +95,31 @@ func newApplyCommand(streams Streams, system Runtime) *cobra.Command {
 			if adoptNvChad && !planSelectsComponent(plan, "nvchad") {
 				return invalidInput(errors.New("--adopt-nvchad requires selecting nvchad"))
 			}
+			if err := validateGuestBootstrapArchiveSelection(
+				guestBootstrapArchive,
+				facts,
+				plan,
+			); err != nil {
+				return invalidInput(err)
+			}
 			home, err := runtimeHome(system)
 			if err != nil {
 				return err
 			}
-			componentAdapter, err := currentAdapter(
-				environment, facts, home, system, false, adoptNvChad,
+			componentAdapter, err := currentAdapterWithOptions(
+				environment,
+				facts,
+				home,
+				system,
+				false,
+				adoptNvChad,
+				guestBootstrapArchive,
 			)
 			if err != nil {
+				var archiveError *hostadapter.GuestBootstrapArchiveError
+				if errors.As(err, &archiveError) {
+					return invalidInput(err)
+				}
 				return err
 			}
 			if stateRoot == "" {
@@ -167,6 +185,12 @@ func newApplyCommand(streams Streams, system Runtime) *cobra.Command {
 	flags.StringVar(&targetID, "target", "", "current target ID")
 	flags.StringVar(&expectedDigest, "plan-digest", "", "exact digest printed by mds plan")
 	flags.StringVar(&stateRoot, "state-root", "", "override target-local state root")
+	flags.StringVar(
+		&guestBootstrapArchive,
+		"guest-bootstrap-archive",
+		"",
+		"use an exact local Linux release archive for host-to-guest bootstrap",
+	)
 	flags.StringVar(&format, "format", "human", "output format: human or json")
 	flags.StringVar(&catalogPath, "catalog", "", "override the embedded catalog directory")
 	flags.BoolVar(
@@ -186,16 +210,39 @@ func currentAdapter(
 	allowReplace bool,
 	allowAdopt bool,
 ) (adapters.Component, error) {
+	return currentAdapterWithOptions(
+		environment,
+		facts,
+		home,
+		system,
+		allowReplace,
+		allowAdopt,
+		"",
+	)
+}
+
+func currentAdapterWithOptions(
+	environment catalog.Environment,
+	facts target.Facts,
+	home string,
+	system Runtime,
+	allowReplace bool,
+	allowAdopt bool,
+	guestBootstrapArchive string,
+) (adapters.Component, error) {
 	port := transport.NewLocal()
 	switch facts.ID.Kind {
 	case target.KindMacOSHost, target.KindWindowsHost:
-		return hostadapter.New(
+		return hostadapter.NewWithOptions(
 			environment,
 			port,
 			home,
 			facts.OS,
 			facts.Architecture,
-			allowReplace,
+			hostadapter.Options{
+				AllowReplace:          allowReplace,
+				GuestBootstrapArchive: guestBootstrapArchive,
+			},
 		)
 	case target.KindWSLGuest, target.KindLimaGuest:
 		now := system.Now
@@ -226,6 +273,35 @@ func planSelectsComponent(plan planning.Plan, componentID string) bool {
 		}
 	}
 	return false
+}
+
+func validateGuestBootstrapArchiveSelection(
+	archivePath string,
+	facts target.Facts,
+	plan planning.Plan,
+) error {
+	if archivePath == "" {
+		return nil
+	}
+	if !filepath.IsAbs(archivePath) {
+		return errors.New(
+			"--guest-bootstrap-archive requires an absolute path",
+		)
+	}
+	if facts.ID.Kind != target.KindMacOSHost &&
+		facts.ID.Kind != target.KindWindowsHost {
+		return errors.New(
+			"--guest-bootstrap-archive is available only on a host target",
+		)
+	}
+	for _, action := range plan.Actions {
+		if action.ComponentID == "lima" || action.ComponentID == "wsl" {
+			return nil
+		}
+	}
+	return errors.New(
+		"--guest-bootstrap-archive requires a selected Lima or WSL guest lifecycle component",
+	)
 }
 
 func runtimeHome(system Runtime) (string, error) {

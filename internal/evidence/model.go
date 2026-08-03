@@ -9,8 +9,9 @@ import (
 )
 
 const (
-	SchemaVersion           = "mds.target-evidence/v1"
+	SchemaVersion           = "mds.target-evidence/v2"
 	CaptureKindActualTarget = "actual-target"
+	PreparationSchema       = "mds.certification-preparation/v1"
 
 	ManifestFile  = "manifest.json"
 	PlanFile      = "plan.json"
@@ -30,6 +31,7 @@ type Manifest struct {
 	SchemaVersion   string           `json:"schema_version"`
 	CaptureKind     string           `json:"capture_kind"`
 	Status          Status           `json:"status"`
+	Cohort          string           `json:"cohort"`
 	CapturedAtUnix  json.Number      `json:"captured_at_unix"`
 	Target          TargetIdentity   `json:"target"`
 	CLI             CLIIdentity      `json:"cli"`
@@ -52,6 +54,16 @@ type CLIIdentity struct {
 	Commit   string `json:"commit"`
 	Date     string `json:"date"`
 	Revision string `json:"revision"`
+}
+
+type Preparation struct {
+	SchemaVersion                string         `json:"schema_version"`
+	Target                       TargetIdentity `json:"target"`
+	CLI                          CLIIdentity    `json:"cli"`
+	BinarySHA256                 string         `json:"binary_sha256"`
+	CatalogRevision              string         `json:"catalog_revision"`
+	PlanDigest                   string         `json:"plan_digest"`
+	GuestCreationNonceCommitment string         `json:"guest_creation_nonce_commitment,omitempty"`
 }
 
 type ComponentCheck struct {
@@ -79,28 +91,47 @@ type CertifyRequest struct {
 	MDSPath    string
 	TargetID   string
 	OutputDir  string
+	Cohort     string
 	All        bool
 	Profile    string
 	Components []string
 	// ExpectedBinarySHA256 binds capture to a release artifact before the
 	// target executes the binary.
 	ExpectedBinarySHA256 string
-	// ExpectedGuestCreationNonce is copied from the host's committed ownership
-	// record and reviewed at the protected target-certification gate.
-	ExpectedGuestCreationNonce string
-	Now                        func() time.Time
+	// ExpectedPlanDigest binds capture to an externally reviewed plan before
+	// the target executes any mutating action.
+	ExpectedPlanDigest string
+	// ExpectedGuestCreationNonceCommitment binds a guest marker to the
+	// host-reviewed ownership identity without exposing the raw nonce to the
+	// runner-wide environment or GitHub metadata.
+	ExpectedGuestCreationNonceCommitment string
+	Now                                  func() time.Time
 	// RuntimeProbe is a deterministic test seam. Production callers leave it
 	// nil so certification derives guest identity from protected runtime facts.
 	RuntimeProbe func(target.ID) (target.Facts, error)
 }
 
+type PrepareRequest struct {
+	MDSPath    string
+	TargetID   string
+	All        bool
+	Profile    string
+	Components []string
+
+	ExpectedBinarySHA256 string
+
+	// RuntimeProbe is a deterministic test seam shared with Certify.
+	RuntimeProbe func(target.ID) (target.Facts, error)
+}
+
 type VerifyOptions struct {
-	ExpectedCLIRevision          string
-	ExpectedCatalogRevision      string
-	ExpectedPlanDigest           string
-	ExpectedTargetID             string
-	ExpectedBinarySHA256         string
-	RequirePublicationAcceptable bool
-	Now                          time.Time
-	MaxAge                       time.Duration
+	ExpectedCLIRevision     string
+	ExpectedCatalogRevision string
+	ExpectedPlanDigest      string
+	ExpectedTargetID        string
+	ExpectedBinarySHA256    string
+	ExpectedCohort          string
+	RequireVerified         bool
+	Now                     time.Time
+	MaxAge                  time.Duration
 }

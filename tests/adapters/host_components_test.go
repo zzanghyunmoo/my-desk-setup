@@ -146,10 +146,10 @@ func TestLimaRuntimeCreatesPinnedUbuntuGuest(t *testing.T) {
 	if !strings.Contains(template, "location: "+imageURL) ||
 		!strings.Contains(template, "digest: sha256:"+imageSHA256) ||
 		!strings.Contains(template, "mode: system") ||
-		!strings.Contains(template, "schema=mds.guest-image/v2") ||
+		!strings.Contains(template, "schema=mds.guest-image/v3") ||
 		!strings.Contains(template, "image_revision=sha256:"+imageSHA256) ||
 		!strings.Contains(template, "image_provenance="+imageURL) ||
-		!strings.Contains(template, "creation_nonce=") ||
+		!strings.Contains(template, "creation_nonce_commitment=sha256:") ||
 		strings.Count(template, "- location:") != 1 {
 		t.Fatalf("Lima create template is not the reviewed one-image template:\n%s", template)
 	}
@@ -243,6 +243,34 @@ func TestWSLRuntimeInstallsCanonicalGuestWithoutAuth(t *testing.T) {
 	}
 	if strings.Contains(joined, "--install --distribution") {
 		t.Fatalf("WSL lifecycle used moving distribution install:\n%s", joined)
+	}
+	record, exists, err := guest.LoadOwnership(
+		ownershipRoot,
+		"wsl",
+		"Ubuntu-26.04",
+	)
+	if err != nil || !exists {
+		t.Fatalf("LoadOwnership() record=%+v exists=%t error=%v", record, exists, err)
+	}
+	if strings.Contains(joined, record.CreationNonce) {
+		t.Fatal("WSL lifecycle exposed the raw guest nonce in process arguments")
+	}
+	commitment := hostNonceCommitment(record.CreationNonce)
+	var commitmentStdinCommands int
+	for _, command := range port.commands {
+		if string(command.Stdin) == record.CreationNonce+"\n" {
+			t.Fatal("WSL lifecycle exposed the raw guest nonce on subprocess stdin")
+		}
+		if string(command.Stdin) != commitment+"\n" {
+			continue
+		}
+		commitmentStdinCommands++
+	}
+	if commitmentStdinCommands != 3 {
+		t.Fatalf(
+			"commitment stdin command count = %d, want marker write and two independent reads",
+			commitmentStdinCommands,
+		)
 	}
 	for _, forbidden := range []string{" auth ", " login ", "token"} {
 		if strings.Contains(strings.ToLower(joined), forbidden) {
@@ -452,15 +480,25 @@ func hostRuntimePlanIdentityWithRevisions(
 	}{
 		CatalogRevision: catalogRevision,
 		Target: target.Facts{
-			ID:                 id,
-			CLIRevision:        cliRevision,
-			CatalogRevision:    catalogRevision,
-			ImageRevision:      "sha256:" + imageSHA256,
-			ImageProvenance:    imageURL,
-			ImageCreationNonce: imageCreationNonce,
+			ID:              id,
+			CLIRevision:     cliRevision,
+			CatalogRevision: catalogRevision,
+			ImageRevision:   "sha256:" + imageSHA256,
+			ImageProvenance: imageURL,
+			ImageCreationNonceCommitment: hostNonceCommitment(
+				imageCreationNonce,
+			),
 		},
 	})
 	return string(encoded)
+}
+
+func hostNonceCommitment(nonce string) string {
+	commitment, err := target.GuestCreationNonceCommitment(nonce)
+	if err != nil {
+		panic(err)
+	}
+	return commitment
 }
 
 func ownershipNonce(

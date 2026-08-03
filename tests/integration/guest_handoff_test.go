@@ -46,7 +46,8 @@ func TestGuestRuntimeHandoffUsesExactRevisionAndBoundedArgv(t *testing.T) {
 			wantArgv: []string{
 				"shell", "--tty=false", "mds", "--",
 				"env",
-				"MDS_IMAGE_CREATION_NONCE=" + testGuestCreationNonce,
+				"MDS_IMAGE_CREATION_NONCE_COMMITMENT=" +
+					integrationNonceCommitment(testGuestCreationNonce),
 				"MDS_IMAGE_PROVENANCE=" + testGuestImageURL,
 				"MDS_IMAGE_REVISION=sha256:" + testGuestImageSHA,
 				"/bin/sh", "-c", `exec "$HOME/.local/bin/mds" "$@"`,
@@ -65,7 +66,8 @@ func TestGuestRuntimeHandoffUsesExactRevisionAndBoundedArgv(t *testing.T) {
 			wantArgv: []string{
 				"--distribution", "Ubuntu-26.04",
 				"--exec", "env",
-				"MDS_IMAGE_CREATION_NONCE=" + testGuestCreationNonce,
+				"MDS_IMAGE_CREATION_NONCE_COMMITMENT=" +
+					integrationNonceCommitment(testGuestCreationNonce),
 				"MDS_IMAGE_PROVENANCE=" + testGuestImageURL,
 				"MDS_IMAGE_REVISION=sha256:" + testGuestImageSHA,
 				"/bin/sh", "-c",
@@ -221,7 +223,8 @@ func TestGuestRuntimeHandoffCarriesAndVerifiesPinnedImageIdentity(t *testing.T) 
 	handoff := findGuestMDSCommand(t, port.commands)
 	joined := strings.Join(handoff.Arguments, " ")
 	for _, expected := range []string{
-		"MDS_IMAGE_CREATION_NONCE=" + testGuestCreationNonce,
+		"MDS_IMAGE_CREATION_NONCE_COMMITMENT=" +
+			integrationNonceCommitment(testGuestCreationNonce),
 		"MDS_IMAGE_REVISION=sha256:" + imageSHA,
 		"MDS_IMAGE_PROVENANCE=" + imageURL,
 	} {
@@ -425,12 +428,17 @@ func TestGuestRuntimeAutomaticallyBootstrapsReviewedLinuxArtifact(t *testing.T) 
 			break
 		}
 	}
-	if len(bootstrap.Stdin) == 0 ||
-		!strings.Contains(string(bootstrap.Stdin), "sha256sum -c") {
-		t.Fatalf("bootstrap stdin does not contain checksum-verifying installer")
+	if len(bootstrap.Stdin) != 0 {
+		t.Fatalf("URL bootstrap stdin = %q, want empty", bootstrap.Stdin)
 	}
 	joined := strings.Join(bootstrap.Arguments, " ")
-	for _, expected := range []string{artifactURL, artifactSHA, "/bin/sh -eu -s --"} {
+	for _, expected := range []string{
+		artifactURL,
+		artifactSHA,
+		"/bin/sh -eu -c",
+		"mds.guest-bootstrap/v1",
+		"mds-bootstrap url",
+	} {
 		if !strings.Contains(joined, expected) {
 			t.Fatalf("bootstrap argv = %q, want %q", joined, expected)
 		}
@@ -536,8 +544,9 @@ func isGuestMDSCommand(command transport.Command) bool {
 }
 
 func isGuestBootstrapCommand(command transport.Command) bool {
-	return len(command.Stdin) > 0 &&
-		strings.Contains(string(command.Stdin), "mds.guest-bootstrap/v1")
+	joined := strings.Join(command.Arguments, " ")
+	return strings.Contains(joined, "/bin/sh -eu -c") &&
+		strings.Contains(joined, "mds.guest-bootstrap/v1")
 }
 
 func isGuestImageIdentityReadCommand(command transport.Command) bool {
@@ -599,10 +608,10 @@ func ownedGuestFixture(
 			err,
 		)
 	}
-	marker := "schema=mds.guest-image/v2\n" +
+	marker := "schema=mds.guest-image/v3\n" +
 		"image_revision=sha256:" + imageSHA + "\n" +
 		"image_provenance=" + imageURL + "\n" +
-		"creation_nonce=" + record.CreationNonce + "\n"
+		"creation_nonce_commitment=" + integrationNonceCommitment(testGuestCreationNonce) + "\n"
 	return spec, root, marker
 }
 
@@ -635,6 +644,14 @@ func guestPlanIdentityJSON(
 	)
 }
 
+func integrationNonceCommitment(nonce string) string {
+	commitment, err := target.GuestCreationNonceCommitment(nonce)
+	if err != nil {
+		panic(err)
+	}
+	return commitment
+}
+
 func guestPlanIdentityJSONWithImage(
 	targetID,
 	cliRevision,
@@ -652,7 +669,9 @@ func guestPlanIdentityJSONWithImage(
 		Target: target.Facts{
 			ID: id, CLIRevision: cliRevision, CatalogRevision: catalogRevision,
 			ImageRevision: imageRevision, ImageProvenance: imageProvenance,
-			ImageCreationNonce: imageCreationNonce,
+			ImageCreationNonceCommitment: integrationNonceCommitment(
+				imageCreationNonce,
+			),
 		},
 	})
 	return string(encoded)

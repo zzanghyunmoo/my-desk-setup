@@ -2,7 +2,7 @@ package doctor
 
 import "github.com/zzanghyunmoo/my-desk-setup/internal/target"
 
-const SchemaVersion = "mds.doctor/v1"
+const SchemaVersion = "mds.doctor/v2"
 
 type Report struct {
 	SchemaVersion   string       `json:"schema_version"`

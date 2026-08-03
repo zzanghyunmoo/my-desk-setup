@@ -21,7 +21,7 @@ func TestGuestBootstrapScriptPublishesVerifiedOwnedBinary(t *testing.T) {
 	archive, digest := guestBootstrapFixture(t)
 	fakeBin := guestBootstrapFakeBin(t, archive)
 
-	result, err := runGuestBootstrapScript(home, fakeBin, digest)
+	result, err := runGuestBootstrapScriptURL(home, fakeBin, digest)
 	if err != nil {
 		t.Fatalf("guest bootstrap failed: %v\n%s", err, result)
 	}
@@ -51,7 +51,7 @@ func TestGuestBootstrapScriptResumesCrashBetweenBinaryAndOwnerMarker(t *testing.
 	fakeBin := guestBootstrapFakeBin(t, archive)
 	t.Setenv("MDS_TEST_CRASH_AFTER_BINARY", "1")
 
-	result, err := runGuestBootstrapScript(home, fakeBin, digest)
+	result, err := runGuestBootstrapScriptURL(home, fakeBin, digest)
 	var exitError *exec.ExitError
 	if !errors.As(err, &exitError) || exitError.ExitCode() != 75 {
 		t.Fatalf("crash simulation error = %v output=%s, want exit 75", err, result)
@@ -63,7 +63,7 @@ func TestGuestBootstrapScriptResumesCrashBetweenBinaryAndOwnerMarker(t *testing.
 	}
 
 	t.Setenv("MDS_TEST_CRASH_AFTER_BINARY", "")
-	result, err = runGuestBootstrapScript(home, fakeBin, digest)
+	result, err = runGuestBootstrapScriptURL(home, fakeBin, digest)
 	if err != nil {
 		t.Fatalf("guest bootstrap recovery failed: %v\n%s", err, result)
 	}
@@ -101,7 +101,7 @@ func TestGuestBootstrapScriptRejectsMismatchedOwnerMarker(t *testing.T) {
 		t.Fatalf("WriteFile(marker): %v", err)
 	}
 	archive, digest := guestBootstrapFixture(t)
-	result, err := runGuestBootstrapScript(
+	result, err := runGuestBootstrapScriptURL(
 		home,
 		guestBootstrapFakeBin(t, archive),
 		digest,
@@ -126,7 +126,7 @@ func TestGuestBootstrapScriptPreservesUnownedExistingBinary(t *testing.T) {
 		t.Fatalf("WriteFile(): %v", err)
 	}
 	archive, digest := guestBootstrapFixture(t)
-	result, err := runGuestBootstrapScript(
+	result, err := runGuestBootstrapScriptURL(
 		home,
 		guestBootstrapFakeBin(t, archive),
 		digest,
@@ -147,7 +147,7 @@ func TestGuestBootstrapScriptPreservesUnownedExistingBinary(t *testing.T) {
 func TestGuestBootstrapScriptRejectsChecksumBeforePublication(t *testing.T) {
 	home := t.TempDir()
 	archive, _ := guestBootstrapFixture(t)
-	result, err := runGuestBootstrapScript(
+	result, err := runGuestBootstrapScriptURL(
 		home,
 		guestBootstrapFakeBin(t, archive),
 		strings.Repeat("0", 64),
@@ -171,7 +171,7 @@ func TestGuestBootstrapScriptRejectsCredentialedRedirectBeforePublication(t *tes
 		"https://user:password@example.invalid/mds.tar.gz",
 	)
 
-	result, err := runGuestBootstrapScript(home, fakeBin, digest)
+	result, err := runGuestBootstrapScriptURL(home, fakeBin, digest)
 	if err == nil {
 		t.Fatalf("guest bootstrap accepted credentialed redirect: %s", result)
 	}
@@ -182,16 +182,95 @@ func TestGuestBootstrapScriptRejectsCredentialedRedirectBeforePublication(t *tes
 	}
 }
 
-func runGuestBootstrapScript(home, path, digest string) (string, error) {
+func TestGuestBootstrapScriptPublishesExactStdinArchive(t *testing.T) {
+	home := t.TempDir()
+	archive, digest := guestBootstrapFixture(t)
+	encoded, err := os.ReadFile(archive)
+	if err != nil {
+		t.Fatalf("ReadFile(fixture): %v", err)
+	}
+
+	result, err := runGuestBootstrapScriptStdin(home, encoded, digest)
+	if err != nil {
+		t.Fatalf("stdin guest bootstrap failed: %v\n%s", err, result)
+	}
+	binary, err := os.ReadFile(filepath.Join(home, ".local", "bin", "mds"))
+	if err != nil {
+		t.Fatalf("read published binary: %v", err)
+	}
+	if string(binary) != "#!/bin/sh\necho mds\n" {
+		t.Fatalf("published binary = %q", binary)
+	}
+}
+
+func TestGuestBootstrapScriptRejectsStdinChecksumBeforePublication(t *testing.T) {
+	home := t.TempDir()
+	archive, _ := guestBootstrapFixture(t)
+	encoded, err := os.ReadFile(archive)
+	if err != nil {
+		t.Fatalf("ReadFile(fixture): %v", err)
+	}
+
+	result, err := runGuestBootstrapScriptStdin(
+		home,
+		encoded,
+		strings.Repeat("0", 64),
+	)
+	if err == nil {
+		t.Fatalf("stdin guest bootstrap accepted bad checksum: %s", result)
+	}
+	if _, statErr := os.Stat(
+		filepath.Join(home, ".local", "bin", "mds"),
+	); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("binary exists after checksum failure: %v", statErr)
+	}
+}
+
+func runGuestBootstrapScriptURL(home, path, digest string) (string, error) {
+	return runGuestBootstrapScript(
+		home,
+		path,
+		"url",
+		"https://example.invalid/mds.tar.gz",
+		digest,
+		nil,
+	)
+}
+
+func runGuestBootstrapScriptStdin(
+	home string,
+	archive []byte,
+	digest string,
+) (string, error) {
+	return runGuestBootstrapScript(
+		home,
+		"/usr/bin:/bin:/opt/homebrew/bin",
+		"stdin",
+		"https://example.invalid/mds.tar.gz",
+		digest,
+		archive,
+	)
+}
+
+func runGuestBootstrapScript(
+	home,
+	path,
+	sourceMode,
+	artifactURL,
+	digest string,
+	stdin []byte,
+) (string, error) {
 	command := exec.Command(
 		"/bin/sh",
 		"-eu",
-		"-s",
-		"--",
-		"https://example.invalid/mds.tar.gz",
+		"-c",
+		string(guestBootstrapScript),
+		"mds-bootstrap",
+		sourceMode,
+		artifactURL,
 		digest,
 	)
-	command.Stdin = bytes.NewReader(guestBootstrapScript)
+	command.Stdin = bytes.NewReader(stdin)
 	command.Env = []string{
 		"HOME=" + home,
 		"MDS_TEST_ARCHIVE=" + os.Getenv("MDS_TEST_ARCHIVE"),
@@ -283,7 +362,7 @@ while [ "$#" -gt 0 ]; do
 done
 test "$location" = 1
 test "$max_redirs" = 3
-test "$max_filesize" = 536870912
+test "$max_filesize" = 268435456
 test "$https_only" = 1
 test "$https_redirects_only" = 1
 /bin/cp "$MDS_TEST_ARCHIVE" "$destination"
