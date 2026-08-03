@@ -383,8 +383,11 @@ func TestGuestCommitmentDocsUsePreparationAsDispatchSource(t *testing.T) {
 		}
 		document := string(content)
 		if !strings.Contains(document, "mds-evidence prepare") ||
-			!strings.Contains(document, "image_creation_nonce_commitment") {
+			!strings.Contains(document, "guest_creation_nonce_commitment") {
 			t.Fatalf("%s does not name the preparation commitment source", path)
+		}
+		if strings.Contains(document, "target.image_creation_nonce_commitment") {
+			t.Fatalf("%s uses the nonexistent nested preparation field", path)
 		}
 		for _, forbidden := range []string{
 			"host plan에 기록된",

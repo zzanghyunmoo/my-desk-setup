@@ -291,8 +291,8 @@ runtime probe로 read-only plan을 실행하며
 target fingerprint, binary SHA-256와 plan digest만 출력한다. Apply, evidence
 upload와 인증은 수행하지 않는다.
 
-`mds-evidence prepare`가 출력한
-`target.image_creation_nonce_commitment`가 dispatch에 사용하는 canonical 공개
+`mds-evidence prepare`가 출력한 top-level
+`guest_creation_nonce_commitment`가 dispatch에 사용하는 canonical 공개
 commitment다. Operator와 environment reviewer는 host doctor가 record↔live marker
 검증을 통과한 동일 guest인지 확인하고, preparation의 나머지 identity를 release
 manifest와 대조한 뒤 `plan_digest`와 guest target일 때만

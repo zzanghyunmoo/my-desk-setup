@@ -58,7 +58,7 @@ scripts/verify-target-evidence.sh \
 
 For a manual WSL/Lima run, first require the host production `mds doctor` guest
 ownership action to validate the committed record against the live marker. Then
-use only `target.image_creation_nonce_commitment` from the released
+use only the top-level `guest_creation_nonce_commitment` from the released
 `mds-evidence prepare` JSON as the dispatch source; a host plan does not emit
 this field. The v3 guest marker contains only that public commitment, while the
 raw nonce remains in the owner-only host record. Certification rereads the live

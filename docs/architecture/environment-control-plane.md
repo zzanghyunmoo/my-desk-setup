@@ -214,7 +214,7 @@ Actions actual-target artifact를 찾아 다음 네 표준 target을 정확히 �
 실행한 on-disk binary SHA-256을 release manifest에 다시 결합해 검증한다.
 guest bundle은 host doctor의 committed record↔live marker 검증 뒤 guest
 `mds-evidence prepare`가 v3 marker에서 관측해 출력한 domain-separated 공개 nonce
-commitment인 `target.image_creation_nonce_commitment`를 workflow input으로 받는다.
+commitment인 top-level `guest_creation_nonce_commitment`를 workflow input으로 받는다.
 Host plan은 commitment를 출력하지 않는다.
 Raw nonce는 owner-only host record 밖이나 runner service 환경, GitHub metadata로
 전달하지 않는다. Mutation 전 `prepare`가 같은 runtime probe와 production binary

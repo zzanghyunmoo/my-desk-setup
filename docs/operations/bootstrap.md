@@ -348,7 +348,7 @@ scripts/certify-target.sh \
 WSL/Lima guest를 수동 인증할 때는 host의 committed ownership record와 live
 marker를 먼저 대조하고 host `doctor`의 guest ownership action이 `ready`인지
 확인한다. 이어 exact guest에서 released `mds-evidence prepare`를 실행하고 그 JSON의
-`target.image_creation_nonce_commitment`만 dispatch input으로 전달한다. Host plan은
+top-level `guest_creation_nonce_commitment`만 dispatch input으로 전달한다. Host plan은
 commitment source가 아니다. Raw nonce는 runner/process environment나 GitHub input에
 넣지 않는다. WSL은 `WSL_DISTRO_NAME=Ubuntu-26.04`, Lima는 `LIMA_INSTANCE=mds` exact
 target identity에서 read-only preparation과 certification을 실행한다.
