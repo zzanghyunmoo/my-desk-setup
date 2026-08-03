@@ -205,7 +205,7 @@ func writeIDEConfiguration(root string) error {
 func writeConfigurationFiles(root string, files map[string]string) error {
 	for relativePath, content := range files {
 		path := filepath.Join(root, filepath.FromSlash(relativePath))
-		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		if err := ensureDirectoryBelow(root, filepath.Dir(path)); err != nil {
 			return fmt.Errorf("create managed Neovim config directory: %w", err)
 		}
 		if err := writeConfigurationFileIfChanged(path, content); err != nil {
@@ -261,6 +261,13 @@ func inspectEditorConfiguration(root string) (bool, bool, string, error) {
 	}
 	pluginPath := "lua/plugins/init.lua"
 	path := filepath.Join(root, filepath.FromSlash(pluginPath))
+	parentExists, err := inspectDirectoryBelow(root, filepath.Dir(path))
+	if err != nil {
+		return false, false, "", err
+	}
+	if !parentExists {
+		return false, false, "managed plugin specification parent is missing", nil
+	}
 	info, err := os.Lstat(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return false, false, "managed plugin specification is missing", nil
@@ -291,6 +298,13 @@ func inspectConfigurationFile(
 	expected string,
 ) (bool, string, error) {
 	path := filepath.Join(root, filepath.FromSlash(relativePath))
+	parentExists, err := inspectDirectoryBelow(root, filepath.Dir(path))
+	if err != nil {
+		return false, "", err
+	}
+	if !parentExists {
+		return false, "managed configuration parent is missing " + relativePath, nil
+	}
 	inspection := managedfile.Inspect(path, expected)
 	switch inspection.State {
 	case managedfile.StateReady:

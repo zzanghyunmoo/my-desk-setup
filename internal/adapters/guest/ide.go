@@ -66,6 +66,11 @@ func (ide IDE) Apply(ctx context.Context, action planning.Action) error {
 	}
 	switch observation.State {
 	case adapters.StateReady:
+		if err := ide.Delegate.Verify(ctx, action); err != nil {
+			if err := ide.Delegate.Apply(ctx, action); err != nil {
+				return fmt.Errorf("repair incomplete IDE package dependencies: %w", err)
+			}
+		}
 	case adapters.StateAbsent:
 		if err := ide.Delegate.Apply(ctx, action); err != nil {
 			return err
@@ -129,6 +134,13 @@ func inspectIDEConfiguration(home string) (bool, string, error) {
 
 func managedEditorRoot(home string) (string, error) {
 	root := filepath.Join(home, ".config", "nvim")
+	parentExists, err := inspectDirectoryBelow(home, filepath.Dir(root))
+	if err != nil {
+		return "", err
+	}
+	if !parentExists {
+		return "", os.ErrNotExist
+	}
 	info, err := os.Lstat(root)
 	if err != nil {
 		return "", fmt.Errorf("inspect managed Neovim config: %w", err)

@@ -40,11 +40,22 @@ func inspectPluginRuntime(
 		return false, "managed plugin runtime is missing", err
 	}
 	lazyPath := managedLazyPath(root)
+	lazyParentExists, err := inspectDirectoryBelow(root, filepath.Dir(lazyPath))
+	if err != nil {
+		return false, "", err
+	}
+	if !lazyParentExists {
+		return false, "lazy.nvim checkout parent is missing", nil
+	}
 	ready, detail, err := inspectCheckout(ctx, port, lazyPath, lazyPluginCommit)
 	if err != nil || !ready {
 		return false, "lazy.nvim " + detail, err
 	}
 	pluginRoot := managedPluginRoot(root)
+	ready, detail, err = inspectPluginDirectory(pluginRoot, set, false)
+	if err != nil || !ready {
+		return false, detail, err
+	}
 	for _, pin := range expectedPluginPins(set) {
 		ready, detail, err := inspectCheckout(
 			ctx,
@@ -76,7 +87,10 @@ func preparePluginRuntime(
 		return err
 	}
 	pluginRoot := managedPluginRoot(root)
-	if err := ensureDirectory(pluginRoot); err != nil {
+	if err := ensureDirectoryBelow(root, pluginRoot); err != nil {
+		return err
+	}
+	if err := removeUnexpectedPluginCheckouts(pluginRoot, set); err != nil {
 		return err
 	}
 	for _, pin := range expectedPluginPins(set) {
@@ -124,6 +138,13 @@ func verifyManagedNeovim(
 		return fmt.Errorf("managed lazy.nvim is not ready: %s", detail)
 	}
 	pluginRoot := managedPluginRoot(root)
+	ready, detail, err = inspectPluginDirectory(pluginRoot, set, true)
+	if err != nil {
+		return err
+	}
+	if !ready {
+		return fmt.Errorf("managed plugin directory is not safe to execute: %s", detail)
+	}
 	for _, pin := range expectedPluginPins(set) {
 		path := filepath.Join(pluginRoot, pin.Name)
 		info, statErr := os.Lstat(path)
@@ -145,13 +166,17 @@ func verifyManagedNeovim(
 		}
 	}
 
+	nvim, err := managedNeovimExecutable(home)
+	if err != nil {
+		return err
+	}
 	var verificationOutput strings.Builder
 	for _, arguments := range [][]string{
 		{"--headless", "+Lazy! restore", "+qa"},
 		{"--headless", "+checkhealth", "+qa"},
 	} {
 		result, err := port.Run(ctx, transport.Command{
-			Executable:  "nvim",
+			Executable:  nvim,
 			Arguments:   arguments,
 			Environment: managedEditorEnvironment(home),
 			Timeout:     5 * time.Minute,
@@ -273,7 +298,7 @@ func ensureLazyCheckout(
 	runtimeRoot string,
 ) error {
 	lazyParent := filepath.Dir(managedLazyPath(runtimeRoot))
-	if err := ensureDirectory(lazyParent); err != nil {
+	if err := ensureDirectoryBelow(runtimeRoot, lazyParent); err != nil {
 		return err
 	}
 	target := managedLazyPath(runtimeRoot)
@@ -316,7 +341,7 @@ func ensureLazyCheckout(
 
 func ensurePluginRuntimeRoot(home string) (string, error) {
 	parent := filepath.Join(home, ".local", "share", "mds")
-	if err := ensureDirectory(parent); err != nil {
+	if err := ensureDirectoryBelow(home, parent); err != nil {
 		return "", err
 	}
 	root := filepath.Join(parent, "nvim")
@@ -356,6 +381,13 @@ func ensurePluginRuntimeRoot(home string) (string, error) {
 
 func inspectPluginRuntimeRoot(home string) (string, bool, error) {
 	root := filepath.Join(home, ".local", "share", "mds", "nvim")
+	parentExists, err := inspectDirectoryBelow(home, filepath.Dir(root))
+	if err != nil {
+		return "", false, err
+	}
+	if !parentExists {
+		return root, false, nil
+	}
 	info, err := os.Lstat(root)
 	if errors.Is(err, os.ErrNotExist) {
 		return root, false, nil
@@ -366,7 +398,10 @@ func inspectPluginRuntimeRoot(home string) (string, bool, error) {
 	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
 		return "", false, errors.New("plugin runtime is not a regular directory")
 	}
-	content, err := os.ReadFile(filepath.Join(root, ".mds-managed.json"))
+	content, err := readRegularFile(
+		filepath.Join(root, ".mds-managed.json"),
+		"plugin runtime ownership marker",
+	)
 	if errors.Is(err, os.ErrNotExist) {
 		return root, false, nil
 	}
@@ -461,4 +496,108 @@ func managedEditorEnvironment(home string) map[string]string {
 		"MISE_DATA_DIR":   miseHome,
 		"MISE_CONFIG_DIR": filepath.Join(home, ".config", "mise"),
 	}
+}
+
+func managedNeovimExecutable(home string) (string, error) {
+	binDirectory := filepath.Join(home, ".local", "bin")
+	exists, err := inspectDirectoryBelow(home, binDirectory)
+	if err != nil {
+		return "", err
+	}
+	if !exists {
+		return "", errors.New("managed Neovim launcher directory is missing")
+	}
+	executable := filepath.Join(binDirectory, "nvim")
+	info, err := os.Lstat(executable)
+	if err != nil {
+		return "", fmt.Errorf("inspect managed Neovim launcher: %w", err)
+	}
+	if !info.Mode().IsRegular() || info.Mode().Perm()&0o111 == 0 {
+		return "", errors.New("managed Neovim launcher is not a regular executable file")
+	}
+	return executable, nil
+}
+
+func inspectPluginDirectory(root string, set pluginSet, allowMissing bool) (bool, string, error) {
+	runtimeRoot := filepath.Dir(filepath.Dir(root))
+	parentExists, err := inspectDirectoryBelow(runtimeRoot, filepath.Dir(root))
+	if err != nil {
+		return false, "", err
+	}
+	if !parentExists {
+		return false, "managed plugin directory parent is missing", nil
+	}
+	info, err := os.Lstat(root)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, "managed plugin directory is missing", nil
+	}
+	if err != nil {
+		return false, "", fmt.Errorf("inspect managed plugin directory: %w", err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+		return false, "", errors.New("managed plugin directory is not a regular directory")
+	}
+	allowed := make(map[string]struct{}, len(pluginPins))
+	for _, pin := range pluginPins {
+		allowed[pin.Name] = struct{}{}
+	}
+	required := make(map[string]struct{}, len(expectedPluginPins(set)))
+	for _, pin := range expectedPluginPins(set) {
+		required[pin.Name] = struct{}{}
+	}
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return false, "", fmt.Errorf("read managed plugin directory: %w", err)
+	}
+	seen := make(map[string]struct{}, len(entries))
+	for _, entry := range entries {
+		if _, ok := allowed[entry.Name()]; !ok {
+			return false, "unexpected plugin checkout " + entry.Name(), nil
+		}
+		info, err := os.Lstat(filepath.Join(root, entry.Name()))
+		if err != nil {
+			return false, "", fmt.Errorf("inspect plugin checkout %s: %w", entry.Name(), err)
+		}
+		if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+			return false, "", fmt.Errorf("plugin checkout %s is not a regular directory", entry.Name())
+		}
+		seen[entry.Name()] = struct{}{}
+	}
+	if allowMissing {
+		return true, "", nil
+	}
+	for name := range required {
+		if _, ok := seen[name]; !ok {
+			return false, "plugin checkout is missing " + name, nil
+		}
+	}
+	return true, "", nil
+}
+
+func removeUnexpectedPluginCheckouts(root string, set pluginSet) error {
+	allowed := make(map[string]struct{}, len(pluginPins))
+	for _, pin := range pluginPins {
+		allowed[pin.Name] = struct{}{}
+	}
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return fmt.Errorf("read managed plugin directory: %w", err)
+	}
+	for _, entry := range entries {
+		if _, ok := allowed[entry.Name()]; ok {
+			continue
+		}
+		path := filepath.Join(root, entry.Name())
+		info, err := os.Lstat(path)
+		if err != nil {
+			return fmt.Errorf("inspect unexpected plugin checkout %s: %w", entry.Name(), err)
+		}
+		if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+			return fmt.Errorf("unexpected plugin checkout %s is not a regular directory", entry.Name())
+		}
+		if err := removeManagedCheckout(root, path); err != nil {
+			return fmt.Errorf("remove unexpected plugin checkout %s: %w", entry.Name(), err)
+		}
+	}
+	return nil
 }

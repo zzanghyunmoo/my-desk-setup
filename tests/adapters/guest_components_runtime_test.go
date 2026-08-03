@@ -41,6 +41,174 @@ func TestEditorRefusesUserOwnedConfiguration(t *testing.T) {
 	}
 }
 
+func TestEditorRefusesNonRegularConfigurationRootsWithoutMutation(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		setup func(*testing.T, string) string
+	}{
+		{
+			name: "regular file",
+			setup: func(t *testing.T, root string) string {
+				t.Helper()
+				if err := os.WriteFile(root, []byte("keep-file\n"), 0o600); err != nil {
+					t.Fatalf("write non-directory config root: %v", err)
+				}
+				return root
+			},
+		},
+		{
+			name: "symlink",
+			setup: func(t *testing.T, root string) string {
+				t.Helper()
+				target := filepath.Join(t.TempDir(), "user-nvim")
+				if err := os.Mkdir(target, 0o700); err != nil {
+					t.Fatalf("create symlink target: %v", err)
+				}
+				if err := os.WriteFile(filepath.Join(target, "sentinel"), []byte("keep-link\n"), 0o600); err != nil {
+					t.Fatalf("write symlink target: %v", err)
+				}
+				if err := os.Symlink(target, root); err != nil {
+					t.Skipf("create config symlink: %v", err)
+				}
+				return filepath.Join(target, "sentinel")
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			home := t.TempDir()
+			configDirectory := filepath.Join(home, ".config")
+			if err := os.Mkdir(configDirectory, 0o700); err != nil {
+				t.Fatalf("create config directory: %v", err)
+			}
+			root := filepath.Join(configDirectory, "nvim")
+			preservedPath := test.setup(t, root)
+			editor := guestadapter.Editor{
+				Home: home, Port: &recordingPort{}, Now: time.Now,
+			}
+			observation, err := editor.Observe(context.Background(), nvchadAction())
+			if err != nil || observation.State != adapters.StateConflict {
+				t.Fatalf("Observe() = %+v, err=%v, want conflict", observation, err)
+			}
+			if err := editor.Apply(context.Background(), nvchadAction()); err == nil {
+				t.Fatal("Apply() accepted non-regular config root")
+			}
+			content, err := os.ReadFile(preservedPath)
+			if err != nil || !strings.HasPrefix(string(content), "keep-") {
+				t.Fatalf("original config changed: content=%q err=%v", content, err)
+			}
+		})
+	}
+}
+
+func TestEditorRefusesSymlinkedOwnershipMarkersWithoutFollowingThem(t *testing.T) {
+	for _, markerRelativePath := range []string{
+		filepath.Join(".config", "nvim", ".mds-managed.json"),
+		filepath.Join(".local", "share", "mds", "nvim", ".mds-managed.json"),
+	} {
+		t.Run(markerRelativePath, func(t *testing.T) {
+			home := t.TempDir()
+			port := &recordingPort{result: func(command transport.Command) transport.Result {
+				return managedEditorCommandResult(t, home, nvchadAction().Version, command)
+			}}
+			editor := guestadapter.Editor{Home: home, Port: port, Now: time.Now}
+			if err := editor.Apply(context.Background(), nvchadAction()); err != nil {
+				t.Fatalf("Editor Apply(): %v", err)
+			}
+			marker := filepath.Join(home, markerRelativePath)
+			content, err := os.ReadFile(marker)
+			if err != nil {
+				t.Fatalf("read marker: %v", err)
+			}
+			external := filepath.Join(t.TempDir(), "external-marker")
+			if err := os.WriteFile(external, content, 0o600); err != nil {
+				t.Fatalf("write external marker: %v", err)
+			}
+			if err := os.Remove(marker); err != nil {
+				t.Fatalf("remove managed marker: %v", err)
+			}
+			if err := os.Symlink(external, marker); err != nil {
+				t.Skipf("create marker symlink: %v", err)
+			}
+			if _, err := editor.Observe(context.Background(), nvchadAction()); err == nil ||
+				!strings.Contains(err.Error(), "regular file") {
+				t.Fatalf("Observe(marker symlink) error=%v, want regular-file refusal", err)
+			}
+			if err := editor.Apply(context.Background(), nvchadAction()); err == nil ||
+				!strings.Contains(err.Error(), "regular file") {
+				t.Fatalf("Apply(marker symlink) error=%v, want regular-file refusal", err)
+			}
+			preserved, err := os.ReadFile(external)
+			if err != nil || string(preserved) != string(content) {
+				t.Fatalf("external marker changed: content=%q err=%v", preserved, err)
+			}
+		})
+	}
+}
+
+func TestManagedEditorAndRuntimeRefuseIntermediateSymlinks(t *testing.T) {
+	t.Run("IDE config parent", func(t *testing.T) {
+		home := t.TempDir()
+		port := &recordingPort{result: func(command transport.Command) transport.Result {
+			return managedEditorCommandResult(t, home, nvchadAction().Version, command)
+		}}
+		editor := guestadapter.Editor{Home: home, Port: port, Now: time.Now}
+		if err := editor.Apply(context.Background(), nvchadAction()); err != nil {
+			t.Fatalf("Editor Apply(): %v", err)
+		}
+		external := t.TempDir()
+		sentinel := filepath.Join(external, "sentinel")
+		if err := os.WriteFile(sentinel, []byte("keep\n"), 0o600); err != nil {
+			t.Fatalf("write external sentinel: %v", err)
+		}
+		configs := filepath.Join(home, ".config", "nvim", "lua", "configs")
+		if err := os.Symlink(external, configs); err != nil {
+			t.Skipf("create configs symlink: %v", err)
+		}
+		ide := guestadapter.IDE{Home: home, Port: port, Delegate: readyComponent{
+			observation: adapters.Observation{State: adapters.StateReady},
+		}}
+		if err := ide.Apply(context.Background(), ideAction()); err == nil ||
+			!strings.Contains(err.Error(), "regular directory") {
+			t.Fatalf("IDE Apply(config parent symlink) error=%v", err)
+		}
+		content, err := os.ReadFile(sentinel)
+		if err != nil || string(content) != "keep\n" {
+			t.Fatalf("external config tree changed: content=%q err=%v", content, err)
+		}
+	})
+
+	t.Run("plugin runtime parent", func(t *testing.T) {
+		home := t.TempDir()
+		port := &recordingPort{result: func(command transport.Command) transport.Result {
+			return managedEditorCommandResult(t, home, nvchadAction().Version, command)
+		}}
+		editor := guestadapter.Editor{Home: home, Port: port, Now: time.Now}
+		if err := editor.Apply(context.Background(), nvchadAction()); err != nil {
+			t.Fatalf("Editor Apply(): %v", err)
+		}
+		pluginParent := filepath.Join(home, ".local", "share", "mds", "nvim", "p")
+		if err := os.RemoveAll(pluginParent); err != nil {
+			t.Fatalf("remove managed plugin parent fixture: %v", err)
+		}
+		external := t.TempDir()
+		sentinel := filepath.Join(external, "sentinel")
+		if err := os.WriteFile(sentinel, []byte("keep\n"), 0o600); err != nil {
+			t.Fatalf("write external sentinel: %v", err)
+		}
+		if err := os.Symlink(external, pluginParent); err != nil {
+			t.Skipf("create plugin parent symlink: %v", err)
+		}
+		if err := editor.Apply(context.Background(), nvchadAction()); err == nil ||
+			!strings.Contains(err.Error(), "regular directory") {
+			t.Fatalf("Editor Apply(plugin parent symlink) error=%v", err)
+		}
+		content, err := os.ReadFile(sentinel)
+		if err != nil || string(content) != "keep\n" {
+			t.Fatalf("external plugin tree changed: content=%q err=%v", content, err)
+		}
+	})
+}
+
 func TestEditorPublishesExactManagedRevision(t *testing.T) {
 	home := t.TempDir()
 	port := &recordingPort{
@@ -78,7 +246,8 @@ func TestEditorPublishesExactManagedRevision(t *testing.T) {
 		t.Fatalf("ownership marker = %s", marker)
 	}
 	for _, command := range port.commands {
-		if strings.Contains(command.Executable, "sh") {
+		switch filepath.Base(command.Executable) {
+		case "sh", "bash", "zsh":
 			t.Fatalf("editor used shell transport: %+v", command)
 		}
 	}
@@ -88,7 +257,7 @@ func TestEditorVerifyRestoresInitiallyMissingPluginCheckouts(t *testing.T) {
 	home := t.TempDir()
 	port := &recordingPort{}
 	port.result = func(command transport.Command) transport.Result {
-		if command.Executable == "nvim" && len(command.Arguments) >= 2 &&
+		if filepath.Base(command.Executable) == "nvim" && len(command.Arguments) >= 2 &&
 			command.Arguments[1] == "+Lazy! restore" {
 			materializeManagedPluginPaths(t, home, false)
 		}
@@ -101,6 +270,7 @@ func TestEditorVerifyRestoresInitiallyMissingPluginCheckouts(t *testing.T) {
 	if err := editor.Apply(context.Background(), nvchadAction()); err != nil {
 		t.Fatalf("Apply(): %v", err)
 	}
+	materializeManagedNeovimLauncher(t, home)
 	observation, err := editor.Observe(context.Background(), nvchadAction())
 	if err != nil || observation.State != adapters.StateAbsent {
 		t.Fatalf("Observe(before restore) = %+v, err=%v, want absent", observation, err)
@@ -228,7 +398,7 @@ func TestExplicitAdoptionBacksUpUserOwnedEditorConfiguration(t *testing.T) {
 	if err != nil || !strings.Contains(string(managed), "pyright") {
 		t.Fatalf("managed LSP config = %q, err = %v", managed, err)
 	}
-	assertPinnedIDEPluginGraph(t, root)
+	assertPinnedIDEPluginGraph(t, home, root)
 
 	lspPath := filepath.Join(root, "lua", "configs", "lspconfig.lua")
 	if err := os.WriteFile(lspPath, []byte("-- drifted\n"), 0o600); err != nil {
@@ -251,12 +421,114 @@ func TestExplicitAdoptionBacksUpUserOwnedEditorConfiguration(t *testing.T) {
 	commands := recordedArgv(port.commands)
 	for _, expected := range []string{
 		"git -C " + filepath.Join(home, ".local", "share", "mds", "nvim", "p"),
-		"nvim --headless +Lazy! restore +qa",
-		"nvim --headless +checkhealth +qa",
+		filepath.Join(home, ".local", "bin", "nvim") + " --headless +Lazy! restore +qa",
+		filepath.Join(home, ".local", "bin", "nvim") + " --headless +checkhealth +qa",
 	} {
 		if !strings.Contains(commands, expected) {
 			t.Fatalf("managed IDE verification does not contain %q:\n%s", expected, commands)
 		}
+	}
+}
+
+func TestIDERepairsPartiallyReadyPackageDependencies(t *testing.T) {
+	home := t.TempDir()
+	port := &recordingPort{result: func(command transport.Command) transport.Result {
+		return managedEditorCommandResult(t, home, nvchadAction().Version, command)
+	}}
+	editor := guestadapter.Editor{Home: home, Port: port, Now: time.Now}
+	if err := editor.Apply(context.Background(), nvchadAction()); err != nil {
+		t.Fatalf("Editor Apply(): %v", err)
+	}
+	delegate := &countingComponent{
+		observation: adapters.Observation{State: adapters.StateReady},
+		verifyErr:   errors.New("gopls is missing"),
+	}
+	ide := guestadapter.IDE{Home: home, Port: port, Delegate: delegate}
+	if err := ide.Apply(context.Background(), ideAction()); err != nil {
+		t.Fatalf("IDE Apply(partial package drift): %v", err)
+	}
+	if delegate.verifyCalls != 1 || delegate.applyCalls != 1 {
+		t.Fatalf("delegate verify/apply calls = %d/%d, want 1/1", delegate.verifyCalls, delegate.applyCalls)
+	}
+}
+
+func TestEditorRepairsBasePluginDriftAfterIDEInstallation(t *testing.T) {
+	home := t.TempDir()
+	drifted := false
+	port := &recordingPort{}
+	port.result = func(command transport.Command) transport.Result {
+		if drifted && command.Executable == "git" && len(command.Arguments) >= 3 &&
+			command.Arguments[2] == "rev-parse" && filepath.Base(command.Arguments[1]) == "NvChad" {
+			return transport.Result{Stdout: strings.Repeat("0", 40) + "\n"}
+		}
+		return managedEditorCommandResult(t, home, nvchadAction().Version, command)
+	}
+	editor := guestadapter.Editor{Home: home, Port: port, Now: time.Now}
+	if err := editor.Apply(context.Background(), nvchadAction()); err != nil {
+		t.Fatalf("Editor Apply(): %v", err)
+	}
+	materializeManagedPluginPaths(t, home, false)
+	ide := guestadapter.IDE{Home: home, Port: port, Delegate: &countingComponent{
+		observation: adapters.Observation{State: adapters.StateReady},
+	}}
+	if err := ide.Apply(context.Background(), ideAction()); err != nil {
+		t.Fatalf("IDE Apply(): %v", err)
+	}
+	materializeManagedPluginPaths(t, home, true)
+	observation, err := editor.Observe(context.Background(), nvchadAction())
+	if err != nil || observation.State != adapters.StateReady {
+		t.Fatalf("Editor Observe(ready IDE graph) = %+v, err=%v, want ready", observation, err)
+	}
+	drifted = true
+	observation, err = editor.Observe(context.Background(), nvchadAction())
+	if err != nil || observation.State != adapters.StateAbsent {
+		t.Fatalf("Editor Observe(base drift) = %+v, err=%v, want absent", observation, err)
+	}
+	if err := editor.Apply(context.Background(), nvchadAction()); err != nil {
+		t.Fatalf("Editor Apply(base drift): %v", err)
+	}
+	drifted = false
+	materializeManagedPluginPaths(t, home, false)
+	if err := editor.Verify(context.Background(), nvchadAction()); err != nil {
+		t.Fatalf("Editor Verify(repaired base graph): %v", err)
+	}
+}
+
+func TestIDERejectsAndRemovesUnexpectedPluginCheckout(t *testing.T) {
+	home := t.TempDir()
+	port := &recordingPort{result: func(command transport.Command) transport.Result {
+		return managedEditorCommandResult(t, home, nvchadAction().Version, command)
+	}}
+	editor := guestadapter.Editor{Home: home, Port: port, Now: time.Now}
+	if err := editor.Apply(context.Background(), nvchadAction()); err != nil {
+		t.Fatalf("Editor Apply(): %v", err)
+	}
+	materializeManagedPluginPaths(t, home, false)
+	ide := guestadapter.IDE{Home: home, Port: port, Delegate: readyComponent{
+		observation: adapters.Observation{State: adapters.StateReady},
+	}}
+	if err := ide.Apply(context.Background(), ideAction()); err != nil {
+		t.Fatalf("IDE Apply(): %v", err)
+	}
+	materializeManagedPluginPaths(t, home, true)
+	pluginRoots, err := filepath.Glob(filepath.Join(home, ".local", "share", "mds", "nvim", "p", "*"))
+	if err != nil || len(pluginRoots) != 1 {
+		t.Fatalf("plugin roots=%v err=%v", pluginRoots, err)
+	}
+	unexpected := filepath.Join(pluginRoots[0], "moving-head-plugin")
+	if err := os.Mkdir(unexpected, 0o700); err != nil {
+		t.Fatalf("create unexpected checkout: %v", err)
+	}
+	observation, err := ide.Observe(context.Background(), ideAction())
+	if err != nil || observation.State != adapters.StateAbsent ||
+		!strings.Contains(observation.Detail, "unexpected plugin checkout") {
+		t.Fatalf("IDE Observe(unexpected)=%+v err=%v, want absent", observation, err)
+	}
+	if err := ide.Apply(context.Background(), ideAction()); err != nil {
+		t.Fatalf("IDE Apply(remove unexpected): %v", err)
+	}
+	if _, err := os.Lstat(unexpected); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("unexpected plugin checkout remains: %v", err)
 	}
 }
 
@@ -740,7 +1012,7 @@ func ideAction() planning.Action {
 	}
 }
 
-func assertPinnedIDEPluginGraph(t *testing.T, root string) {
+func assertPinnedIDEPluginGraph(t *testing.T, home, root string) {
 	t.Helper()
 	content, err := os.ReadFile(filepath.Join(root, "lazy-lock.json"))
 	if err != nil {
@@ -784,6 +1056,30 @@ func assertPinnedIDEPluginGraph(t *testing.T, root string) {
 	}
 	if strings.Contains(string(pluginContent), "commit =") {
 		t.Fatalf("plugin specification duplicates lazy-lock authority:\n%s", pluginContent)
+	}
+	assertManagedPluginDirectoryNames(t, home, entries)
+}
+
+func assertManagedPluginDirectoryNames(t *testing.T, home string, expected map[string]struct {
+	Branch string `json:"branch"`
+	Commit string `json:"commit"`
+}) {
+	t.Helper()
+	roots, err := filepath.Glob(filepath.Join(home, ".local", "share", "mds", "nvim", "p", "*"))
+	if err != nil || len(roots) != 1 {
+		t.Fatalf("managed plugin roots=%v err=%v", roots, err)
+	}
+	entries, err := os.ReadDir(roots[0])
+	if err != nil {
+		t.Fatalf("read managed plugin directory: %v", err)
+	}
+	if len(entries) != len(expected) {
+		t.Fatalf("managed plugin directory entries=%d, want %d", len(entries), len(expected))
+	}
+	for _, entry := range entries {
+		if _, ok := expected[entry.Name()]; !ok {
+			t.Fatalf("unexpected managed plugin directory %s", entry.Name())
+		}
 	}
 }
 
@@ -842,6 +1138,7 @@ func readPluginLock(t *testing.T, home string) map[string]testPluginLockEntry {
 
 func materializeManagedPluginPaths(t *testing.T, home string, includeIDE bool) {
 	t.Helper()
+	materializeManagedNeovimLauncher(t, home)
 	roots, err := filepath.Glob(filepath.Join(
 		home,
 		".local",
@@ -872,9 +1169,23 @@ func materializeManagedPluginPaths(t *testing.T, home string, includeIDE bool) {
 	}
 }
 
+func materializeManagedNeovimLauncher(t *testing.T, home string) {
+	t.Helper()
+	directory := filepath.Join(home, ".local", "bin")
+	if err := os.MkdirAll(directory, 0o700); err != nil {
+		t.Fatalf("create managed launcher directory: %v", err)
+	}
+	path := filepath.Join(directory, "nvim")
+	if err := os.WriteFile(path, []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil {
+		t.Fatalf("write managed Neovim launcher: %v", err)
+	}
+}
+
 type countingComponent struct {
 	observation adapters.Observation
 	applyCalls  int
+	verifyCalls int
+	verifyErr   error
 }
 
 func (component *countingComponent) Observe(
@@ -889,7 +1200,10 @@ func (component *countingComponent) Apply(context.Context, planning.Action) erro
 	return nil
 }
 
-func (*countingComponent) Verify(context.Context, planning.Action) error { return nil }
+func (component *countingComponent) Verify(context.Context, planning.Action) error {
+	component.verifyCalls++
+	return component.verifyErr
+}
 
 func dockerAction() planning.Action {
 	return planning.Action{
