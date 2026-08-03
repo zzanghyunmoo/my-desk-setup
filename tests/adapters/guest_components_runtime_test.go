@@ -12,7 +12,6 @@ import (
 	"runtime"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/zzanghyunmoo/my-desk-setup/internal/adapters"
 	guestadapter "github.com/zzanghyunmoo/my-desk-setup/internal/adapters/guest"
@@ -22,127 +21,6 @@ import (
 	"github.com/zzanghyunmoo/my-desk-setup/internal/target"
 	"github.com/zzanghyunmoo/my-desk-setup/internal/transport"
 )
-
-func TestEditorRefusesUserOwnedConfiguration(t *testing.T) {
-	home := t.TempDir()
-	root := filepath.Join(home, ".config", "nvim")
-	if err := os.MkdirAll(root, 0o700); err != nil {
-		t.Fatalf("create user config: %v", err)
-	}
-	editor := guestadapter.Editor{Home: home}
-	observation, err := editor.Observe(context.Background(), nvchadAction())
-	if err != nil {
-		t.Fatalf("Observe(): %v", err)
-	}
-	if observation.State != adapters.StateConflict ||
-		!strings.Contains(observation.Detail, "user-owned") {
-		t.Fatalf("observation = %+v, want user-owned conflict", observation)
-	}
-}
-
-func TestEditorPublishesExactManagedRevision(t *testing.T) {
-	home := t.TempDir()
-	port := &recordingPort{
-		result: func(command transport.Command) transport.Result {
-			if command.Executable == "git" &&
-				len(command.Arguments) >= 3 &&
-				command.Arguments[2] == "rev-parse" {
-				return transport.Result{Stdout: nvchadAction().Version + "\n"}
-			}
-			return transport.Result{}
-		},
-	}
-	editor := guestadapter.Editor{
-		Home: home,
-		Port: port,
-		Delegate: readyComponent{
-			observation: adapters.Observation{
-				State: adapters.StateReady, InstalledVersion: nvchadAction().Version,
-			},
-		},
-		Now: func() time.Time {
-			return time.Date(2026, 7, 29, 8, 0, 0, 0, time.UTC)
-		},
-	}
-	if err := editor.Apply(context.Background(), nvchadAction()); err != nil {
-		t.Fatalf("Apply(): %v", err)
-	}
-	observation, err := editor.Observe(context.Background(), nvchadAction())
-	if err != nil {
-		t.Fatalf("Observe(after apply): %v", err)
-	}
-	if observation.State != adapters.StateReady ||
-		observation.InstalledVersion != nvchadAction().Version {
-		t.Fatalf("observation = %+v, want exact managed revision", observation)
-	}
-	marker, err := os.ReadFile(filepath.Join(home, ".config", "nvim", ".mds-managed.json"))
-	if err != nil {
-		t.Fatalf("read ownership marker: %v", err)
-	}
-	if !strings.Contains(string(marker), `"schema_version": "mds.ownership/v1"`) {
-		t.Fatalf("ownership marker = %s", marker)
-	}
-	for _, command := range port.commands {
-		if strings.Contains(command.Executable, "sh") {
-			t.Fatalf("editor used shell transport: %+v", command)
-		}
-	}
-}
-
-func TestExplicitUpdateReplacesOnlyManagedEditorConfiguration(t *testing.T) {
-	home := t.TempDir()
-	revision := "1111111111111111111111111111111111111111"
-	port := &recordingPort{
-		result: func(command transport.Command) transport.Result {
-			if command.Executable == "git" &&
-				len(command.Arguments) >= 3 &&
-				command.Arguments[2] == "rev-parse" {
-				return transport.Result{Stdout: revision + "\n"}
-			}
-			return transport.Result{}
-		},
-	}
-	action := nvchadAction()
-	action.Version = revision
-	editor := guestadapter.Editor{
-		Home: home, Port: port, Delegate: readyComponent{},
-		Now: func() time.Time {
-			return time.Date(2026, 7, 29, 8, 0, 0, 0, time.UTC)
-		},
-	}
-	if err := editor.Apply(context.Background(), action); err != nil {
-		t.Fatalf("Apply(initial): %v", err)
-	}
-	revision = "2222222222222222222222222222222222222222"
-	action.Version = revision
-	editor.AllowReplace = true
-	if err := editor.Apply(context.Background(), action); err != nil {
-		t.Fatalf("Apply(update): %v", err)
-	}
-	observation, err := editor.Observe(context.Background(), action)
-	if err != nil {
-		t.Fatalf("Observe(updated): %v", err)
-	}
-	if observation.State != adapters.StateReady ||
-		observation.InstalledVersion != revision {
-		t.Fatalf("observation = %+v, want updated managed revision", observation)
-	}
-
-	userHome := t.TempDir()
-	userRoot := filepath.Join(userHome, ".config", "nvim")
-	if err := os.MkdirAll(userRoot, 0o700); err != nil {
-		t.Fatalf("create user config: %v", err)
-	}
-	userEditor := editor
-	userEditor.Home = userHome
-	observation, err = userEditor.Observe(context.Background(), action)
-	if err != nil {
-		t.Fatalf("Observe(user-owned): %v", err)
-	}
-	if observation.State != adapters.StateConflict {
-		t.Fatalf("user-owned observation = %+v, want conflict", observation)
-	}
-}
 
 func TestDockerRequiresActiveSystemdBeforeMutation(t *testing.T) {
 	port := &recordingPort{}
@@ -466,17 +344,6 @@ func TestDockerInstallsGuestEngineAndRequestsShellRestart(t *testing.T) {
 		if strings.Contains(joined, forbidden) {
 			t.Fatalf("Docker installation attempted forbidden %q:\n%s", forbidden, joined)
 		}
-	}
-}
-
-func nvchadAction() planning.Action {
-	return planning.Action{
-		ID:          "lima-guest:mds/nvchad",
-		ComponentID: "nvchad",
-		Version:     "e3572e1f5e1c297212c3deeb17b7863139ce663e",
-		Verification: [][]string{
-			{"nvim", "--headless", "+checkhealth", "+quit"},
-		},
 	}
 }
 

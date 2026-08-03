@@ -34,11 +34,24 @@ func (adapter Adapter) Observe(
 	if err != nil {
 		return adapters.Observation{}, err
 	}
+	specs, err := adapter.launcherSpecs(action, component)
+	if err != nil {
+		return adapters.Observation{}, err
+	}
+	if launcher := observeLaunchers(specs); launcher.State != adapters.StateReady {
+		return launcher, nil
+	}
 	if len(action.Verification) == 0 || len(action.Verification[0]) == 0 {
 		return adapters.Observation{
 			State:  adapters.StateConflict,
 			Detail: "verification command is missing",
 		}, nil
+	}
+	if action.Installer == "vendor" && component.VersionPolicy.Mode == "pinned" {
+		path := filepath.Join(adapter.Home, ".local", "bin", action.Verification[0][0])
+		if _, err := os.Lstat(path); errors.Is(err, os.ErrNotExist) {
+			return adapters.Observation{State: adapters.StateAbsent}, nil
+		}
 	}
 	command := adapter.verificationCommand(action.Verification[0])
 	if err := ValidateCatalogVerificationCommand(action.ComponentID, command); err != nil {
@@ -46,6 +59,7 @@ func (adapter Adapter) Observe(
 			State: adapters.StateConflict, Detail: err.Error(),
 		}, nil
 	}
+	command = adapter.commandWithManagedLauncher(action, command)
 	result, err := adapter.execute(ctx, command)
 	if err != nil {
 		if errors.Is(err, exec.ErrNotFound) || errors.Is(err, os.ErrNotExist) {
@@ -76,13 +90,6 @@ func (adapter Adapter) Observe(
 				action.Version,
 			),
 		}, nil
-	}
-	specs, err := adapter.launcherSpecs(action, component)
-	if err != nil {
-		return adapters.Observation{}, err
-	}
-	if launcher := observeLaunchers(specs); launcher.State != adapters.StateReady {
-		return launcher, nil
 	}
 	return adapters.Observation{
 		State: adapters.StateReady, InstalledVersion: firstLine(output),
@@ -214,11 +221,27 @@ func (adapter Adapter) Verify(
 		); err != nil {
 			return err
 		}
+		command = adapter.commandWithManagedLauncher(action, command)
 		if _, err := adapter.execute(ctx, command); err != nil {
 			return fmt.Errorf("verify %s with %s: %w", action.ID, argv[0], err)
 		}
 	}
 	return adapter.verifyFunctionalToolchain(ctx, action)
+}
+
+func (adapter Adapter) commandWithManagedLauncher(
+	action planning.Action,
+	command transport.Command,
+) transport.Command {
+	if action.Version == "manager-owned" || action.Version == "manual" || adapter.Home == "" {
+		return command
+	}
+	path := filepath.Join(adapter.Home, ".local", "bin", command.Executable)
+	info, err := os.Lstat(path)
+	if err == nil && info.Mode().IsRegular() {
+		command.Executable = path
+	}
+	return command
 }
 
 func (adapter Adapter) componentAndLock(
@@ -285,6 +308,7 @@ func (adapter Adapter) environment() map[string]string {
 		os.Getenv("PATH"),
 	}, string(os.PathListSeparator))
 	return map[string]string{
+		"HOME":                        adapter.Home,
 		"PATH":                        path,
 		"BUN_INSTALL":                 bunHome,
 		"MISE_DATA_DIR":               miseHome,

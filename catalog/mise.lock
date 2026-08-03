@@ -4,6 +4,10 @@
 version = "3.44.4"
 backend = "http:flutter"
 
+[tools.flutter."platforms.linux-x64"]
+checksum = "sha256:c853cda0312a162854c481fe6a1bc286d84fbb74bfab7037c39750061dc9b466"
+url = "https://storage.googleapis.com/flutter_infra_release/releases/stable/linux/flutter_linux_3.44.4-stable.tar.xz"
+
 [[tools.go]]
 version = "1.26.5"
 backend = "core:go"
@@ -31,10 +35,6 @@ url = "https://github.com/gradle/gradle-distributions/releases/download/v9.6.1/g
 [[tools."http:flutter"]]
 version = "3.44.4"
 backend = "http:flutter"
-
-[[tools."http:neovim"]]
-version = "0.11.5"
-backend = "http:neovim"
 
 [[tools.java]]
 version = "temurin-25.0.4+7.0.LTS"

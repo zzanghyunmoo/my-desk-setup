@@ -11,6 +11,11 @@ import (
 	"github.com/zzanghyunmoo/my-desk-setup/internal/transport"
 )
 
+type Options struct {
+	AllowReplace bool
+	AllowAdopt   bool
+}
+
 // New returns the production component router for one Linux guest. All
 // commands are executed through the supplied guest-local transport port.
 func New(
@@ -22,13 +27,13 @@ func New(
 	architecture string,
 	client *http.Client,
 	now func() time.Time,
-	allowReplace bool,
+	options Options,
 ) adapters.Component {
 	packageAdapter := packages.Adapter{
 		Environment:  environment,
 		Port:         port,
 		Home:         home,
-		AllowReplace: allowReplace,
+		AllowReplace: options.AllowReplace,
 		Vendor: packages.Vendor{
 			Client: client, Home: home, Platform: platform, Arch: architecture,
 		},
@@ -40,9 +45,10 @@ func New(
 			"opencode":    Agent{Home: home, Delegate: packageAdapter},
 			"codex":       Agent{Home: home, Delegate: packageAdapter},
 			"nvchad": Editor{
-				Home: home, Port: port, Delegate: packageAdapter, Now: now,
-				AllowReplace: allowReplace,
+				Home: home, Port: port, Now: now,
+				AllowReplace: options.AllowReplace, AllowAdopt: options.AllowAdopt,
 			},
+			"nvim-ide-tools": IDE{Home: home, Port: port, Delegate: packageAdapter},
 			"docker-engine": Docker{
 				Facts: facts, Port: port, Delegate: packageAdapter, Client: client,
 			},

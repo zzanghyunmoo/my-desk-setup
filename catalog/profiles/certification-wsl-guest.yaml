@@ -16,6 +16,7 @@ selection:
   - uv
   - neovim
   - nvchad
+  - nvim-ide-tools
   - herdr
   - atlassian-cli
   - notion-cli

@@ -56,7 +56,7 @@ func PublishMiseConfig(home string, mise catalog.MiseFiles) error {
 	}{
 		{
 			source:      "mise.lock",
-			destination: filepath.Join(home, ".config", "mise", "config.lock"),
+			destination: filepath.Join(home, ".config", "mise", "mise.lock"),
 			content:     mise.Lock,
 		},
 		{

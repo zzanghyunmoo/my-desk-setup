@@ -30,6 +30,7 @@ func newApplyCommand(streams Streams, system Runtime) *cobra.Command {
 	var catalogPath string
 	var expectedDigest string
 	var stateRoot string
+	var adoptNvChad bool
 	var guestBootstrapArchive string
 
 	command := &cobra.Command{
@@ -91,6 +92,9 @@ func newApplyCommand(streams Streams, system Runtime) *cobra.Command {
 			if err := execution.VerifyPlan(plan, expectedDigest); err != nil {
 				return stalePlan(err)
 			}
+			if adoptNvChad && !planSelectsComponent(plan, "nvchad") {
+				return invalidInput(errors.New("--adopt-nvchad requires selecting nvchad"))
+			}
 			if err := validateGuestBootstrapArchiveSelection(
 				guestBootstrapArchive,
 				facts,
@@ -102,13 +106,15 @@ func newApplyCommand(streams Streams, system Runtime) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			componentAdapter, err := currentAdapterWithOptions(
+			componentAdapter, err := currentAdapter(
 				environment,
 				facts,
 				home,
 				system,
-				false,
-				guestBootstrapArchive,
+				adapterOptions{
+					AllowAdopt:            adoptNvChad,
+					GuestBootstrapArchive: guestBootstrapArchive,
+				},
 			)
 			if err != nil {
 				var archiveError *hostadapter.GuestBootstrapArchiveError
@@ -188,34 +194,39 @@ func newApplyCommand(streams Streams, system Runtime) *cobra.Command {
 	)
 	flags.StringVar(&format, "format", "human", "output format: human or json")
 	flags.StringVar(&catalogPath, "catalog", "", "override the embedded catalog directory")
+	flags.BoolVar(
+		&adoptNvChad,
+		"adopt-nvchad",
+		false,
+		"back up and adopt a user-owned ~/.config/nvim when nvchad is selected",
+	)
 	return command
 }
+
+type adapterOptions struct {
+	AllowReplace          bool
+	AllowAdopt            bool
+	GuestBootstrapArchive string
+}
+
+type adapterFactory func(
+	environment catalog.Environment,
+	facts target.Facts,
+	home string,
+	system Runtime,
+	options adapterOptions,
+) (adapters.Component, error)
 
 func currentAdapter(
 	environment catalog.Environment,
 	facts target.Facts,
 	home string,
 	system Runtime,
-	allowReplace bool,
+	options adapterOptions,
 ) (adapters.Component, error) {
-	return currentAdapterWithOptions(
-		environment,
-		facts,
-		home,
-		system,
-		allowReplace,
-		"",
-	)
-}
-
-func currentAdapterWithOptions(
-	environment catalog.Environment,
-	facts target.Facts,
-	home string,
-	system Runtime,
-	allowReplace bool,
-	guestBootstrapArchive string,
-) (adapters.Component, error) {
+	if system.newAdapter != nil {
+		return system.newAdapter(environment, facts, home, system, options)
+	}
 	port := transport.NewLocal()
 	switch facts.ID.Kind {
 	case target.KindMacOSHost, target.KindWindowsHost:
@@ -226,8 +237,8 @@ func currentAdapterWithOptions(
 			facts.OS,
 			facts.Architecture,
 			hostadapter.Options{
-				AllowReplace:          allowReplace,
-				GuestBootstrapArchive: guestBootstrapArchive,
+				AllowReplace:          options.AllowReplace,
+				GuestBootstrapArchive: options.GuestBootstrapArchive,
 			},
 		)
 	case target.KindWSLGuest, target.KindLimaGuest:
@@ -244,11 +255,23 @@ func currentAdapterWithOptions(
 			facts.Architecture,
 			&http.Client{Timeout: 5 * time.Minute},
 			now,
-			allowReplace,
+			guestadapter.Options{
+				AllowReplace: options.AllowReplace,
+				AllowAdopt:   options.AllowAdopt,
+			},
 		), nil
 	default:
 		return nil, fmt.Errorf("no adapter for target %s", facts.ID.String())
 	}
+}
+
+func planSelectsComponent(plan planning.Plan, componentID string) bool {
+	for _, action := range plan.Actions {
+		if action.ComponentID == componentID {
+			return true
+		}
+	}
+	return false
 }
 
 func validateGuestBootstrapArchiveSelection(

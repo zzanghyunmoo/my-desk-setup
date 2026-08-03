@@ -449,6 +449,80 @@ func TestCLIApplyRejectsStaleDigestBeforeStateMutation(t *testing.T) {
 	}
 }
 
+func TestCLIApplyRejectsNvChadAdoptionWithoutNvChadSelection(t *testing.T) {
+	home := t.TempDir()
+	stateRoot := filepath.Join(home, "state")
+	imageDigest := strings.Repeat("a", 64)
+	creationNonce := strings.Repeat("b", 64)
+	commitment, err := target.GuestCreationNonceCommitment(creationNonce)
+	if err != nil {
+		t.Fatalf("GuestCreationNonceCommitment(): %v", err)
+	}
+	system := cli.Runtime{
+		GOOS: "linux", GOARCH: "amd64",
+		Getenv: func(key string) string {
+			switch key {
+			case "WSL_DISTRO_NAME":
+				return "Ubuntu-26.04"
+			case "MDS_IMAGE_REVISION":
+				return "sha256:" + imageDigest
+			case "MDS_IMAGE_PROVENANCE":
+				return "https://example.invalid/ubuntu.wsl"
+			case "MDS_IMAGE_CREATION_NONCE_COMMITMENT":
+				return commitment
+			default:
+				return ""
+			}
+		},
+		HomeDir: func() (string, error) { return home, nil },
+		ObserveTarget: func(_ context.Context, facts target.Facts) (target.Facts, error) {
+			facts.OS = "linux"
+			facts.OSVersion = "26.04"
+			facts.SystemdSupported = true
+			facts.SystemdActive = true
+			facts.Reachable = true
+			return facts, nil
+		},
+	}
+
+	var planOutput bytes.Buffer
+	var planError bytes.Buffer
+	if code := cli.Run(
+		[]string{
+			"plan", "--target", "wsl-guest:Ubuntu-26.04",
+			"--component", "pyright", "--format", "json",
+		},
+		cli.Streams{Input: strings.NewReader(""), Output: &planOutput, Error: &planError},
+		system,
+	); code != cli.ExitSuccess {
+		t.Fatalf("plan code=%d stderr=%q", code, planError.String())
+	}
+	var plan planning.Plan
+	decodeSingleJSON(t, planOutput.Bytes(), &plan)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	code := cli.Run(
+		[]string{
+			"apply", "--target", "wsl-guest:Ubuntu-26.04",
+			"--component", "pyright", "--plan-digest", plan.Digest,
+			"--adopt-nvchad", "--state-root", stateRoot, "--format", "json",
+		},
+		cli.Streams{Input: strings.NewReader(""), Output: &stdout, Error: &stderr},
+		system,
+	)
+	if code != cli.ExitInvalidInput {
+		t.Fatalf("apply code=%d stderr=%q, want invalid-input", code, stderr.String())
+	}
+	envelope := decodeCLIError(t, stderr.Bytes())
+	if !strings.Contains(envelope.Details.Cause, "requires selecting nvchad") {
+		t.Fatalf("apply error = %+v, want nvchad selection rejection", envelope)
+	}
+	if _, err := os.Stat(stateRoot); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("state root exists after rejected adoption: %v", err)
+	}
+}
+
 func TestCLIApplyRejectsGuestBootstrapArchiveOutsideHostGuestLifecycle(t *testing.T) {
 	home := t.TempDir()
 	privatePath := filepath.Join(home, "private-release-name.tar.gz")

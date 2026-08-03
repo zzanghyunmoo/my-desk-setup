@@ -160,7 +160,7 @@ func newUpdateCommand(streams Streams, system Runtime) *cobra.Command {
 				plan.TargetPlan.Target,
 				home,
 				system,
-				true,
+				adapterOptions{AllowReplace: true},
 			)
 			if err != nil {
 				return updateError(err)

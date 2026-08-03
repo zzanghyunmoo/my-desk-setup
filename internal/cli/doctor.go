@@ -77,7 +77,9 @@ func newDoctorCommand(streams Streams, system Runtime) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			componentAdapter, err := currentAdapter(environment, facts, home, system, false)
+			componentAdapter, err := currentAdapter(
+				environment, facts, home, system, adapterOptions{},
+			)
 			if err != nil {
 				return err
 			}

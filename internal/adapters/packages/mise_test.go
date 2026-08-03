@@ -41,14 +41,15 @@ func TestMiseInstallUsesStrictLockedPackageAndReshim(t *testing.T) {
 
 func TestToolchainVerificationCompilesAndRunsFixedSources(t *testing.T) {
 	identityCommands := map[string][]string{
-		"java":        {"java", "--version"},
-		"kotlin":      {"kotlinc", "-version"},
-		"go":          {"go", "version"},
-		"python":      {"python", "--version"},
-		"typescript":  {"tsc", "--version"},
-		"c-toolchain": {"cc", "--version"},
-		"flutter":     {"flutter", "--version"},
-		"gradle":      {"gradle", "--version"},
+		"java":           {"java", "--version"},
+		"kotlin":         {"kotlinc", "-version"},
+		"go":             {"go", "version"},
+		"python":         {"python", "--version"},
+		"typescript":     {"tsc", "--version"},
+		"c-toolchain":    {"cc", "--version"},
+		"flutter":        {"flutter", "--version"},
+		"gradle":         {"gradle", "--version"},
+		"nvim-ide-tools": {"clangd", "--version"},
 	}
 	for componentID, scenario := range functionalScenarios {
 		componentID := componentID
@@ -88,10 +89,29 @@ func TestFunctionalScenariosCoverEveryCompileRunComponent(t *testing.T) {
 		"c-toolchain",
 		"flutter",
 		"gradle",
+		"nvim-ide-tools",
 	} {
 		if _, exists := functionalScenarios[componentID]; !exists {
 			t.Errorf("functional scenario is missing for %s", componentID)
 		}
+	}
+}
+
+func TestIDEAndCToolchainFunctionalScenariosExerciseReviewedRuntimes(t *testing.T) {
+	cCommands := functionalScenarios["c-toolchain"].commands
+	if !reflect.DeepEqual(cCommands, []functionalCommand{
+		functionalStep("cc", "main.c", "-o", "mds-c-smoke"),
+		functionalOutput("ok", "./mds-c-smoke"),
+		functionalStep("c++", "main.cpp", "-o", "mds-cxx-smoke"),
+		functionalOutput("ok", "./mds-cxx-smoke"),
+	}) {
+		t.Fatalf("C/C++ functional commands = %#v", cCommands)
+	}
+	ideCommands := functionalScenarios["nvim-ide-tools"].commands
+	if got := ideCommands[len(ideCommands)-1]; !reflect.DeepEqual(got, functionalOutput(
+		"ok", "/usr/bin/python3", "-c", "import debugpy; print('ok')",
+	)) {
+		t.Fatalf("debugpy verification command = %#v, want system Python", got)
 	}
 }
 
@@ -106,7 +126,7 @@ func TestPublishMiseConfigUsesReviewedEnvironmentBytes(t *testing.T) {
 	}
 	for path, want := range map[string]string{
 		filepath.Join(home, ".config", "mise", "config.toml"): environment.Mise.Config,
-		filepath.Join(home, ".config", "mise", "config.lock"): environment.Mise.Lock,
+		filepath.Join(home, ".config", "mise", "mise.lock"):   environment.Mise.Lock,
 	} {
 		got, err := os.ReadFile(path)
 		if err != nil {
@@ -120,7 +140,7 @@ func TestPublishMiseConfigUsesReviewedEnvironmentBytes(t *testing.T) {
 
 func TestPublishMiseConfigPreflightsBothFilesBeforeMutation(t *testing.T) {
 	t.Parallel()
-	for _, conflict := range []string{"config.toml", "config.lock"} {
+	for _, conflict := range []string{"config.toml", "mise.lock"} {
 		conflict := conflict
 		t.Run(conflict, func(t *testing.T) {
 			t.Parallel()
@@ -144,7 +164,7 @@ func TestPublishMiseConfigPreflightsBothFilesBeforeMutation(t *testing.T) {
 			if err == nil {
 				t.Fatal("PublishMiseConfig() accepted user-owned file")
 			}
-			other := "config.lock"
+			other := "mise.lock"
 			if conflict == other {
 				other = "config.toml"
 			}
