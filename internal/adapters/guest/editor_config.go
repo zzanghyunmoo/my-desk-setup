@@ -198,6 +198,23 @@ func writeEditorConfiguration(root string) error {
 	return writeConfigurationFiles(root, editorConfiguration)
 }
 
+func repairEditorConfiguration(root string) error {
+	includeIDE, ready, _, err := inspectPluginSpecification(root)
+	if err != nil {
+		return err
+	}
+	if !ready || !includeIDE {
+		return writeEditorConfiguration(root)
+	}
+	files := make(map[string]string, len(editorConfiguration)-1)
+	for relativePath, content := range editorConfiguration {
+		if relativePath != "lua/plugins/init.lua" {
+			files[relativePath] = content
+		}
+	}
+	return writeConfigurationFiles(root, files)
+}
+
 func writeIDEConfiguration(root string) error {
 	return writeConfigurationFiles(root, ideConfiguration)
 }
@@ -259,6 +276,14 @@ func inspectEditorConfiguration(root string) (bool, bool, string, error) {
 			return false, false, detail, err
 		}
 	}
+	includeIDE, ready, detail, err := inspectPluginSpecification(root)
+	if err != nil || !ready {
+		return false, false, detail, err
+	}
+	return includeIDE, true, "", nil
+}
+
+func inspectPluginSpecification(root string) (bool, bool, string, error) {
 	pluginPath := "lua/plugins/init.lua"
 	path := filepath.Join(root, filepath.FromSlash(pluginPath))
 	parentExists, err := inspectDirectoryBelow(root, filepath.Dir(path))

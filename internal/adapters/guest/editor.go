@@ -166,7 +166,7 @@ func (editor Editor) Apply(
 			return errors.New("existing ~/.config/nvim is not mds-managed")
 		}
 		if marker.Revision == action.Version {
-			if err := writeEditorConfiguration(target); err != nil {
+			if err := repairEditorConfiguration(target); err != nil {
 				return err
 			}
 			return preparePluginRuntime(ctx, editor.Home, editor.Port, basePluginSet)

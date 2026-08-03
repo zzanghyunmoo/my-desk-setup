@@ -471,6 +471,11 @@ func TestEditorRepairsBasePluginDriftAfterIDEInstallation(t *testing.T) {
 		t.Fatalf("IDE Apply(): %v", err)
 	}
 	materializeManagedPluginPaths(t, home, true)
+	pluginSpecPath := filepath.Join(home, ".config", "nvim", "lua", "plugins", "init.lua")
+	pluginSpecBefore, err := os.ReadFile(pluginSpecPath)
+	if err != nil {
+		t.Fatalf("read IDE plugin spec before base repair: %v", err)
+	}
 	observation, err := editor.Observe(context.Background(), nvchadAction())
 	if err != nil || observation.State != adapters.StateReady {
 		t.Fatalf("Editor Observe(ready IDE graph) = %+v, err=%v, want ready", observation, err)
@@ -482,6 +487,15 @@ func TestEditorRepairsBasePluginDriftAfterIDEInstallation(t *testing.T) {
 	}
 	if err := editor.Apply(context.Background(), nvchadAction()); err != nil {
 		t.Fatalf("Editor Apply(base drift): %v", err)
+	}
+	pluginSpecAfter, err := os.ReadFile(pluginSpecPath)
+	if err != nil || string(pluginSpecAfter) != string(pluginSpecBefore) {
+		t.Fatalf(
+			"Editor base repair changed IDE-owned plugin spec: before=%q after=%q err=%v",
+			pluginSpecBefore,
+			pluginSpecAfter,
+			err,
+		)
 	}
 	drifted = false
 	materializeManagedPluginPaths(t, home, false)
