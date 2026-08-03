@@ -39,7 +39,7 @@ jq --arg commit "$MDS_COMMIT" \
       ))
    | unique_by(.id)
    | .[].id' \
-  "$mds_tmp/runs.json" > "$mds_tmp/run-ids.txt"
+  "$mds_tmp/runs.json" | tr -d '\r' > "$mds_tmp/run-ids.txt"
 
 if [[ ! -s "$mds_tmp/run-ids.txt" ]]; then
   echo "no successful target-certification runs found for $MDS_COMMIT" >&2
@@ -60,7 +60,7 @@ while IFS= read -r mds_run_id; do
         | .run_attempt]
        | unique
        | if length == 1 then .[0] else error("ambiguous run attempt") end' \
-      "$mds_tmp/runs.json"
+      "$mds_tmp/runs.json" | tr -d '\r'
   )
   gh api \
     "repos/$GITHUB_REPOSITORY/actions/runs/$mds_run_id/artifacts?per_page=100" \
@@ -76,7 +76,7 @@ while IFS= read -r mds_run_id; do
        | test("^target-evidence-(macos-host|windows-host|wsl-guest|lima-guest)-"
               + $commit + "-" + $cohort + "-" + $run_id + "-" + $run_attempt + "$"))
      | [.name, (.id | tostring), (.size_in_bytes | tostring)] | @tsv' \
-    "$mds_tmp/artifacts-$mds_run_id.json" >> "$mds_tmp/artifacts.tsv"
+    "$mds_tmp/artifacts-$mds_run_id.json" | tr -d '\r' >> "$mds_tmp/artifacts.tsv"
 done < "$mds_tmp/run-ids.txt"
 
 mkdir -m 700 "$MDS_EVIDENCE_ROOT"
