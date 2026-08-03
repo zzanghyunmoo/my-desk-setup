@@ -23,12 +23,16 @@ Use the self-hosted `Actual target` lane in
 
 ```bash
 scripts/prepare-target-certification.sh \
+  --mds-evidence /usr/local/bin/mds-evidence \
+  --expected-mds-evidence-sha256 '<release-certifier-sha256>' \
   --mds /usr/local/bin/mds \
   --target lima-guest:mds \
   --expected-binary-sha256 '<release-binary-sha256>' \
   --profile certification-lima-guest > preparation.json
 
 scripts/certify-target.sh \
+  --mds-evidence /usr/local/bin/mds-evidence \
+  --expected-mds-evidence-sha256 '<release-certifier-sha256>' \
   --mds /usr/local/bin/mds \
   --target lima-guest:mds \
   --output target-evidence/run-manual-001 \
@@ -39,6 +43,8 @@ scripts/certify-target.sh \
   --profile certification-lima-guest
 
 scripts/verify-target-evidence.sh \
+  --mds-evidence /usr/local/bin/mds-evidence \
+  --expected-mds-evidence-sha256 '<release-certifier-sha256>' \
   --bundle target-evidence/run-manual-001 \
   --expected-cli-revision '0.1.0 (commit=<commit>, date=<date>)' \
   --expected-catalog-revision 'sha256:<catalog>' \
@@ -52,8 +58,9 @@ scripts/verify-target-evidence.sh \
 
 For a manual WSL/Lima run, compare the host's committed ownership record with
 the live marker and pass only the domain-separated commitment emitted by the
-host plan. `mds-evidence prepare` recomputes the commitment from the guest
-marker and emits the exact plan digest without mutation. The self-hosted
+host plan. The v3 guest marker contains only that public commitment; the raw
+nonce remains in the owner-only host record. The released `mds-evidence prepare`
+observes the marker commitment and emits the exact plan digest without mutation. The self-hosted
 workflow accepts that non-secret commitment, but never the raw nonce or a
 machine-local binary path. Host and guest runner services must not define a raw
 nonce environment variable.

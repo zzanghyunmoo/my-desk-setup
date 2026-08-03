@@ -78,12 +78,6 @@ func Prepare(ctx context.Context, request PrepareRequest) (Preparation, error) {
 		return Preparation{}, err
 	}
 	defer prepared.productionBinary.Remove()
-	if err := validatePreparedPlanTarget(
-		prepared.plan.Target,
-		prepared.certifiedTarget,
-	); err != nil {
-		return Preparation{}, err
-	}
 	if err := scanEvidenceMaterial(PlanFile, prepared.planOutput); err != nil {
 		return Preparation{}, err
 	}
@@ -138,7 +132,6 @@ func Certify(ctx context.Context, request CertifyRequest) (Manifest, error) {
 	cli := prepared.cli
 	plan := prepared.plan
 	planOutput := prepared.planOutput
-	certifiedTarget := prepared.certifiedTarget
 	environment := prepared.environment
 	common := prepared.commonArguments
 	if identity.CohortCommitPrefix != prepared.cli.Commit[:8] {
@@ -238,9 +231,6 @@ func Certify(ctx context.Context, request CertifyRequest) (Manifest, error) {
 	}
 	components, err := validatePlanDoctor(plan, snapshot, cli, request.TargetID)
 	if err != nil {
-		return Manifest{}, err
-	}
-	if err := validatePreparedPlanTarget(plan.Target, certifiedTarget); err != nil {
 		return Manifest{}, err
 	}
 	if err := scanEvidenceMaterial(PlanFile, planOutput); err != nil {
@@ -385,13 +375,6 @@ func validatePrepareRequest(request PrepareRequest) (target.ID, error) {
 	certificationID, err := target.ParseID(request.TargetID)
 	if err != nil {
 		return target.ID{}, fmt.Errorf("invalid certification target: %w", err)
-	}
-	if _, err := selectionArguments(
-		request.All,
-		request.Profile,
-		request.Components,
-	); err != nil {
-		return target.ID{}, err
 	}
 	return certificationID, nil
 }
@@ -711,19 +694,11 @@ func probeCertificationTarget(
 	); err != nil {
 		return target.Facts{}, err
 	}
-	commitment, err := target.GuestCreationNonceCommitment(
-		observedImage.CreationNonce,
-	)
-	if err != nil {
-		return target.Facts{}, errors.New(
-			"provisioned guest creation identity is invalid",
-		)
-	}
 	return target.Facts{
 		ID: id, OS: "linux", Architecture: runtime.GOARCH, Reachable: true,
 		ImageRevision:                observedImage.Revision,
 		ImageProvenance:              observedImage.Provenance,
-		ImageCreationNonceCommitment: commitment,
+		ImageCreationNonceCommitment: observedImage.CreationNonceCommitment,
 	}, nil
 }
 
@@ -743,11 +718,9 @@ func validateCertifiedGuestImage(
 			image.URL,
 		)
 	}
-	commitment, err := target.GuestCreationNonceCommitment(
-		observedImage.CreationNonce,
-	)
-	if err != nil || (expectedGuestCreationNonceCommitment != "" &&
-		commitment != expectedGuestCreationNonceCommitment) {
+	if expectedGuestCreationNonceCommitment != "" &&
+		observedImage.CreationNonceCommitment !=
+			expectedGuestCreationNonceCommitment {
 		return errors.New(
 			"provisioned guest creation identity does not match the reviewed host ownership commitment",
 		)

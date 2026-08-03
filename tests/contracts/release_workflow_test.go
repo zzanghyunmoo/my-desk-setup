@@ -2,6 +2,8 @@ package contracts_test
 
 import (
 	"archive/zip"
+	"crypto/sha256"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -142,6 +144,10 @@ func TestReleasePublishRequiresActualTargetPromotion(t *testing.T) {
 	}
 	workflow := string(content)
 	for _, required := range []string{
+		"mds-evidence_${MDS_VERSION}_linux_amd64",
+		"mds-evidence_${MDS_VERSION}_darwin_${release_arch}",
+		"mds-evidence_$($env:MDS_VERSION)_windows_$releaseArch.exe",
+		`"release-dist/$certifier" prepare --help`,
 		"promotion:",
 		"scripts/promote-release.sh",
 		"scripts/verify-promotion-report.sh",
@@ -177,9 +183,11 @@ func TestTargetCertificationCarriesExactPromotionIdentity(t *testing.T) {
 	workflow := string(content)
 	for _, required := range []string{
 		"expected_binary_sha256:",
+		"expected_mds_evidence_sha256:",
 		"expected_guest_creation_nonce_commitment:",
 		"cohort:",
 		"--expected-binary-sha256",
+		"--expected-mds-evidence-sha256",
 		"--expected-plan-digest",
 		"--expected-guest-creation-nonce-commitment",
 		`--cohort "$CERTIFICATION_COHORT"`,
@@ -216,8 +224,12 @@ func TestTargetCertificationCarriesExactPromotionIdentity(t *testing.T) {
 		`echo "certification_profile=$certification_profile"`,
 		`echo "cohort=$CERTIFICATION_COHORT"`,
 		`echo "mds_path=$mds_path"`,
+		`echo "mds_evidence_path=$mds_evidence_path"`,
 		"mds_path=/usr/local/bin/mds",
 		"mds_path=C:/ProgramData/my-desk-setup/bin/mds.exe",
+		"mds_evidence_path=/usr/local/bin/mds-evidence",
+		"mds_evidence_path=C:/ProgramData/my-desk-setup/bin/mds-evidence.exe",
+		"EXPECTED_MDS_EVIDENCE_SHA256: ${{ inputs.expected_mds_evidence_sha256 }}",
 		"CERTIFICATION_PROFILE: ${{ steps.certification-identity.outputs.certification_profile }}",
 		"scripts/install-gitleaks.sh",
 		"scripts/install-gitleaks.ps1",
@@ -237,6 +249,7 @@ func TestTargetCertificationCarriesExactPromotionIdentity(t *testing.T) {
 		}
 	}
 	for _, forbidden := range []string{
+		"go run ./cmd/mds-evidence",
 		"expected_commit:",
 		"inputs.expected_commit",
 		"mds_path:",
@@ -253,6 +266,77 @@ func TestTargetCertificationCarriesExactPromotionIdentity(t *testing.T) {
 		if strings.Contains(workflow, forbidden) {
 			t.Fatalf("target certification workflow contains %q", forbidden)
 		}
+	}
+}
+
+func TestCertificationWrappersUseOnlyTheVerifiedReleaseCertifier(t *testing.T) {
+	root := repositoryRoot(t)
+	for _, name := range []string{
+		"prepare-target-certification.sh",
+		"certify-target.sh",
+		"verify-target-evidence.sh",
+	} {
+		content, err := os.ReadFile(filepath.Join(root, "scripts", name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		wrapper := string(content)
+		if !strings.Contains(wrapper, "run-release-certifier.sh") ||
+			strings.Contains(wrapper, "go run") {
+			t.Fatalf("%s does not delegate only to the release certifier", name)
+		}
+	}
+
+	runner, err := os.ReadFile(filepath.Join(root, "scripts", "run-release-certifier.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	contract := string(runner)
+	for _, required := range []string{
+		"--mds-evidence must be an absolute fixed path",
+		"--expected-mds-evidence-sha256 must be a lowercase SHA-256",
+		`[[ ! -f "$certifier_path" || -L "$certifier_path" ]]`,
+		`cp -- "$certifier_path" "$snapshot"`,
+		`if [[ "$observed_sha256" != "$expected_sha256" ]]`,
+	} {
+		if !strings.Contains(contract, required) {
+			t.Fatalf("release certifier runner missing %q", required)
+		}
+	}
+}
+
+func TestReleaseCertifierRunnerExecutesOnlyMatchingSnapshot(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX execution behavior is covered here; Windows Git Bash is covered by workflow contracts")
+	}
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash is required for the release certifier runner contract")
+	}
+	root := repositoryRoot(t)
+	certifier := filepath.Join(t.TempDir(), "mds-evidence")
+	content := "#!/bin/sh\nprintf '%s\\n' \"$*\"\n"
+	writeExecutable(t, certifier, content)
+	digest := fmt.Sprintf("%x", sha256.Sum256([]byte(content)))
+	runner := filepath.Join(root, "scripts", "run-release-certifier.sh")
+	command := exec.Command(
+		"bash", runner, "prepare",
+		"--mds-evidence", certifier,
+		"--expected-mds-evidence-sha256", digest,
+		"--sample", "value",
+	)
+	output, err := command.CombinedOutput()
+	if err != nil || strings.TrimSpace(string(output)) != "prepare --sample value" {
+		t.Fatalf("matching certifier error=%v output=%q", err, output)
+	}
+
+	command = exec.Command(
+		"bash", runner, "prepare",
+		"--mds-evidence", certifier,
+		"--expected-mds-evidence-sha256", strings.Repeat("0", 64),
+	)
+	if output, err = command.CombinedOutput(); err == nil ||
+		!strings.Contains(string(output), "SHA-256 mismatch") {
+		t.Fatalf("mismatched certifier error=%v output=%q", err, output)
 	}
 }
 

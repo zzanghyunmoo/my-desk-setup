@@ -204,6 +204,8 @@ publication gate에서는 expected commit+cohort identity와 binary checksum을
 
 ```sh
 scripts/verify-target-evidence.sh \
+  --mds-evidence '<fixed-release-certifier-path>' \
+  --expected-mds-evidence-sha256 '<release-certifier-sha256>' \
   --bundle '<bundle-dir>' \
   --expected-cli-revision '<exact-cli-revision>' \
   --expected-catalog-revision 'sha256:<expected-catalog-revision>' \

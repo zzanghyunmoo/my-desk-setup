@@ -122,6 +122,12 @@ jobs:
           mkdir smoke
           tar -xzf "release-dist/$archive" -C smoke mds
           smoke/mds --version
+          certifier="mds-evidence_${MDS_VERSION}_linux_amd64"
+          certifier_checksum=$(awk -v name="$certifier" '$2 == name { print $1 }' release-dist/checksums.txt)
+          test -n "$certifier_checksum"
+          printf '%s  %s\n' "$certifier_checksum" "release-dist/$certifier" | sha256sum -c -
+          chmod +x "release-dist/$certifier"
+          "release-dist/$certifier" prepare --help
           smoke/mds plan \
             --target lima-guest:release-smoke \
             --profile owner \
@@ -153,6 +159,12 @@ jobs:
           MDS_ARCHIVE="$GITHUB_WORKSPACE/release-dist/$archive" \
           MDS_INSTALL_DIR="$RUNNER_TEMP/mds-bin" \
             sh release-dist/macos.sh
+          certifier="mds-evidence_${MDS_VERSION}_darwin_${release_arch}"
+          certifier_checksum=$(awk -v name="$certifier" '$2 == name { print $1 }' release-dist/checksums.txt)
+          test -n "$certifier_checksum"
+          printf '%s  %s\n' "$certifier_checksum" "release-dist/$certifier" | shasum -a 256 -c -
+          chmod +x "release-dist/$certifier"
+          "release-dist/$certifier" prepare --help
           "$RUNNER_TEMP/mds-bin/mds" plan \
             --target macos-host:local \
             --profile owner \
@@ -187,6 +199,17 @@ jobs:
           $env:MDS_ARCHIVE = Join-Path $env:GITHUB_WORKSPACE "release-dist\$archive"
           $env:MDS_INSTALL_DIR = Join-Path $env:RUNNER_TEMP "mds-bin"
           & release-dist/windows.ps1
+          $certifier = "mds-evidence_$($env:MDS_VERSION)_windows_$releaseArch.exe"
+          $certifierChecksumLine = Get-Content release-dist/checksums.txt |
+              Where-Object { $_ -match "^[0-9a-f]{64}  $([regex]::Escape($certifier))$" }
+          if (@($certifierChecksumLine).Count -ne 1) {
+              throw "Expected one checksum for $certifier."
+          }
+          $certifierChecksum = ($certifierChecksumLine -split "  ")[0]
+          if ((Get-FileHash "release-dist/$certifier" -Algorithm SHA256).Hash.ToLowerInvariant() -ne $certifierChecksum) {
+              throw "Unexpected certifier checksum."
+          }
+          & "release-dist/$certifier" prepare --help
           & "$env:MDS_INSTALL_DIR/mds.exe" plan `
               --target windows-host:local `
               --profile owner `

@@ -11,6 +11,7 @@ on:
       - "scripts/certify-target.sh"
       - "scripts/certification-clock.sh"
       - "scripts/prepare-target-certification.sh"
+      - "scripts/run-release-certifier.sh"
       - "scripts/install-gitleaks.sh"
       - "scripts/install-gitleaks.ps1"
       - "scripts/verify-target-evidence.sh"
@@ -27,6 +28,7 @@ on:
       - "scripts/certify-target.sh"
       - "scripts/certification-clock.sh"
       - "scripts/prepare-target-certification.sh"
+      - "scripts/run-release-certifier.sh"
       - "scripts/install-gitleaks.sh"
       - "scripts/install-gitleaks.ps1"
       - "scripts/verify-target-evidence.sh"
@@ -59,6 +61,10 @@ on:
         type: string
       expected_binary_sha256:
         description: SHA-256 of the exact release mds binary on this target
+        required: true
+        type: string
+      expected_mds_evidence_sha256:
+        description: SHA-256 of the exact release mds-evidence binary on this target
         required: true
         type: string
       runner_label:
@@ -144,10 +150,6 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
           clean: true
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version-file: go.mod
-          cache: true
       - name: Validate immutable certification identity
         id: certification-identity
         shell: bash
@@ -157,6 +159,7 @@ jobs:
           TARGET_ID: ${{ inputs.target_id }}
           CERTIFICATION_COHORT: ${{ inputs.cohort }}
           EXPECTED_GUEST_CREATION_NONCE_COMMITMENT: ${{ inputs.expected_guest_creation_nonce_commitment }}
+          EXPECTED_MDS_EVIDENCE_SHA256: ${{ inputs.expected_mds_evidence_sha256 }}
         run: |
           if [[ ! "$EXPECTED_COMMIT" =~ ^[0-9a-f]{40}$|^[0-9a-f]{64}$ ]]; then
             echo "expected_commit must be a full lowercase commit SHA" >&2
@@ -164,6 +167,10 @@ jobs:
           fi
           test "$(git rev-parse HEAD)" = "$EXPECTED_COMMIT"
           test -z "$(git status --porcelain=v1 --untracked-files=all)"
+          if [[ ! "$EXPECTED_MDS_EVIDENCE_SHA256" =~ ^[0-9a-f]{64}$ ]]; then
+            echo "expected_mds_evidence_sha256 must be a lowercase SHA-256" >&2
+            exit 2
+          fi
           if [[ ! "$CERTIFICATION_COHORT" =~ ^cert-[0-9]{8}T[0-9]{6}Z-[0-9a-f]{8}$ ]] ||
             [[ "${CERTIFICATION_COHORT##*-}" != "${EXPECTED_COMMIT:0:8}" ]]; then
             echo "certification cohort must be canonical and match the protected commit" >&2
@@ -175,6 +182,7 @@ jobs:
               expected_runner_label=mds-macos-host
               certification_profile=certification-macos-host
               mds_path=/usr/local/bin/mds
+              mds_evidence_path=/usr/local/bin/mds-evidence
               expected_guest_commitment=
               ;;
             windows-host:local)
@@ -182,6 +190,7 @@ jobs:
               expected_runner_label=mds-windows-host
               certification_profile=certification-windows-host
               mds_path=C:/ProgramData/my-desk-setup/bin/mds.exe
+              mds_evidence_path=C:/ProgramData/my-desk-setup/bin/mds-evidence.exe
               expected_guest_commitment=
               ;;
             wsl-guest:Ubuntu-26.04)
@@ -189,6 +198,7 @@ jobs:
               expected_runner_label=mds-wsl-guest
               certification_profile=certification-wsl-guest
               mds_path=/usr/local/bin/mds
+              mds_evidence_path=/usr/local/bin/mds-evidence
               expected_guest_commitment=$EXPECTED_GUEST_CREATION_NONCE_COMMITMENT
               ;;
             lima-guest:mds)
@@ -196,6 +206,7 @@ jobs:
               expected_runner_label=mds-lima-guest
               certification_profile=certification-lima-guest
               mds_path=/usr/local/bin/mds
+              mds_evidence_path=/usr/local/bin/mds-evidence
               expected_guest_commitment=$EXPECTED_GUEST_CREATION_NONCE_COMMITMENT
               ;;
             *)
@@ -218,6 +229,7 @@ jobs:
             echo "certification_profile=$certification_profile"
             echo "cohort=$CERTIFICATION_COHORT"
             echo "mds_path=$mds_path"
+            echo "mds_evidence_path=$mds_evidence_path"
             echo "expected_guest_commitment=$expected_guest_commitment"
           } >> "$GITHUB_OUTPUT"
       - name: Prepare target-local evidence path
@@ -232,6 +244,8 @@ jobs:
         shell: bash
         env:
           MDS_PATH: ${{ steps.certification-identity.outputs.mds_path }}
+          MDS_EVIDENCE_PATH: ${{ steps.certification-identity.outputs.mds_evidence_path }}
+          EXPECTED_MDS_EVIDENCE_SHA256: ${{ inputs.expected_mds_evidence_sha256 }}
           TARGET_ID: ${{ inputs.target_id }}
           EXPECTED_BINARY_SHA256: ${{ inputs.expected_binary_sha256 }}
           CERTIFICATION_PROFILE: ${{ steps.certification-identity.outputs.certification_profile }}
@@ -261,6 +275,8 @@ jobs:
             )
           fi
           scripts/certify-target.sh \
+            --mds-evidence "$MDS_EVIDENCE_PATH" \
+            --expected-mds-evidence-sha256 "$EXPECTED_MDS_EVIDENCE_SHA256" \
             --mds "$MDS_PATH" \
             --target "$TARGET_ID" \
             --output "$EVIDENCE_OUTPUT" \
@@ -277,10 +293,14 @@ jobs:
           EXPECTED_CATALOG_REVISION: ${{ inputs.expected_catalog_revision }}
           EXPECTED_PLAN_DIGEST: ${{ inputs.expected_plan_digest }}
           EXPECTED_BINARY_SHA256: ${{ inputs.expected_binary_sha256 }}
+          MDS_EVIDENCE_PATH: ${{ steps.certification-identity.outputs.mds_evidence_path }}
+          EXPECTED_MDS_EVIDENCE_SHA256: ${{ inputs.expected_mds_evidence_sha256 }}
           TARGET_ID: ${{ inputs.target_id }}
           CERTIFICATION_COHORT: ${{ steps.certification-identity.outputs.cohort }}
         run: |
           scripts/verify-target-evidence.sh \
+            --mds-evidence "$MDS_EVIDENCE_PATH" \
+            --expected-mds-evidence-sha256 "$EXPECTED_MDS_EVIDENCE_SHA256" \
             --bundle "$EVIDENCE_OUTPUT" \
             --expected-cli-revision "$EXPECTED_CLI_REVISION" \
             --expected-catalog-revision "$EXPECTED_CATALOG_REVISION" \

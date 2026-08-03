@@ -27,7 +27,7 @@ import (
 )
 
 const (
-	SchemaVersion = "mds.release/v1"
+	SchemaVersion = "mds.release/v2"
 
 	manifestName  = "release-manifest.json"
 	checksumsName = "checksums.txt"
@@ -64,6 +64,14 @@ type Bootstrap struct {
 	Size   int64  `json:"size"`
 }
 
+type Certifier struct {
+	Name         string `json:"name"`
+	OS           string `json:"os"`
+	Architecture string `json:"architecture"`
+	SHA256       string `json:"sha256"`
+	Size         int64  `json:"size"`
+}
+
 type Manifest struct {
 	SchemaVersion   string      `json:"schema_version"`
 	Version         string      `json:"version"`
@@ -71,6 +79,7 @@ type Manifest struct {
 	Date            string      `json:"date"`
 	CatalogRevision string      `json:"catalog_revision"`
 	Artifacts       []Artifact  `json:"artifacts"`
+	Certifiers      []Certifier `json:"certifiers"`
 	Bootstraps      []Bootstrap `json:"bootstraps"`
 }
 
@@ -154,6 +163,7 @@ func Build(ctx context.Context, options Options) (returnErr error) {
 		Date:            options.Date.UTC().Format(time.RFC3339),
 		CatalogRevision: catalogRevision,
 		Artifacts:       make([]Artifact, 0, len(releaseTargets)),
+		Certifiers:      make([]Certifier, 0, len(releaseTargets)),
 		Bootstraps:      make([]Bootstrap, 0, len(releaseBootstraps)),
 	}
 	for _, releaseTarget := range releaseTargets {
@@ -194,6 +204,28 @@ func Build(ctx context.Context, options Options) (returnErr error) {
 			BinarySHA256:  binaryDigest,
 			SHA256:        digest,
 			Size:          size,
+		})
+		certifierName := certifierName(manifest.Version, releaseTarget)
+		certifierPath := filepath.Join(staging, certifierName)
+		if err := buildExecutable(
+			ctx,
+			sourceRoot,
+			certifierPath,
+			releaseTarget,
+			manifest,
+			"./cmd/mds-evidence",
+			false,
+		); err != nil {
+			return err
+		}
+		certifierDigest, certifierSize, err := fileIdentity(certifierPath)
+		if err != nil {
+			return err
+		}
+		manifest.Certifiers = append(manifest.Certifiers, Certifier{
+			Name: certifierName, OS: releaseTarget.os,
+			Architecture: releaseTarget.architecture,
+			SHA256:       certifierDigest, Size: certifierSize,
 		})
 	}
 	for _, expected := range releaseBootstraps {
@@ -251,6 +283,9 @@ func Verify(directory string) (Manifest, error) {
 	for _, artifact := range manifest.Artifacts {
 		expectedFiles[artifact.Name] = true
 	}
+	for _, certifier := range manifest.Certifiers {
+		expectedFiles[certifier.Name] = true
+	}
 	for _, bootstrap := range manifest.Bootstraps {
 		expectedFiles[bootstrap.Name] = true
 	}
@@ -261,11 +296,11 @@ func Verify(directory string) (Manifest, error) {
 	if err != nil {
 		return Manifest{}, err
 	}
-	if len(checksums) != len(manifest.Artifacts)+len(manifest.Bootstraps) {
+	if len(checksums) != len(manifest.Artifacts)+len(manifest.Certifiers)+len(manifest.Bootstraps) {
 		return Manifest{}, fmt.Errorf(
 			"checksums file has %d entries, want %d",
 			len(checksums),
-			len(manifest.Artifacts)+len(manifest.Bootstraps),
+			len(manifest.Artifacts)+len(manifest.Certifiers)+len(manifest.Bootstraps),
 		)
 	}
 	for _, artifact := range manifest.Artifacts {
@@ -274,6 +309,11 @@ func Verify(directory string) (Manifest, error) {
 		}
 		if err := verifyArchive(filepath.Join(root, artifact.Name), artifact); err != nil {
 			return Manifest{}, fmt.Errorf("verify %s: %w", artifact.Name, err)
+		}
+	}
+	for _, certifier := range manifest.Certifiers {
+		if err := verifyFileIdentity(root, certifier.Name, certifier.SHA256, certifier.Size, checksums); err != nil {
+			return Manifest{}, err
 		}
 	}
 	for _, bootstrap := range manifest.Bootstraps {
@@ -310,13 +350,33 @@ func buildBinary(
 	releaseTarget target,
 	manifest Manifest,
 ) error {
+	return buildExecutable(
+		ctx,
+		sourceRoot,
+		output,
+		releaseTarget,
+		manifest,
+		"./cmd/mds",
+		true,
+	)
+}
+
+func buildExecutable(
+	ctx context.Context,
+	sourceRoot,
+	output string,
+	releaseTarget target,
+	manifest Manifest,
+	packagePath string,
+	includeGuestIdentity bool,
+) error {
 	ldflags := strings.Join([]string{
 		"-s", "-w",
 		"-X", "github.com/zzanghyunmoo/my-desk-setup/internal/version.Version=" + manifest.Version,
 		"-X", "github.com/zzanghyunmoo/my-desk-setup/internal/version.Commit=" + manifest.Commit,
 		"-X", "github.com/zzanghyunmoo/my-desk-setup/internal/version.Date=" + manifest.Date,
 	}, " ")
-	if releaseTarget.os != "linux" {
+	if includeGuestIdentity && releaseTarget.os != "linux" {
 		guestFlags, err := guestArtifactLDFlags(manifest)
 		if err != nil {
 			return fmt.Errorf(
@@ -335,7 +395,7 @@ func buildBinary(
 		"-buildvcs=false",
 		"-ldflags", ldflags,
 		"-o", output,
-		"./cmd/mds",
+		packagePath,
 	)
 	command.Dir = sourceRoot
 	command.Env = buildEnvironment(os.Environ(), map[string]string{
@@ -420,6 +480,20 @@ func artifactName(version string, releaseTarget target) string {
 	}
 	return fmt.Sprintf(
 		"mds_%s_%s_%s%s",
+		version,
+		releaseTarget.os,
+		releaseTarget.architecture,
+		extension,
+	)
+}
+
+func certifierName(version string, releaseTarget target) string {
+	extension := ""
+	if releaseTarget.os == "windows" {
+		extension = ".exe"
+	}
+	return fmt.Sprintf(
+		"mds-evidence_%s_%s_%s%s",
 		version,
 		releaseTarget.os,
 		releaseTarget.architecture,
@@ -566,9 +640,12 @@ func writeManifest(root string, manifest Manifest) error {
 }
 
 func writeChecksums(root string, manifest Manifest) error {
-	values := make(map[string]string, len(manifest.Artifacts)+len(manifest.Bootstraps))
+	values := make(map[string]string, len(manifest.Artifacts)+len(manifest.Certifiers)+len(manifest.Bootstraps))
 	for _, artifact := range manifest.Artifacts {
 		values[artifact.Name] = artifact.SHA256
+	}
+	for _, certifier := range manifest.Certifiers {
+		values[certifier.Name] = certifier.SHA256
 	}
 	for _, bootstrap := range manifest.Bootstraps {
 		values[bootstrap.Name] = bootstrap.SHA256
@@ -667,6 +744,33 @@ func validateManifest(manifest Manifest) error {
 			exactartifact.ValidateSHA256(artifact.BinarySHA256) != nil ||
 			artifact.Size <= 0 {
 			return fmt.Errorf("manifest artifact %q has invalid file identity", artifact.Name)
+		}
+	}
+	if len(manifest.Certifiers) != len(releaseTargets) {
+		return fmt.Errorf(
+			"manifest has %d certifiers, want %d",
+			len(manifest.Certifiers),
+			len(releaseTargets),
+		)
+	}
+	for index, releaseTarget := range releaseTargets {
+		certifier := manifest.Certifiers[index]
+		if certifier.Name != certifierName(manifest.Version, releaseTarget) ||
+			certifier.OS != releaseTarget.os ||
+			certifier.Architecture != releaseTarget.architecture {
+			return fmt.Errorf(
+				"manifest certifier %d does not match expected %s/%s identity",
+				index,
+				releaseTarget.os,
+				releaseTarget.architecture,
+			)
+		}
+		if exactartifact.ValidateSHA256(certifier.SHA256) != nil ||
+			certifier.Size <= 0 {
+			return fmt.Errorf(
+				"manifest certifier %q has invalid file identity",
+				certifier.Name,
+			)
 		}
 	}
 	if len(manifest.Bootstraps) != len(releaseBootstraps) {

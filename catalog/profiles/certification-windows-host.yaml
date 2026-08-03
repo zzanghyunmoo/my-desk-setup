@@ -2,5 +2,12 @@ schema_version: 1
 id: certification-windows-host
 description: Reachable Windows host release certification surface.
 selection:
+  - bun
+  - chrome
+  - claude-code
+  - codex
+  - notion-desktop
+  - opencode
+  - slack
   - wezterm
   - wsl

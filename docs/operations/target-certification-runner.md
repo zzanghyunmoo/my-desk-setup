@@ -10,23 +10,24 @@ job을 실행할 네 전용 self-hosted runner를 준비하는 운영 절차다.
 runner 하나는 아래 표의 custom label 하나와 target 하나만 담당한다. 동일
 runner에 둘 이상의 `mds-*` custom label을 부여하지 않는다.
 
-| Target ID | 실행 위치 | Custom label | Production `mds` path | Guest ownership record |
-| --- | --- | --- | --- | --- |
-| `macos-host:local` | 실제 macOS host | `mds-macos-host` | `/usr/local/bin/mds` | 없음 |
-| `windows-host:local` | 실제 Windows host | `mds-windows-host` | `C:/ProgramData/my-desk-setup/bin/mds.exe` | 없음 |
-| `wsl-guest:Ubuntu-26.04` | 해당 WSL guest 내부 | `mds-wsl-guest` | `/usr/local/bin/mds` | `wsl-Ubuntu-26.04.json` |
-| `lima-guest:mds` | 해당 Lima guest 내부 | `mds-lima-guest` | `/usr/local/bin/mds` | `lima-mds.json` |
+| Target ID | 실행 위치 | Custom label | Production `mds` path | Released certifier path | Guest ownership record |
+| --- | --- | --- | --- | --- | --- |
+| `macos-host:local` | 실제 macOS host | `mds-macos-host` | `/usr/local/bin/mds` | `/usr/local/bin/mds-evidence` | 없음 |
+| `windows-host:local` | 실제 Windows host | `mds-windows-host` | `C:/ProgramData/my-desk-setup/bin/mds.exe` | `C:/ProgramData/my-desk-setup/bin/mds-evidence.exe` | 없음 |
+| `wsl-guest:Ubuntu-26.04` | 해당 WSL guest 내부 | `mds-wsl-guest` | `/usr/local/bin/mds` | `/usr/local/bin/mds-evidence` | `wsl-Ubuntu-26.04.json` |
+| `lima-guest:mds` | 해당 Lima guest 내부 | `mds-lima-guest` | `/usr/local/bin/mds` | `/usr/local/bin/mds-evidence` | `lima-mds.json` |
 
-workflow는 target ID와 label의 exact pair 및 위 고정 production path를 다시
+workflow는 target ID와 label의 exact pair 및 위 두 고정 production path를 다시
 선택한다. Machine-local path는 dispatch input으로 받지 않는다. Raw guest nonce는
-host와 guest의 local ownership marker 밖으로 내보내지 않으며 runner process
+owner-only host ownership record 밖으로 내보내지 않으며 runner process
 environment에도 설정하지 않는다.
 
-Guest certification profile은 해당 target에서 자동 설치 가능한 v1 catalog
+네 certification profile은 해당 target에서 자동 설치 가능한 v1 catalog
 component 전체를 선택한다. WSL amd64 profile은 Flutter를 포함한다. Lima arm64는
 공식 Linux arm64 Flutter artifact가 없어 그 component만 `action-required`로 명시
-제외한다. Host profile은 guest lifecycle과 terminal capability 경계를 검증하며,
-일반 `all`/`owner` profile의 수동·platform-limited 상태 계약은 그대로 유지한다.
+제외한다. Host profile도 desktop app, terminal, guest lifecycle과 host coding
+agent 중 자동화 가능한 전체를 포함한다. 일반 `all`/`owner` profile의
+수동·platform-limited 상태 계약은 그대로 유지한다.
 
 ## 1. GitHub 보호 경계
 
@@ -115,6 +116,8 @@ job 시작 전에 다음을 확인한다.
 - runner UTC와 GitHub 서버 UTC의 절대 오차가 60초 이하다.
 - runner에 다른 `mds-*` label이 없다.
 - work directory에 기존 checkout이나 credential file이 없다.
+- release manifest의 target별 `mds-evidence` asset을 표의 고정 path에 설치했고
+  그 raw asset SHA-256을 dispatch input과 대조했다.
 - host와 guest runner process 모두 raw guest creation nonce 환경값이 없다.
 - guest runner process는 section 4의 read-only preparation이 끝날 때까지 시작하지 않는다.
 
@@ -222,11 +225,26 @@ foreach ($line in $markerText) {
   $key, $value = $line -split "=", 2
   if ($key -and $value) { $marker[$key] = $value }
 }
-if ($marker.schema -ne "mds.guest-image/v2" -or
+$domain = [Text.Encoding]::UTF8.GetBytes(
+  "mds.guest-creation-nonce/v1" + [char]0
+)
+[byte[]]$nonceBytes = for ($index = 0;
+    $index -lt $ownership.creation_nonce.Length; $index += 2) {
+  [Convert]::ToByte($ownership.creation_nonce.Substring($index, 2), 16)
+}
+$material = New-Object byte[] ($domain.Length + $nonceBytes.Length)
+[Array]::Copy($domain, 0, $material, 0, $domain.Length)
+[Array]::Copy($nonceBytes, 0, $material, $domain.Length, $nonceBytes.Length)
+$sha = [Security.Cryptography.SHA256]::Create()
+$expectedCommitment = "sha256:" + (($sha.ComputeHash($material) |
+  ForEach-Object { $_.ToString("x2") }) -join "")
+$sha.Dispose()
+
+if ($marker.schema -ne "mds.guest-image/v3" -or
     $marker.image_revision -cne
       ("sha256:" + $ownership.image_sha256) -or
     $marker.image_provenance -cne $ownership.image_url -or
-    $marker.creation_nonce -cne $ownership.creation_nonce) {
+    $marker.creation_nonce_commitment -cne $expectedCommitment) {
   throw "WSL live marker does not match committed host ownership"
 }
 ```
@@ -236,9 +254,10 @@ ACL은 POSIX mode `0600`으로 해석하지 않는다. 현재 host user가 owner
 없는지 검사한다. creation nonce 값은 terminal, ticket, PR, log 또는 clipboard
 history에 남기지 않는다.
 
-guest의 `/etc/mds/image-identity-v1`도 root-owned regular non-symlink
+guest의 `/etc/mds/image-identity-v1` v3도 root-owned regular non-symlink
 file이고 mode `0600`, `0640` 또는 `0644`여야 한다. root로 읽어 record의
-`image_url`, `sha256:<image_sha256>`, `creation_nonce`와 exact match인지
+`image_url`, `sha256:<image_sha256>` 및 owner-only raw nonce에서 계산한
+`creation_nonce_commitment`와 exact match인지
 확인한다. 하나라도 다르면 runner를 시작하지 말고 same-name replacement
 guest 또는 stale ownership conflict를 먼저 해결한다.
 
@@ -256,14 +275,16 @@ guest의 exact target identity 환경(`WSL_DISTRO_NAME=Ubuntu-26.04` 또는
 
 ```sh
 scripts/prepare-target-certification.sh \
+  --mds-evidence /usr/local/bin/mds-evidence \
+  --expected-mds-evidence-sha256 '<release-certifier-sha256>' \
   --mds /usr/local/bin/mds \
   --target lima-guest:mds \
   --expected-binary-sha256 '<release-binary-sha256>' \
   --profile certification-lima-guest > preparation.json
 ```
 
-`prepare`는 production binary를 private snapshot으로 고정하고 root-owned guest
-marker를 직접 읽어 raw nonce의 domain-separated commitment를 계산한다. 같은
+`prepare`는 release certifier와 production binary를 각각 private snapshot으로
+고정하고 root-owned guest marker의 공개 domain-separated commitment를 읽는다. 같은
 runtime probe로 read-only plan을 실행하며
 `mds.certification-preparation/v1` JSON에 exact CLI revision, catalog revision,
 target fingerprint, binary SHA-256와 plan digest만 출력한다. Apply, evidence
@@ -285,13 +306,15 @@ environment reviewer는 승인 전에 다음 값을 release manifest, reviewed p
 - target ID와 custom runner label exact pair
 - target ID가 선택하는 위 고정 production `mds` path와 그 regular non-symlink 상태
 - release manifest의 on-disk binary SHA-256
+- target ID가 선택하는 고정 released `mds-evidence` path, regular non-symlink
+  상태와 release manifest SHA-256
 - certifier가 production path를 no-follow/reparse 거부로 한 번 열어 만든
   owner-only private snapshot의 SHA-256과, 모든 subprocess가 그 snapshot만
   실행한다는 경계
 - `mds-evidence prepare` JSON의 exact CLI revision, catalog revision, target
   fingerprint, binary SHA-256와 plan digest
 - guest라면 committed host record와 live marker의 provider/name/image 일치 및
-  host-reviewed nonce commitment와 guest preparation commitment 일치
+  host-reviewed nonce commitment와 v3 marker 및 guest preparation commitment 일치
 - runner work directory가 이전 job의 untracked file 없이 clean한 상태
 
 runner에는 실제 target과 production binary가 준비돼 있어야 한다. 인증되지

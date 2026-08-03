@@ -51,9 +51,10 @@ socket을 가리키면 conflict로 처리한다. Docker Desktop이나 host engin
 
 Guest lifecycle ownership은 `preparing`과 `committed` 두 단계다. provider
 생성 전에는 exact image intent만 `preparing`으로 기록하고, 생성·시작과
-무작위 creation nonce가 포함된 root-owned image identity marker 준비가
-성공한 뒤에만 `committed`로 전환한다. host record와 live guest marker의
-nonce가 다르면 같은 이름이더라도 다른 guest로 보고 ownership conflict로
+owner-only host record의 무작위 creation nonce에서 계산한 공개 commitment가
+포함된 root-owned image identity marker 준비가 성공한 뒤에만 `committed`로
+전환한다. host record에서 다시 계산한 값과 live guest marker의 commitment가
+다르면 같은 이름이더라도 다른 guest로 보고 ownership conflict로
 중단한다. 같은 이름의 live guest와 `preparing` record가 함께 발견되어도 과거
 실패의 늦은 성공인지 외부 생성인지 자동으로 구분하지 않는다. 중단된 기존
 guest는 marker를 mutation 없이 확인할 수 없으므로 mds가 자동 시작하지 않고
@@ -130,7 +131,7 @@ stable file의 OS advisory lease이며 process 종료 시 OS가 자동 해제한
   전에 실패한다. volatile readiness 실패는 `stale-plan`으로 위장하지 않는다.
 - receipt 없는 config나 launcher는 user-owned다. 명시적 managed ownership
   없이 덮어쓰거나 자동 backup/삭제하지 않는다.
-- receipt 없는 same-name WSL/Lima guest와 committed receipt의 creation nonce가
+- receipt 없는 same-name WSL/Lima guest와 committed receipt에서 계산한 commitment가
   root-owned marker와 다른 replacement guest는 user-owned다. 자동 생성·시작·
   bootstrap·재구성하지 않고 conflict/action-required로 중단한다.
 - command runner는 executable과 argv를 분리한다. 동적 값을 조합한 shell
@@ -159,8 +160,8 @@ stable file의 OS advisory lease이며 process 종료 시 OS가 자동 해제한
 - exact SHA-256에 고정된 GitHub Release/bootstrap artifact만 최대 3회의
   credential-free HTTPS redirect를 허용하며, 최종 URL과 body limit을 다시
   검사한 뒤 checksum을 검증한다.
-- 일반 guest handoff도 `/etc/mds/image-identity-v1`의 root ownership, mode,
-  image URL·SHA-256과 creation nonce를 먼저 검증하고 그 관측값만 guest-local
+- 일반 guest handoff도 `/etc/mds/image-identity-v1` v3의 root ownership, mode,
+  image URL·SHA-256과 공개 creation nonce commitment를 먼저 검증하고 그 관측값만 guest-local
   `mds`에 전달한다. catalog의 기대값을 실제 guest identity처럼 합성하지 않는다.
 - compiler/runtime verification은 version 문자열만 읽지 않고 고정된 작은
   source를 실제 compile/run한다. Gradle은 reviewed local state로 offline
@@ -177,8 +178,8 @@ stable file의 OS advisory lease이며 process 종료 시 OS가 자동 해제한
 
 ## Release와 target evidence
 
-Release는 OS/architecture별 archive, `checksums.txt`,
-`release-manifest.json`과 두 host bootstrap을 하나의 identity로 묶는다.
+Release는 OS/architecture별 archive와 raw `mds-evidence` certifier,
+`checksums.txt`, `release-manifest.json`과 두 host bootstrap을 하나의 identity로 묶는다.
 manifest는 source commit과 catalog revision뿐 아니라 archive 안의 실제
 `mds` binary SHA-256도 기록한다. manifest와 archive 내부 binary checksum이
 모두 검증된 production archive만 certification에 사용한다.
@@ -212,8 +213,8 @@ Actions actual-target artifact를 찾아 다음 네 표준 target을 정확히 �
 각 bundle은 CLI commit, catalog revision, plan digest, target ID와 실제
 실행한 on-disk binary SHA-256을 release manifest에 다시 결합해 검증한다.
 guest bundle은 host plan에서 검토한 domain-separated nonce commitment를
-workflow input으로 받고 root-owned marker의 raw nonce에서 runtime에 재계산한
-commitment와 대조한다. Raw nonce는 runner service 환경이나 GitHub metadata로
+workflow input으로 받고 root-owned v3 marker에서 관측한 공개 commitment와
+대조한다. Raw nonce는 owner-only host record 밖이나 runner service 환경, GitHub metadata로
 전달하지 않는다. Mutation 전 `mds-evidence prepare`가 같은 runtime probe와
 production binary snapshot으로 exact plan digest를 만든다.
 증거가 없거나 오래됐거나 중복됐거나 identity가 다르면 publication은

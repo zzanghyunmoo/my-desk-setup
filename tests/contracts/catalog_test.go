@@ -660,12 +660,32 @@ func TestCertificationProfilesPreserveAllAndOwnerXcodeTruthfulness(t *testing.T)
 	}
 }
 
-func TestGuestCertificationProfilesCoverEveryAutomatableComponent(t *testing.T) {
+func TestCertificationProfilesCoverEveryAutomatableComponent(t *testing.T) {
 	environment := loadCatalog(t)
 	for _, test := range []struct {
 		profile string
 		facts   target.Facts
 	}{
+		{
+			profile: "certification-macos-host",
+			facts: certificationFacts(
+				t,
+				target.KindMacOSHost,
+				"local",
+				"darwin",
+				"arm64",
+			),
+		},
+		{
+			profile: "certification-windows-host",
+			facts: certificationFacts(
+				t,
+				target.KindWindowsHost,
+				"local",
+				"windows",
+				"amd64",
+			),
+		},
 		{
 			profile: "certification-wsl-guest",
 			facts: certificationFacts(

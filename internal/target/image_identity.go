@@ -12,9 +12,9 @@ import (
 const ImageIdentityPath = "/etc/mds/image-identity-v1"
 
 type ImageIdentity struct {
-	Revision      string
-	Provenance    string
-	CreationNonce string
+	Revision                string
+	Provenance              string
+	CreationNonceCommitment string
 }
 
 func ParseImageIdentity(content []byte) (ImageIdentity, error) {
@@ -23,10 +23,10 @@ func ParseImageIdentity(content []byte) (ImageIdentity, error) {
 	}
 	lines := strings.Split(strings.TrimSuffix(string(content), "\n"), "\n")
 	if len(lines) != 4 ||
-		lines[0] != "schema=mds.guest-image/v2" ||
+		lines[0] != "schema=mds.guest-image/v3" ||
 		!strings.HasPrefix(lines[1], "image_revision=sha256:") ||
 		!strings.HasPrefix(lines[2], "image_provenance=") ||
-		!strings.HasPrefix(lines[3], "creation_nonce=") {
+		!strings.HasPrefix(lines[3], "creation_nonce_commitment=sha256:") {
 		return ImageIdentity{}, errors.New("guest image identity marker has an invalid schema")
 	}
 	revision := strings.TrimPrefix(lines[1], "image_revision=")
@@ -47,13 +47,14 @@ func ParseImageIdentity(content []byte) (ImageIdentity, error) {
 			"guest image identity marker provenance contains control characters",
 		)
 	}
-	nonce := strings.TrimPrefix(lines[3], "creation_nonce=")
-	if artifact.ValidateSHA256(nonce) != nil {
+	commitment := strings.TrimPrefix(lines[3], "creation_nonce_commitment=")
+	if ValidateGuestCreationNonceCommitment(commitment) != nil {
 		return ImageIdentity{}, errors.New(
-			"guest image identity marker has an invalid creation nonce",
+			"guest image identity marker has an invalid creation nonce commitment",
 		)
 	}
 	return ImageIdentity{
-		Revision: revision, Provenance: provenance, CreationNonce: nonce,
+		Revision: revision, Provenance: provenance,
+		CreationNonceCommitment: commitment,
 	}, nil
 }

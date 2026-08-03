@@ -146,10 +146,10 @@ func TestLimaRuntimeCreatesPinnedUbuntuGuest(t *testing.T) {
 	if !strings.Contains(template, "location: "+imageURL) ||
 		!strings.Contains(template, "digest: sha256:"+imageSHA256) ||
 		!strings.Contains(template, "mode: system") ||
-		!strings.Contains(template, "schema=mds.guest-image/v2") ||
+		!strings.Contains(template, "schema=mds.guest-image/v3") ||
 		!strings.Contains(template, "image_revision=sha256:"+imageSHA256) ||
 		!strings.Contains(template, "image_provenance="+imageURL) ||
-		!strings.Contains(template, "creation_nonce=") ||
+		!strings.Contains(template, "creation_nonce_commitment=sha256:") ||
 		strings.Count(template, "- location:") != 1 {
 		t.Fatalf("Lima create template is not the reviewed one-image template:\n%s", template)
 	}
@@ -255,17 +255,21 @@ func TestWSLRuntimeInstallsCanonicalGuestWithoutAuth(t *testing.T) {
 	if strings.Contains(joined, record.CreationNonce) {
 		t.Fatal("WSL lifecycle exposed the raw guest nonce in process arguments")
 	}
-	var nonceStdinCommands int
+	commitment := hostNonceCommitment(record.CreationNonce)
+	var commitmentStdinCommands int
 	for _, command := range port.commands {
-		if string(command.Stdin) != record.CreationNonce+"\n" {
+		if string(command.Stdin) == record.CreationNonce+"\n" {
+			t.Fatal("WSL lifecycle exposed the raw guest nonce on subprocess stdin")
+		}
+		if string(command.Stdin) != commitment+"\n" {
 			continue
 		}
-		nonceStdinCommands++
+		commitmentStdinCommands++
 	}
-	if nonceStdinCommands != 3 {
+	if commitmentStdinCommands != 3 {
 		t.Fatalf(
-			"raw nonce stdin command count = %d, want marker write and two independent reads",
-			nonceStdinCommands,
+			"commitment stdin command count = %d, want marker write and two independent reads",
+			commitmentStdinCommands,
 		)
 	}
 	for _, forbidden := range []string{" auth ", " login ", "token"} {

@@ -14,6 +14,12 @@ mds_<version>_windows_amd64.zip
 mds_<version>_windows_arm64.zip
 mds_<version>_linux_amd64.tar.gz
 mds_<version>_linux_arm64.tar.gz
+mds-evidence_<version>_darwin_amd64
+mds-evidence_<version>_darwin_arm64
+mds-evidence_<version>_windows_amd64.exe
+mds-evidence_<version>_windows_arm64.exe
+mds-evidence_<version>_linux_amd64
+mds-evidence_<version>_linux_arm64
 macos.sh
 windows.ps1
 checksums.txt
@@ -21,7 +27,7 @@ release-manifest.json
 ```
 
 `release-manifest.json`은 release version, source commit, release timestamp와 각
-artifact identity를 기록한다. 여기에는 embedded catalog revision과 각 archive
+artifact 및 certifier identity를 기록한다. 여기에는 embedded catalog revision과 각 archive
 안의 실제 binary SHA-256도 포함된다. `checksums.txt`는 publish된 archive의
 SHA-256을 제공한다. manifest가 가리키지 않거나 archive 또는 내부 binary
 checksum이 맞지 않는 archive를 bootstrap 또는 target certification에 사용하지
@@ -57,8 +63,8 @@ MDS_DATE='<RFC3339-release-timestamp>' \
 scripts/build-release.sh ./dist
 ```
 
-builder는 `mds.release/v1` manifest, 두 bootstrap과 여섯 OS/architecture
-archive를 staging directory에서 만든 뒤 자체 검증에 성공해야 output
+builder는 `mds.release/v2` manifest, 두 bootstrap, 여섯 OS/architecture
+archive와 여섯 `mds-evidence` certifier를 staging directory에서 만든 뒤 자체 검증에 성공해야 output
 directory를 publish한다.
 
 ## Release 검증
@@ -142,8 +148,9 @@ handle snapshot만 guest에 전달한다. 경로는 plan digest, receipt와 stat
 
 adapter는 pinned Ubuntu 26.04 image와 digest로 `mds`라는 Lima instance를
 생성한다. template은 선택 architecture의 단일 image URL·SHA-256과
-transaction별 creation nonce를 stdin으로 전달한다. 제품 ownership receipt가
-없거나 live root-owned marker의 nonce가 receipt와 다른 same-name instance는
+transaction별 creation nonce commitment를 stdin으로 전달한다. 원본 nonce는
+owner-only host record에만 기록한다. 제품 ownership receipt가 없거나 live
+root-owned marker의 commitment가 receipt에서 계산한 값과 다른 same-name instance는
 시작·bootstrap·재구성하지 않고 conflict/action-required로 중단한다. 기존
 instance가 stopped 상태면 mds가 먼저 시작하지 않으며, 사용자가 시작한 뒤
 marker를 재검증한다.
@@ -243,8 +250,9 @@ temporary file로 image를 streaming download하고 checksum을 검증한 뒤에
 사용하지 않으며 checksum mismatch는 설치 전에 hard failure다.
 제품 ownership receipt가 없는 `Ubuntu-26.04` distribution이 이미 있으면
 image identity가 우연히 같더라도 자동 재구성하지 않고 사용자의 결정을
-요청한다. committed receipt가 있더라도 root-owned marker의 creation nonce가
-다르면 삭제 뒤 같은 이름으로 교체된 외부 distribution으로 판정한다. stopped
+요청한다. committed receipt가 있더라도 root-owned marker의 creation nonce
+commitment가 receipt에서 계산한 값과 다르면 삭제 뒤 같은 이름으로 교체된 외부
+distribution으로 판정한다. stopped
 distribution은 mds가 자동 시작하지 않고 사용자가 먼저 launch한 뒤 marker를
 확인한다.
 
@@ -308,23 +316,33 @@ regular, non-symlink path와 아직 존재하지 않는 output directory를 사�
 Certifier는 production path를 no-follow/reparse 거부로 한 번 열어 owner-only
 private snapshot을 만들고 SHA-256을 검증한 뒤 모든 subprocess에서 그 exact
 snapshot만 실행한다.
+Certifier 자체도 같은 release manifest가 가리키는 raw `mds-evidence` asset을
+고정 path에 설치하고 manifest SHA-256을 전달해야 한다. Wrapper는 그 파일을
+private snapshot으로 복사해 다시 hash한 뒤 실행하므로 checkout의 Go toolchain이나
+`go run`을 인증 authority로 사용하지 않는다. POSIX 고정 path는
+`/usr/local/bin/mds-evidence`, Windows는
+`C:/ProgramData/my-desk-setup/bin/mds-evidence.exe`다.
 선택 방식은 `--all`, `--profile` 또는 하나 이상의 `--component` 중 하나다.
 
 ```sh
 scripts/prepare-target-certification.sh \
+  --mds-evidence /usr/local/bin/mds-evidence \
+  --expected-mds-evidence-sha256 '<release-certifier-sha256>' \
   --mds /usr/local/bin/mds \
   --target macos-host:local \
   --expected-binary-sha256 '<release-binary-sha256>' \
   --profile certification-macos-host > preparation.json
 
 scripts/certify-target.sh \
+  --mds-evidence /usr/local/bin/mds-evidence \
+  --expected-mds-evidence-sha256 '<release-certifier-sha256>' \
   --mds /usr/local/bin/mds \
   --target macos-host:local \
   --output ./target-evidence/macos-host \
   --cohort 'cert-20260731T120000Z-<commit8>' \
   --expected-binary-sha256 '<release-binary-sha256>' \
   --expected-plan-digest 'sha256:<reviewed-plan-digest>' \
-  --all
+  --profile certification-macos-host
 ```
 
 WSL/Lima guest를 수동 인증할 때는 host의 committed ownership record와 live
@@ -335,12 +353,16 @@ target identity에서 read-only preparation과 certification을 실행한다.
 
 ```sh
 scripts/prepare-target-certification.sh \
+  --mds-evidence /usr/local/bin/mds-evidence \
+  --expected-mds-evidence-sha256 '<release-certifier-sha256>' \
   --mds /usr/local/bin/mds \
   --target lima-guest:mds \
   --expected-binary-sha256 '<release-binary-sha256>' \
   --profile certification-lima-guest > preparation.json
 
 scripts/certify-target.sh \
+  --mds-evidence /usr/local/bin/mds-evidence \
+  --expected-mds-evidence-sha256 '<release-certifier-sha256>' \
   --mds /usr/local/bin/mds \
   --target lima-guest:mds \
   --output ./target-evidence/lima-guest \
@@ -364,6 +386,8 @@ bundle을 publication identity와 함께 다시 검증한다.
 
 ```sh
 scripts/verify-target-evidence.sh \
+  --mds-evidence /usr/local/bin/mds-evidence \
+  --expected-mds-evidence-sha256 '<release-certifier-sha256>' \
   --bundle ./target-evidence/macos-host \
   --expected-cli-revision '<exact-cli-revision>' \
   --expected-catalog-revision 'sha256:<expected-catalog-revision>' \
@@ -413,8 +437,8 @@ allowlisted label만 사용한다.
 target ID와 runner label은 workflow 안에서 exact pair로 다시 검증한다.
 self-hosted guest certifier는 WSL의 exact distribution 환경과 Microsoft kernel,
 또는 Lima의 exact instance 환경과 root-owned runtime marker를 확인한다. 두 guest
-모두 생성 시 provision된 root-owned `/etc/mds/image-identity-v1`을 독립적으로
-읽어 embedded catalog의 URL·SHA-256과 host-reviewed domain-separated nonce
+모두 생성 시 provision된 root-owned `/etc/mds/image-identity-v1` v3 marker를 독립적으로
+읽어 embedded catalog의 URL·SHA-256과 공개된 domain-separated nonce
 commitment를 대조한 뒤 그 관측 identity의 commitment만 자식 `mds` process에
 전달한다. Commitment는 guest plan target fingerprint에도 포함되지만 raw
 nonce는 runner environment, GitHub metadata, argv, plan과 evidence에 포함되지 않는다. 일반
@@ -435,7 +459,7 @@ commit SHA로 고정한다. actual-target job의 240분 상한은 내부 최대 
 180분에 checkout·compile·검증·upload를 위한 60분 여유를 둔다.
 
 전용 계정, exact label, protected environment, host ownership record 검증,
-guest systemd service의 root-owned nonce 주입과 rotation 순서는
+owner-only host record의 raw nonce와 공개 guest marker commitment rotation 순서는
 [actual-target runner 준비](target-certification-runner.md)를 따른다.
 
 현재 U11/final review head에는 macOS host, Windows host, WSL Ubuntu와

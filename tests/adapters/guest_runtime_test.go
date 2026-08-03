@@ -11,6 +11,7 @@ import (
 	hostadapter "github.com/zzanghyunmoo/my-desk-setup/internal/adapters/host"
 	"github.com/zzanghyunmoo/my-desk-setup/internal/guest"
 	"github.com/zzanghyunmoo/my-desk-setup/internal/planning"
+	"github.com/zzanghyunmoo/my-desk-setup/internal/target"
 	"github.com/zzanghyunmoo/my-desk-setup/internal/transport"
 )
 
@@ -682,7 +683,12 @@ func guestImageIdentityMarkerFromOwnership(
 			err,
 		)
 	}
-	return "schema=mds.guest-image/v2\n" +
+	commitment, err := target.GuestCreationNonceCommitment(record.CreationNonce)
+	if err != nil {
+		t.Fatalf("GuestCreationNonceCommitment(): %v", err)
+	}
+	return "schema=mds.guest-image/v3\n" +
 		"image_revision=sha256:" + imageSHA + "\n" +
-		"image_provenance=" + imageURL + "\n"
+		"image_provenance=" + imageURL + "\n" +
+		"creation_nonce_commitment=" + commitment + "\n"
 }

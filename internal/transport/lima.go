@@ -59,7 +59,7 @@ func LimaCreateCommand(
 	architecture,
 	imageURL,
 	imageSHA256,
-	creationNonce string,
+	creationNonceCommitment string,
 ) (Command, error) {
 	if _, err := NewLima(instance); err != nil {
 		return Command{}, err
@@ -78,9 +78,13 @@ func LimaCreateCommand(
 	if artifact.ValidateSHA256(imageSHA256) != nil {
 		return Command{}, errors.New("Lima image SHA-256 must contain exactly 64 lowercase hex characters")
 	}
-	if artifact.ValidateSHA256(creationNonce) != nil {
+	if !strings.HasPrefix(creationNonceCommitment, "sha256:") ||
+		artifact.ValidateSHA256(strings.TrimPrefix(
+			creationNonceCommitment,
+			"sha256:",
+		)) != nil {
 		return Command{}, errors.New(
-			"Lima guest creation nonce must contain exactly 64 lowercase hex characters",
+			"Lima guest creation nonce commitment must be sha256 followed by 64 lowercase hex characters",
 		)
 	}
 	template, err := yaml.Marshal(struct {
@@ -99,7 +103,7 @@ func LimaCreateCommand(
 			Script: guestImageIdentityProvision(
 				imageURL,
 				imageSHA256,
-				creationNonce,
+				creationNonceCommitment,
 			),
 		}},
 	})
@@ -128,7 +132,7 @@ type limaProvision struct {
 func guestImageIdentityProvision(
 	imageURL,
 	imageSHA256,
-	creationNonce string,
+	creationNonceCommitment string,
 ) string {
 	return fmt.Sprintf(`#!/bin/sh
 set -eu
@@ -140,16 +144,16 @@ cleanup() {
 }
 trap cleanup EXIT HUP INT TERM
 /bin/cat > "$temporary" <<'MDS_IMAGE_IDENTITY'
-schema=mds.guest-image/v2
+schema=mds.guest-image/v3
 image_revision=sha256:%s
 image_provenance=%s
-creation_nonce=%s
+creation_nonce_commitment=%s
 MDS_IMAGE_IDENTITY
 /bin/chown 0:0 "$temporary"
 /bin/chmod 0644 "$temporary"
 /bin/mv -f "$temporary" /etc/mds/image-identity-v1
 temporary=
-`, imageSHA256, imageURL, creationNonce)
+`, imageSHA256, imageURL, creationNonceCommitment)
 }
 
 func normalizeLimaArchitecture(architecture string) (string, error) {

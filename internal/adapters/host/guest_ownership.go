@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/zzanghyunmoo/my-desk-setup/internal/adapters"
@@ -151,9 +150,17 @@ func (runtime GuestRuntime) validateGuestOwnershipMarker(
 	action planning.Action,
 	record guest.Ownership,
 ) (target.ImageIdentity, error) {
+	creationNonceCommitment, err := target.GuestCreationNonceCommitment(
+		record.CreationNonce,
+	)
+	if err != nil {
+		return target.ImageIdentity{}, errors.New(
+			"committed guest creation identity is invalid",
+		)
+	}
 	command, err := runtime.guestImageIdentityReadCommand(
 		action,
-		record.CreationNonce,
+		creationNonceCommitment,
 	)
 	if err != nil {
 		return target.ImageIdentity{}, err
@@ -165,9 +172,7 @@ func (runtime GuestRuntime) validateGuestOwnershipMarker(
 			err,
 		)
 	}
-	safeIdentity := strings.TrimSpace(result.Stdout) +
-		"\ncreation_nonce=" + record.CreationNonce + "\n"
-	identity, err := target.ParseImageIdentity([]byte(safeIdentity))
+	identity, err := target.ParseImageIdentity([]byte(result.Stdout))
 	if err != nil {
 		return target.ImageIdentity{}, err
 	}
@@ -180,7 +185,7 @@ func (runtime GuestRuntime) validateGuestOwnershipMarker(
 			record.Name,
 		)
 	}
-	if identity.CreationNonce != record.CreationNonce {
+	if identity.CreationNonceCommitment != creationNonceCommitment {
 		return target.ImageIdentity{}, fmt.Errorf(
 			"live %s guest %q creation identity does not match the committed ownership record",
 			record.Provider,
@@ -192,10 +197,10 @@ func (runtime GuestRuntime) validateGuestOwnershipMarker(
 
 func (runtime GuestRuntime) guestImageIdentityReadCommand(
 	action planning.Action,
-	expectedCreationNonce string,
+	expectedCreationNonceCommitment string,
 ) (transport.Command, error) {
 	const script = `set -eu
-IFS= read -r expected_creation_nonce
+IFS= read -r expected_creation_nonce_commitment
 path=/etc/mds/image-identity-v1
 [ -f "$path" ] && [ ! -L "$path" ] || exit 74
 metadata=$(/usr/bin/stat -c '%u:%g:%a' "$path")
@@ -208,17 +213,18 @@ line_count=$(/usr/bin/wc -l < "$path")
 schema=$(/usr/bin/sed -n 's/^schema=//p' "$path")
 revision=$(/usr/bin/sed -n 's/^image_revision=//p' "$path")
 provenance=$(/usr/bin/sed -n 's/^image_provenance=//p' "$path")
-creation_nonce=$(/usr/bin/sed -n 's/^creation_nonce=//p' "$path")
+creation_nonce_commitment=$(/usr/bin/sed -n 's/^creation_nonce_commitment=//p' "$path")
 [ -n "$schema" ] && [ -n "$revision" ] && [ -n "$provenance" ]
-[ "$creation_nonce" = "$expected_creation_nonce" ] || exit 74
+[ "$creation_nonce_commitment" = "$expected_creation_nonce_commitment" ] || exit 74
 printf 'schema=%s\n' "$schema"
 printf 'image_revision=%s\n' "$revision"
 printf 'image_provenance=%s\n' "$provenance"
+printf 'creation_nonce_commitment=%s\n' "$creation_nonce_commitment"
 `
 	guestCommand := transport.Command{
 		Executable:  "/bin/sh",
 		Arguments:   []string{"-eu", "-c", script, "mds-image-identity"},
-		Stdin:       []byte(expectedCreationNonce + "\n"),
+		Stdin:       []byte(expectedCreationNonceCommitment + "\n"),
 		Timeout:     30 * time.Second,
 		OutputLimit: 4096,
 	}

@@ -109,11 +109,28 @@ for mds_kind in macos-host windows-host wsl-guest lima-guest; do
     exit 1
   fi
   mds_zip="$mds_tmp/$mds_kind.zip"
-  (
-    ulimit -f 65536
-    gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$mds_artifact_id/zip"
-  ) > "$mds_zip"
+  mds_download_status=(0 0)
+  if (ulimit -f 65536) 2>/dev/null; then
+    (
+      ulimit -f 65536
+      gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$mds_artifact_id/zip"
+    ) > "$mds_zip"
+  else
+    set +e
+    gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$mds_artifact_id/zip" |
+      head -c 33554433 > "$mds_zip"
+    mds_download_status=("${PIPESTATUS[@]}")
+    set -e
+    if ((mds_download_status[1] != 0)); then
+      echo "failed to bound downloaded evidence artifact $mds_name" >&2
+      exit 1
+    fi
+  fi
   mds_zip_size=$(wc -c < "$mds_zip")
+  if ((mds_download_status[0] != 0 && mds_zip_size <= 33554432)); then
+    echo "failed to download evidence artifact $mds_name" >&2
+    exit 1
+  fi
   if [[ ! -s "$mds_zip" ]] || ((mds_zip_size > 33554432)); then
     echo "downloaded evidence artifact $mds_name exceeds the 32 MiB archive limit" >&2
     exit 1

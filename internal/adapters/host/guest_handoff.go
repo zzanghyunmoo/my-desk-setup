@@ -119,13 +119,8 @@ func (runtime GuestRuntime) verifyGuestHandoffIdentity(
 			identity.Target.ImageProvenance,
 		)
 	}
-	commitment, err := target.GuestCreationNonceCommitment(
-		observedImage.CreationNonce,
-	)
-	if err != nil {
-		return errors.New("guest creation identity marker is invalid")
-	}
-	if identity.Target.ImageCreationNonceCommitment != commitment {
+	if identity.Target.ImageCreationNonceCommitment !=
+		observedImage.CreationNonceCommitment {
 		return errors.New(
 			"guest creation identity is missing or differs from the observed ownership marker",
 		)
@@ -152,18 +147,10 @@ func (runtime GuestRuntime) guestHandoffCommand(
 		OutputLimit: transport.DefaultOutputLimit,
 	}
 	if observedImage.Revision != "" || observedImage.Provenance != "" {
-		commitment, err := target.GuestCreationNonceCommitment(
-			observedImage.CreationNonce,
-		)
-		if err != nil {
-			return target.ID{}, transport.Command{}, errors.New(
-				"guest creation identity marker is invalid",
-			)
-		}
 		guestCommand.Environment = map[string]string{
 			"MDS_IMAGE_REVISION":                  observedImage.Revision,
 			"MDS_IMAGE_PROVENANCE":                observedImage.Provenance,
-			"MDS_IMAGE_CREATION_NONCE_COMMITMENT": commitment,
+			"MDS_IMAGE_CREATION_NONCE_COMMITMENT": observedImage.CreationNonceCommitment,
 		}
 	}
 	switch action.ComponentID {

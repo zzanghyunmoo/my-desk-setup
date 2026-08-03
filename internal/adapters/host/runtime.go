@@ -264,12 +264,18 @@ func (runtime GuestRuntime) applyLima(
 	if err != nil {
 		return err
 	}
+	creationNonceCommitment, err := target.GuestCreationNonceCommitment(
+		record.CreationNonce,
+	)
+	if err != nil {
+		return fmt.Errorf("prepare Lima guest creation commitment: %w", err)
+	}
 	create, err := transport.LimaCreateCommand(
 		defaultGuestName,
 		runtime.Architecture,
 		image.URL,
 		image.SHA256,
-		record.CreationNonce,
+		creationNonceCommitment,
 	)
 	if err != nil {
 		return fmt.Errorf("build Lima Ubuntu guest template: %w", err)
@@ -394,10 +400,10 @@ home=$(printf '%s\n' "$entry" | /usr/bin/cut -d: -f6)
 
 func (runtime GuestRuntime) wslImageIdentityCommand(
 	image guest.ImageSpec,
-	creationNonce string,
+	creationNonceCommitment string,
 ) transport.Command {
 	const script = `umask 022
-IFS= read -r creation_nonce
+IFS= read -r creation_nonce_commitment
 /usr/bin/install -d -m 0755 /etc/mds
 temporary=$(/usr/bin/mktemp /etc/mds/.image-identity-v1.XXXXXX)
 cleanup() {
@@ -405,10 +411,10 @@ cleanup() {
 }
 trap cleanup EXIT HUP INT TERM
 {
-  printf 'schema=mds.guest-image/v2\n'
+  printf 'schema=mds.guest-image/v3\n'
   printf 'image_revision=%s\n' "$1"
   printf 'image_provenance=%s\n' "$2"
-  printf 'creation_nonce=%s\n' "$creation_nonce"
+  printf 'creation_nonce_commitment=%s\n' "$creation_nonce_commitment"
 } > "$temporary"
 /bin/chown 0:0 "$temporary"
 /bin/chmod 0644 "$temporary"
@@ -425,7 +431,7 @@ temporary=
 			"sha256:" + image.SHA256,
 			image.URL,
 		},
-		Stdin:   []byte(creationNonce + "\n"),
+		Stdin:   []byte(creationNonceCommitment + "\n"),
 		Timeout: 5 * time.Minute,
 	}
 }
@@ -508,9 +514,15 @@ func (runtime GuestRuntime) installPinnedWSLImage(
 			),
 		}
 	}
+	creationNonceCommitment, err := target.GuestCreationNonceCommitment(
+		creationNonce,
+	)
+	if err != nil {
+		return fmt.Errorf("prepare WSL guest creation commitment: %w", err)
+	}
 	if _, err := runtime.Port.Run(
 		ctx,
-		runtime.wslImageIdentityCommand(image, creationNonce),
+		runtime.wslImageIdentityCommand(image, creationNonceCommitment),
 	); err != nil {
 		return fmt.Errorf(
 			"publish root-owned Ubuntu WSL image identity marker: %w",
