@@ -368,6 +368,36 @@ func TestRunnerRegistrationKeepsRequiredSelfHostedLabel(t *testing.T) {
 	}
 }
 
+func TestGuestCommitmentDocsUsePreparationAsDispatchSource(t *testing.T) {
+	root := repositoryRoot(t)
+	paths := []string{
+		filepath.Join(root, "docs", "operations", "target-certification-runner.md"),
+		filepath.Join(root, "docs", "operations", "bootstrap.md"),
+		filepath.Join(root, "docs", "architecture", "environment-control-plane.md"),
+		filepath.Join(root, "tests", "target-evidence", "README.md"),
+	}
+	for _, path := range paths {
+		content, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read guest commitment documentation %s: %v", path, err)
+		}
+		document := string(content)
+		if !strings.Contains(document, "mds-evidence prepare") ||
+			!strings.Contains(document, "image_creation_nonce_commitment") {
+			t.Fatalf("%s does not name the preparation commitment source", path)
+		}
+		for _, forbidden := range []string{
+			"host plan에 기록된",
+			"host plan에서 검토한",
+			"emitted by the host plan",
+		} {
+			if strings.Contains(document, forbidden) {
+				t.Fatalf("%s still uses the impossible host plan source %q", path, forbidden)
+			}
+		}
+	}
+}
+
 func TestPullRequestCIRunsWindowsBuildAndTests(t *testing.T) {
 	root := repositoryRoot(t)
 	content, err := os.ReadFile(

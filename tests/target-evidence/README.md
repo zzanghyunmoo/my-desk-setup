@@ -56,14 +56,15 @@ scripts/verify-target-evidence.sh \
   --require-verified
 ```
 
-For a manual WSL/Lima run, compare the host's committed ownership record with
-the live marker and pass only the domain-separated commitment emitted by the
-host plan. The v3 guest marker contains only that public commitment; the raw
-nonce remains in the owner-only host record. The released `mds-evidence prepare`
-observes the marker commitment and emits the exact plan digest without mutation. The self-hosted
-workflow accepts that non-secret commitment, but never the raw nonce or a
-machine-local binary path. Host and guest runner services must not define a raw
-nonce environment variable.
+For a manual WSL/Lima run, first require the host production `mds doctor` guest
+ownership action to validate the committed record against the live marker. Then
+use only `target.image_creation_nonce_commitment` from the released
+`mds-evidence prepare` JSON as the dispatch source; a host plan does not emit
+this field. The v3 guest marker contains only that public commitment, while the
+raw nonce remains in the owner-only host record. Certification rereads the live
+marker immediately before mutation. The self-hosted workflow accepts the
+non-secret commitment, but never the raw nonce or a machine-local binary path.
+Host and guest runner services must not define a raw nonce environment variable.
 
 The workflow maps each exact target ID to one target-specific certification
 profile and runner label. The mapping is closed: dispatchers cannot supply a

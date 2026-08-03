@@ -64,14 +64,6 @@ type Bootstrap struct {
 	Size   int64  `json:"size"`
 }
 
-type Certifier struct {
-	Name         string `json:"name"`
-	OS           string `json:"os"`
-	Architecture string `json:"architecture"`
-	SHA256       string `json:"sha256"`
-	Size         int64  `json:"size"`
-}
-
 type Manifest struct {
 	SchemaVersion   string      `json:"schema_version"`
 	Version         string      `json:"version"`
@@ -205,28 +197,13 @@ func Build(ctx context.Context, options Options) (returnErr error) {
 			SHA256:        digest,
 			Size:          size,
 		})
-		certifierName := certifierName(manifest.Version, releaseTarget)
-		certifierPath := filepath.Join(staging, certifierName)
-		if err := buildExecutable(
-			ctx,
-			sourceRoot,
-			certifierPath,
-			releaseTarget,
-			manifest,
-			"./cmd/mds-evidence",
-			false,
-		); err != nil {
-			return err
-		}
-		certifierDigest, certifierSize, err := fileIdentity(certifierPath)
+		certifier, err := stageCertifier(
+			ctx, sourceRoot, staging, releaseTarget, manifest,
+		)
 		if err != nil {
 			return err
 		}
-		manifest.Certifiers = append(manifest.Certifiers, Certifier{
-			Name: certifierName, OS: releaseTarget.os,
-			Architecture: releaseTarget.architecture,
-			SHA256:       certifierDigest, Size: certifierSize,
-		})
+		manifest.Certifiers = append(manifest.Certifiers, certifier)
 	}
 	for _, expected := range releaseBootstraps {
 		source := filepath.Join(sourceRoot, "bootstrap", expected.name)
@@ -487,20 +464,6 @@ func artifactName(version string, releaseTarget target) string {
 	)
 }
 
-func certifierName(version string, releaseTarget target) string {
-	extension := ""
-	if releaseTarget.os == "windows" {
-		extension = ".exe"
-	}
-	return fmt.Sprintf(
-		"mds-evidence_%s_%s_%s%s",
-		version,
-		releaseTarget.os,
-		releaseTarget.architecture,
-		extension,
-	)
-}
-
 func writeTarArchive(path, binaryPath, binaryName string) (returnErr error) {
 	binary, err := os.Open(binaryPath)
 	if err != nil {
@@ -746,32 +709,8 @@ func validateManifest(manifest Manifest) error {
 			return fmt.Errorf("manifest artifact %q has invalid file identity", artifact.Name)
 		}
 	}
-	if len(manifest.Certifiers) != len(releaseTargets) {
-		return fmt.Errorf(
-			"manifest has %d certifiers, want %d",
-			len(manifest.Certifiers),
-			len(releaseTargets),
-		)
-	}
-	for index, releaseTarget := range releaseTargets {
-		certifier := manifest.Certifiers[index]
-		if certifier.Name != certifierName(manifest.Version, releaseTarget) ||
-			certifier.OS != releaseTarget.os ||
-			certifier.Architecture != releaseTarget.architecture {
-			return fmt.Errorf(
-				"manifest certifier %d does not match expected %s/%s identity",
-				index,
-				releaseTarget.os,
-				releaseTarget.architecture,
-			)
-		}
-		if exactartifact.ValidateSHA256(certifier.SHA256) != nil ||
-			certifier.Size <= 0 {
-			return fmt.Errorf(
-				"manifest certifier %q has invalid file identity",
-				certifier.Name,
-			)
-		}
+	if err := validateCertifiers(manifest); err != nil {
+		return err
 	}
 	if len(manifest.Bootstraps) != len(releaseBootstraps) {
 		return fmt.Errorf(

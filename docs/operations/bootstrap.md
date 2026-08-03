@@ -346,9 +346,11 @@ scripts/certify-target.sh \
 ```
 
 WSL/Lima guest를 수동 인증할 때는 host의 committed ownership record와 live
-marker를 먼저 대조하고 host plan에 기록된 domain-separated nonce commitment만
-guest로 전달한다. Raw nonce는 runner/process environment나 GitHub input에 넣지
-않는다. WSL은 `WSL_DISTRO_NAME=Ubuntu-26.04`, Lima는 `LIMA_INSTANCE=mds` exact
+marker를 먼저 대조하고 host `doctor`의 guest ownership action이 `ready`인지
+확인한다. 이어 exact guest에서 released `mds-evidence prepare`를 실행하고 그 JSON의
+`target.image_creation_nonce_commitment`만 dispatch input으로 전달한다. Host plan은
+commitment source가 아니다. Raw nonce는 runner/process environment나 GitHub input에
+넣지 않는다. WSL은 `WSL_DISTRO_NAME=Ubuntu-26.04`, Lima는 `LIMA_INSTANCE=mds` exact
 target identity에서 read-only preparation과 certification을 실행한다.
 
 ```sh
@@ -448,8 +450,8 @@ self-hosted runner는 target별 전용 OS 계정과 전용 작업 디렉터리�
 저장된 API key, browser session, SSH agent, cloud credential 또는 repository
 secret을 두지 않는다. workflow의 자동 `GITHUB_TOKEN`은 `contents: read`로만
 제한하고 environment에는 secret을 등록하지 않는다. guest one-job runner에는
-raw nonce를 설정하지 않는다. Dispatcher는 host plan과 guest `prepare`가 확인한
-commitment만 전달하며, 값이 없거나 형식이 틀리면 guest certification을 실행하지
+raw nonce를 설정하지 않는다. Dispatcher는 host doctor의 record↔marker 검증 뒤
+guest `prepare`가 출력한 commitment만 전달하며, 값이 없거나 형식이 틀리면 guest certification을 실행하지
 않는다. 보호 environment reviewer는
 `github.sha`, target, binary checksum과 runner label을 확인한 뒤 실행을
 허용한다. caller가 임의 expected commit을 전달할 수 없고 protected non-fork

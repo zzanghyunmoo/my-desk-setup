@@ -263,12 +263,13 @@ guest 또는 stale ownership conflict를 먼저 해결한다.
 
 ## 4. Read-only preparation과 guest commitment
 
-먼저 host 전용 계정에서 guest ownership record와 live marker를 대조한 뒤, host
-`mds plan --format json`의
-`target.image_creation_nonce_commitment`만 복사한다. Commitment는
-`sha256:<64-lowercase-hex>`이고 raw nonce를 복원하지 못하는 공개 identity다.
-Raw nonce 자체는 terminal, clipboard, runner environment나 GitHub input에 넣지
-않는다.
+먼저 host 전용 계정에서 section 3의 ownership record와 live marker 검증을
+완료한다. 같은 host account의 production `mds doctor --format json`을
+macOS에서는 `--target macos-host:local --profile certification-macos-host`,
+Windows에서는 `--target windows-host:local --profile
+certification-windows-host`로 실행해 guest ownership action이 `ready`인지도
+확인한다. Host plan은 guest commitment를 출력하지 않으며 commitment source로
+사용하지 않는다.
 
 guest의 exact target identity 환경(`WSL_DISTRO_NAME=Ubuntu-26.04` 또는
 `LIMA_INSTANCE=mds`)에서 mutation 전에 다음 read-only preparation을 실행한다.
@@ -290,12 +291,16 @@ runtime probe로 read-only plan을 실행하며
 target fingerprint, binary SHA-256와 plan digest만 출력한다. Apply, evidence
 upload와 인증은 수행하지 않는다.
 
-Operator와 environment reviewer가 이 JSON의 commitment를 host-reviewed
-commitment와 대조하고 나머지 identity를 release manifest와 대조한 뒤
-`plan_digest`와 guest target일 때만
-`guest_creation_nonce_commitment`를 workflow dispatch input으로 전달한다. Host
-target은 commitment input을 비워 둔다. Commitment와 plan digest는 GitHub metadata에
-남아도 raw nonce나 개인 경로를 노출하지 않는다.
+`mds-evidence prepare`가 출력한
+`target.image_creation_nonce_commitment`가 dispatch에 사용하는 canonical 공개
+commitment다. Operator와 environment reviewer는 host doctor가 record↔live marker
+검증을 통과한 동일 guest인지 확인하고, preparation의 나머지 identity를 release
+manifest와 대조한 뒤 `plan_digest`와 guest target일 때만
+`guest_creation_nonce_commitment`를 workflow dispatch input으로 전달한다. Certify는
+mutation 직전에 같은 v3 marker를 다시 읽어 그 commitment와 exact match를
+강제한다. Host target은 commitment input을 비워 둔다. Commitment는
+`sha256:<64-lowercase-hex>` 공개 identity이므로 GitHub metadata에 남아도 되지만 raw
+nonce나 개인 경로는 노출하지 않는다.
 
 ## 5. Dispatch 전 점검
 
@@ -313,8 +318,8 @@ environment reviewer는 승인 전에 다음 값을 release manifest, reviewed p
   실행한다는 경계
 - `mds-evidence prepare` JSON의 exact CLI revision, catalog revision, target
   fingerprint, binary SHA-256와 plan digest
-- guest라면 committed host record와 live marker의 provider/name/image 일치 및
-  host-reviewed nonce commitment와 v3 marker 및 guest preparation commitment 일치
+- guest라면 host doctor가 확인한 committed record↔live marker 일치와 guest
+  preparation commitment 및 certify 직전 v3 marker commitment의 exact match
 - runner work directory가 이전 job의 untracked file 없이 clean한 상태
 
 runner에는 실제 target과 production binary가 준비돼 있어야 한다. 인증되지
@@ -341,8 +346,8 @@ guest를 다시 만들거나 host ownership record의 creation nonce가 바뀌�
 one-job runner process를 즉시 중지한다.
 
 1. 새 guest의 root-owned marker와 새 committed host record를 먼저 대조한다.
-2. host plan에서 새 commitment를 확인하고 guest에서 read-only `prepare`를 다시
-   실행한다.
+2. host doctor로 새 record↔marker identity를 확인하고 guest에서 read-only
+   `prepare`를 다시 실행해 새 공개 commitment를 얻는다.
 3. 새 preparation JSON의 plan digest와 commitment로 새 ephemeral runner를
    등록·dispatch한다.
 4. old commitment나 plan digest를 새 dispatch에 재사용하지 않았는지 확인한다.
