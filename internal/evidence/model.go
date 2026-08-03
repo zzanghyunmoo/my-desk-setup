@@ -100,14 +100,13 @@ type CertifyRequest struct {
 }
 
 type VerifyOptions struct {
-	ExpectedCLIRevision          string
-	ExpectedCatalogRevision      string
-	ExpectedPlanDigest           string
-	ExpectedTargetID             string
-	ExpectedBinarySHA256         string
-	ExpectedCohort               string
-	RequireVerified              bool
-	RequirePublicationAcceptable bool
-	Now                          time.Time
-	MaxAge                       time.Duration
+	ExpectedCLIRevision     string
+	ExpectedCatalogRevision string
+	ExpectedPlanDigest      string
+	ExpectedTargetID        string
+	ExpectedBinarySHA256    string
+	ExpectedCohort          string
+	RequireVerified         bool
+	Now                     time.Time
+	MaxAge                  time.Duration
 }

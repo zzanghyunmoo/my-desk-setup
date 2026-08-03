@@ -126,18 +126,12 @@ func newVerifyCommand(stdout io.Writer) *cobra.Command {
 	var bundle string
 	var options evidence.VerifyOptions
 	var requireVerified bool
-	var requirePublicationAcceptable bool
 	command := &cobra.Command{
 		Use:   "verify",
 		Short: "Strictly verify an actual target evidence bundle",
 		Args:  cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
-			if requireVerified && requirePublicationAcceptable {
-				return errors.New(
-					"choose only one of --require-verified or --require-publication-acceptable",
-				)
-			}
-			if (requireVerified || requirePublicationAcceptable) &&
+			if requireVerified &&
 				(options.ExpectedCLIRevision == "" ||
 					options.ExpectedCatalogRevision == "" ||
 					options.ExpectedPlanDigest == "" ||
@@ -149,7 +143,6 @@ func newVerifyCommand(stdout io.Writer) *cobra.Command {
 				)
 			}
 			options.RequireVerified = requireVerified
-			options.RequirePublicationAcceptable = requirePublicationAcceptable
 			if options.MaxAge > 0 {
 				options.Now = time.Now().UTC()
 			}
@@ -212,12 +205,6 @@ func newVerifyCommand(stdout io.Writer) *cobra.Command {
 		"require-verified",
 		false,
 		"fail unless recomputed actual target status is verified",
-	)
-	flags.BoolVar(
-		&requirePublicationAcceptable,
-		"require-publication-acceptable",
-		false,
-		"accept verified evidence or blocked evidence whose only remaining outcomes are honest manual actions",
 	)
 	_ = command.MarkFlagRequired("bundle")
 	return command

@@ -48,6 +48,28 @@ func TestRequireVerifiedRequiresExternalReleaseExpectations(t *testing.T) {
 	}
 }
 
+func TestVerifyRejectsRemovedPublicationAcceptableFlag(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	exitCode := run(
+		[]string{
+			"verify",
+			"--bundle",
+			"unused",
+			"--require-publication-acceptable",
+		},
+		&stdout,
+		&stderr,
+	)
+
+	if exitCode == 0 || !strings.Contains(stderr.String(), "unknown flag") {
+		t.Fatalf(
+			"exit=%d stderr=%q, want removed flag rejection",
+			exitCode,
+			stderr.String(),
+		)
+	}
+}
+
 func TestCertifyRejectsLegacyNonceFlagWithoutEchoingRawValue(t *testing.T) {
 	rawNonce := strings.Repeat("a", 64)
 	var stdout, stderr bytes.Buffer

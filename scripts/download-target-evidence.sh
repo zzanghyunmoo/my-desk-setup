@@ -79,7 +79,14 @@ while IFS= read -r mds_run_id; do
     "$mds_tmp/artifacts-$mds_run_id.json" | tr -d '\r' >> "$mds_tmp/artifacts.tsv"
 done < "$mds_tmp/run-ids.txt"
 
-mkdir -m 700 "$MDS_EVIDENCE_ROOT"
+case "$(uname -s)" in
+  MINGW* | MSYS* | CYGWIN*)
+    mkdir "$MDS_EVIDENCE_ROOT"
+    ;;
+  *)
+    mkdir -m 700 "$MDS_EVIDENCE_ROOT"
+    ;;
+esac
 for mds_kind in macos-host windows-host wsl-guest lima-guest; do
   mds_prefix="target-evidence-$mds_kind-$MDS_COMMIT-$MDS_CERTIFICATION_COHORT-"
   mapfile -t mds_matches < <(
