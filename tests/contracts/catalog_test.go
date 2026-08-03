@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"testing"
@@ -656,6 +657,74 @@ func TestCertificationProfilesPreserveAllAndOwnerXcodeTruthfulness(t *testing.T)
 		if action.ComponentID == "xcode" {
 			t.Fatal("certification macOS profile selected manual Xcode")
 		}
+	}
+}
+
+func TestGuestCertificationProfilesCoverEveryAutomatableComponent(t *testing.T) {
+	environment := loadCatalog(t)
+	for _, test := range []struct {
+		profile string
+		facts   target.Facts
+	}{
+		{
+			profile: "certification-wsl-guest",
+			facts: certificationFacts(
+				t,
+				target.KindWSLGuest,
+				"Ubuntu-26.04",
+				"linux",
+				"amd64",
+			),
+		},
+		{
+			profile: "certification-lima-guest",
+			facts: certificationFacts(
+				t,
+				target.KindLimaGuest,
+				"mds",
+				"linux",
+				"arm64",
+			),
+		},
+	} {
+		t.Run(test.profile, func(t *testing.T) {
+			allPlan, err := planning.Build(environment, test.facts, planning.All())
+			if err != nil {
+				t.Fatalf("Build(all): %v", err)
+			}
+			profile, err := planning.Profile(test.profile)
+			if err != nil {
+				t.Fatalf("Profile(): %v", err)
+			}
+			certificationPlan, err := planning.Build(
+				environment,
+				test.facts,
+				profile,
+			)
+			if err != nil {
+				t.Fatalf("Build(certification): %v", err)
+			}
+			expected := make(map[string]bool)
+			for _, action := range allPlan.Actions {
+				if action.Status == planning.ActionPlanned {
+					expected[action.ComponentID] = true
+				}
+			}
+			actual := make(map[string]bool)
+			for _, action := range certificationPlan.Actions {
+				if action.Status != planning.ActionPlanned {
+					t.Fatalf("certification action is not automatable: %+v", action)
+				}
+				actual[action.ComponentID] = true
+			}
+			if !reflect.DeepEqual(actual, expected) {
+				t.Fatalf(
+					"certification coverage = %v, want automatable all = %v",
+					actual,
+					expected,
+				)
+			}
+		})
 	}
 }
 

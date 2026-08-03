@@ -311,8 +311,14 @@ snapshot만 실행한다.
 선택 방식은 `--all`, `--profile` 또는 하나 이상의 `--component` 중 하나다.
 
 ```sh
+scripts/prepare-target-certification.sh \
+  --mds /usr/local/bin/mds \
+  --target macos-host:local \
+  --expected-binary-sha256 '<release-binary-sha256>' \
+  --profile certification-macos-host > preparation.json
+
 scripts/certify-target.sh \
-  --mds "$HOME/.local/bin/mds" \
+  --mds /usr/local/bin/mds \
   --target macos-host:local \
   --output ./target-evidence/macos-host \
   --cohort 'cert-20260731T120000Z-<commit8>' \
@@ -321,24 +327,28 @@ scripts/certify-target.sh \
   --all
 ```
 
-WSL/Lima guest를 수동 인증할 때는 host의 committed ownership record에서 읽은
-creation nonce를 target/name과 대조한 뒤, shell history에 남지 않는 protected
-process environment로 전달한다. WSL은 `WSL_DISTRO_NAME=Ubuntu-26.04`,
-Lima는 `LIMA_INSTANCE=mds` exact target identity도 같은 process에 전달한다.
-Certifier는 nonce flag를 받지 않는다.
+WSL/Lima guest를 수동 인증할 때는 host의 committed ownership record와 live
+marker를 먼저 대조하고 host plan에 기록된 domain-separated nonce commitment만
+guest로 전달한다. Raw nonce는 runner/process environment나 GitHub input에 넣지
+않는다. WSL은 `WSL_DISTRO_NAME=Ubuntu-26.04`, Lima는 `LIMA_INSTANCE=mds` exact
+target identity에서 read-only preparation과 certification을 실행한다.
 
 ```sh
-IFS= read -r -s MDS_EXPECTED_GUEST_CREATION_NONCE </dev/tty
-export MDS_EXPECTED_GUEST_CREATION_NONCE
+scripts/prepare-target-certification.sh \
+  --mds /usr/local/bin/mds \
+  --target lima-guest:mds \
+  --expected-binary-sha256 '<release-binary-sha256>' \
+  --profile certification-lima-guest > preparation.json
+
 scripts/certify-target.sh \
-  --mds "$HOME/.local/bin/mds" \
+  --mds /usr/local/bin/mds \
   --target lima-guest:mds \
   --output ./target-evidence/lima-guest \
   --cohort 'cert-20260731T120000Z-<commit8>' \
   --expected-binary-sha256 '<release-binary-sha256>' \
   --expected-plan-digest 'sha256:<reviewed-plan-digest>' \
-  --all
-unset MDS_EXPECTED_GUEST_CREATION_NONCE
+  --expected-guest-creation-nonce-commitment 'sha256:<host-reviewed-commitment>' \
+  --profile certification-lima-guest
 ```
 
 certifier는 production binary로 read-only `plan`을 만든 뒤 exact digest의
@@ -404,21 +414,19 @@ target ID와 runner label은 workflow 안에서 exact pair로 다시 검증한�
 self-hosted guest certifier는 WSL의 exact distribution 환경과 Microsoft kernel,
 또는 Lima의 exact instance 환경과 root-owned runtime marker를 확인한다. 두 guest
 모두 생성 시 provision된 root-owned `/etc/mds/image-identity-v1`을 독립적으로
-읽어 embedded catalog의 URL·SHA-256과 host ownership record의 creation
-nonce를 one-job runner process의 `MDS_EXPECTED_GUEST_CREATION_NONCE`와 대조한 뒤 그
-관측 identity의 domain-separated nonce commitment만 자식 `mds` process에
+읽어 embedded catalog의 URL·SHA-256과 host-reviewed domain-separated nonce
+commitment를 대조한 뒤 그 관측 identity의 commitment만 자식 `mds` process에
 전달한다. Commitment는 guest plan target fingerprint에도 포함되지만 raw
-nonce는 argv, plan과 evidence에 포함되지 않는다. 일반
+nonce는 runner environment, GitHub metadata, argv, plan과 evidence에 포함되지 않는다. 일반
 handoff와 certification 모두 catalog 값만으로 실제 image identity를 합성하지
 않는다.
 self-hosted runner는 target별 전용 OS 계정과 전용 작업 디렉터리에서 실행하고,
 저장된 API key, browser session, SSH agent, cloud credential 또는 repository
 secret을 두지 않는다. workflow의 자동 `GITHUB_TOKEN`은 `contents: read`로만
-제한하고 environment에는 secret을 등록하지 않는다. guest one-job runner는
-host의 committed ownership record에서 읽은 nonce를 root-owned service
-configuration에 target별로 고정한다. workflow dispatcher input으로 nonce를
-받지 않으며, 값이 없거나 형식이 틀리면 guest certification을 실행하지 않는다.
-host runner process에는 이 환경값을 두지 않는다. 보호 environment reviewer는
+제한하고 environment에는 secret을 등록하지 않는다. guest one-job runner에는
+raw nonce를 설정하지 않는다. Dispatcher는 host plan과 guest `prepare`가 확인한
+commitment만 전달하며, 값이 없거나 형식이 틀리면 guest certification을 실행하지
+않는다. 보호 environment reviewer는
 `github.sha`, target, binary checksum과 runner label을 확인한 뒤 실행을
 허용한다. caller가 임의 expected commit을 전달할 수 없고 protected non-fork
 ref의 `github.sha`만 `persist-credentials: false`로 checkout한다. evidence는

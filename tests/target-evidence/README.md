@@ -22,17 +22,21 @@ Use the self-hosted `Actual target` lane in
 `.github/workflows/target-certification.yml`, or run:
 
 ```bash
-IFS= read -r -s MDS_EXPECTED_GUEST_CREATION_NONCE </dev/tty
-export MDS_EXPECTED_GUEST_CREATION_NONCE
+scripts/prepare-target-certification.sh \
+  --mds /usr/local/bin/mds \
+  --target lima-guest:mds \
+  --expected-binary-sha256 '<release-binary-sha256>' \
+  --profile certification-lima-guest > preparation.json
+
 scripts/certify-target.sh \
-  --mds /absolute/path/to/mds \
+  --mds /usr/local/bin/mds \
   --target lima-guest:mds \
   --output target-evidence/run-manual-001 \
   --cohort 'cert-20260731T120000Z-<commit8>' \
   --expected-binary-sha256 '<release-binary-sha256>' \
   --expected-plan-digest 'sha256:<reviewed-plan>' \
+  --expected-guest-creation-nonce-commitment 'sha256:<host-reviewed-commitment>' \
   --profile certification-lima-guest
-unset MDS_EXPECTED_GUEST_CREATION_NONCE
 
 scripts/verify-target-evidence.sh \
   --bundle target-evidence/run-manual-001 \
@@ -46,13 +50,13 @@ scripts/verify-target-evidence.sh \
   --require-verified
 ```
 
-For a manual WSL/Lima run, read the expected nonce from the host's committed
-ownership record and confirm the provider/name before exposing it only through
-the protected process environment. The
-self-hosted workflow does not accept this value from the dispatcher: its
-dedicated guest one-job runner process must inherit the target-specific, root-owned
-`MDS_EXPECTED_GUEST_CREATION_NONCE`. Host certifier processes and runner
-services must not define that environment variable.
+For a manual WSL/Lima run, compare the host's committed ownership record with
+the live marker and pass only the domain-separated commitment emitted by the
+host plan. `mds-evidence prepare` recomputes the commitment from the guest
+marker and emits the exact plan digest without mutation. The self-hosted
+workflow accepts that non-secret commitment, but never the raw nonce or a
+machine-local binary path. Host and guest runner services must not define a raw
+nonce environment variable.
 
 The workflow maps each exact target ID to one target-specific certification
 profile and runner label. The mapping is closed: dispatchers cannot supply a

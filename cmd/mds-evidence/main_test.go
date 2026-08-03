@@ -102,7 +102,10 @@ func TestCertifyHelpDoesNotExposeRawNonceFlag(t *testing.T) {
 	if exitCode != 0 {
 		t.Fatalf("exit=%d stderr=%q", exitCode, stderr.String())
 	}
-	if strings.Contains(stdout.String(), "expected-guest-creation-nonce") {
+	if strings.Contains(
+		stdout.String(),
+		"--expected-guest-creation-nonce ",
+	) {
 		t.Fatalf("certify help exposes removed raw nonce flag:\n%s", stdout.String())
 	}
 	for _, required := range []string{
@@ -113,6 +116,23 @@ func TestCertifyHelpDoesNotExposeRawNonceFlag(t *testing.T) {
 		if !strings.Contains(stdout.String(), required) {
 			t.Fatalf("certify help missing %q:\n%s", required, stdout.String())
 		}
+	}
+}
+
+func TestPrepareHelpDerivesCommitmentWithoutAnExpectedCommitment(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	exitCode := run([]string{"prepare", "--help"}, &stdout, &stderr)
+	if exitCode != 0 {
+		t.Fatalf("exit=%d stderr=%q", exitCode, stderr.String())
+	}
+	if strings.Contains(
+		stdout.String(),
+		"--expected-guest-creation-nonce-commitment",
+	) {
+		t.Fatalf("prepare help requires its own derived output as input:\n%s", stdout.String())
+	}
+	if !strings.Contains(stdout.String(), "without applying changes") {
+		t.Fatalf("prepare help omits read-only contract:\n%s", stdout.String())
 	}
 }
 

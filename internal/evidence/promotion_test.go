@@ -24,12 +24,10 @@ func TestCertifyRejectsUnexpectedBinarySHA256BeforeExecution(t *testing.T) {
 		Cohort: fixtureCohort, All: true,
 		ExpectedBinarySHA256: strings.Repeat("f", 64),
 		ExpectedPlanDigest:   "sha256:" + strings.Repeat("e", 64),
-		Getenv: func(key string) string {
-			if key == "MDS_EXPECTED_GUEST_CREATION_NONCE" {
-				return strings.Repeat("a", 64)
-			}
-			return ""
-		},
+		ExpectedGuestCreationNonceCommitment: fixtureNonceCommitment(
+			t,
+			strings.Repeat("a", 64),
+		),
 	})
 	if err == nil || !strings.Contains(err.Error(), "binary checksum mismatch") {
 		t.Fatalf("Certify(binary mismatch) error = %v", err)
@@ -70,6 +68,10 @@ func TestCertifyRequiresReviewedBinaryAndPlanBeforeExecution(t *testing.T) {
 				Cohort: fixtureCohort, All: true,
 				ExpectedBinarySHA256: test.expectedBinary,
 				ExpectedPlanDigest:   test.expectedPlan,
+				ExpectedGuestCreationNonceCommitment: fixtureNonceCommitment(
+					t,
+					strings.Repeat("a", 64),
+				),
 			})
 			assertErrorContains(t, err, test.want)
 			if _, statErr := os.Lstat(output); !os.IsNotExist(statErr) {

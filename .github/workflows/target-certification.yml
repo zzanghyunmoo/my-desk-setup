@@ -4,11 +4,13 @@ on:
   pull_request:
     paths:
       - ".github/workflows/target-certification.yml"
+      - "catalog/**"
       - "cmd/mds-evidence/**"
       - "internal/evidence/**"
       - ".gitleaks.toml"
       - "scripts/certify-target.sh"
       - "scripts/certification-clock.sh"
+      - "scripts/prepare-target-certification.sh"
       - "scripts/install-gitleaks.sh"
       - "scripts/install-gitleaks.ps1"
       - "scripts/verify-target-evidence.sh"
@@ -18,21 +20,19 @@ on:
       - main
     paths:
       - ".github/workflows/target-certification.yml"
+      - "catalog/**"
       - "cmd/mds-evidence/**"
       - "internal/evidence/**"
       - ".gitleaks.toml"
       - "scripts/certify-target.sh"
       - "scripts/certification-clock.sh"
+      - "scripts/prepare-target-certification.sh"
       - "scripts/install-gitleaks.sh"
       - "scripts/install-gitleaks.ps1"
       - "scripts/verify-target-evidence.sh"
       - "tests/target-evidence/**"
   workflow_dispatch:
     inputs:
-      mds_path:
-        description: Absolute path to the production mds binary on the target
-        required: true
-        type: string
       target_id:
         description: Explicit target ID, for example lima-guest:mds
         required: true
@@ -52,6 +52,10 @@ on:
       expected_plan_digest:
         description: Exact reviewed certification profile plan digest for this target
         required: true
+        type: string
+      expected_guest_creation_nonce_commitment:
+        description: Host-reviewed sha256 commitment from mds-evidence prepare; guest targets only
+        required: false
         type: string
       expected_binary_sha256:
         description: SHA-256 of the exact release mds binary on this target
@@ -152,6 +156,7 @@ jobs:
           RUNNER_LABEL: ${{ inputs.runner_label }}
           TARGET_ID: ${{ inputs.target_id }}
           CERTIFICATION_COHORT: ${{ inputs.cohort }}
+          EXPECTED_GUEST_CREATION_NONCE_COMMITMENT: ${{ inputs.expected_guest_creation_nonce_commitment }}
         run: |
           if [[ ! "$EXPECTED_COMMIT" =~ ^[0-9a-f]{40}$|^[0-9a-f]{64}$ ]]; then
             echo "expected_commit must be a full lowercase commit SHA" >&2
@@ -169,21 +174,29 @@ jobs:
               target_kind=macos-host
               expected_runner_label=mds-macos-host
               certification_profile=certification-macos-host
+              mds_path=/usr/local/bin/mds
+              expected_guest_commitment=
               ;;
             windows-host:local)
               target_kind=windows-host
               expected_runner_label=mds-windows-host
               certification_profile=certification-windows-host
+              mds_path=C:/ProgramData/my-desk-setup/bin/mds.exe
+              expected_guest_commitment=
               ;;
             wsl-guest:Ubuntu-26.04)
               target_kind=wsl-guest
               expected_runner_label=mds-wsl-guest
               certification_profile=certification-wsl-guest
+              mds_path=/usr/local/bin/mds
+              expected_guest_commitment=$EXPECTED_GUEST_CREATION_NONCE_COMMITMENT
               ;;
             lima-guest:mds)
               target_kind=lima-guest
               expected_runner_label=mds-lima-guest
               certification_profile=certification-lima-guest
+              mds_path=/usr/local/bin/mds
+              expected_guest_commitment=$EXPECTED_GUEST_CREATION_NONCE_COMMITMENT
               ;;
             *)
               echo "unsupported promotion target ID: $TARGET_ID" >&2
@@ -191,10 +204,21 @@ jobs:
               ;;
           esac
           test "$RUNNER_LABEL" = "$expected_runner_label"
+          if [[ "$target_kind" == *-guest ]]; then
+            if [[ ! "$expected_guest_commitment" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+              echo "guest target requires the reviewed nonce commitment from mds-evidence prepare" >&2
+              exit 2
+            fi
+          elif test -n "$EXPECTED_GUEST_CREATION_NONCE_COMMITMENT"; then
+            echo "host target must not receive a guest nonce commitment" >&2
+            exit 2
+          fi
           {
             echo "target_kind=$target_kind"
             echo "certification_profile=$certification_profile"
             echo "cohort=$CERTIFICATION_COHORT"
+            echo "mds_path=$mds_path"
+            echo "expected_guest_commitment=$expected_guest_commitment"
           } >> "$GITHUB_OUTPUT"
       - name: Prepare target-local evidence path
         shell: bash
@@ -207,41 +231,35 @@ jobs:
         continue-on-error: true
         shell: bash
         env:
-          MDS_PATH: ${{ inputs.mds_path }}
+          MDS_PATH: ${{ steps.certification-identity.outputs.mds_path }}
           TARGET_ID: ${{ inputs.target_id }}
           EXPECTED_BINARY_SHA256: ${{ inputs.expected_binary_sha256 }}
           CERTIFICATION_PROFILE: ${{ steps.certification-identity.outputs.certification_profile }}
           CERTIFICATION_COHORT: ${{ steps.certification-identity.outputs.cohort }}
           EXPECTED_PLAN_DIGEST: ${{ inputs.expected_plan_digest }}
+          EXPECTED_GUEST_CREATION_NONCE_COMMITMENT: ${{ steps.certification-identity.outputs.expected_guest_commitment }}
         run: |
           case "$TARGET_ID" in
             wsl-guest:Ubuntu-26.04)
-              if [[ ! "${MDS_EXPECTED_GUEST_CREATION_NONCE:-}" =~ ^[0-9a-f]{64}$ ]]; then
-                echo "guest runner service must provide a 64-character lowercase MDS_EXPECTED_GUEST_CREATION_NONCE" >&2
-                exit 2
-              fi
               if [[ "${WSL_DISTRO_NAME:-}" != Ubuntu-26.04 ]]; then
                 echo "WSL guest runner service must inherit WSL_DISTRO_NAME=Ubuntu-26.04" >&2
                 exit 2
               fi
               ;;
             lima-guest:mds)
-              if [[ ! "${MDS_EXPECTED_GUEST_CREATION_NONCE:-}" =~ ^[0-9a-f]{64}$ ]]; then
-                echo "guest runner service must provide a 64-character lowercase MDS_EXPECTED_GUEST_CREATION_NONCE" >&2
-                exit 2
-              fi
               if [[ "${LIMA_INSTANCE:-}" != mds ]]; then
                 echo "Lima guest runner service must inherit LIMA_INSTANCE=mds" >&2
                 exit 2
               fi
               ;;
-            *)
-              if test -n "${MDS_EXPECTED_GUEST_CREATION_NONCE:-}"; then
-                echo "host runner service must not provide MDS_EXPECTED_GUEST_CREATION_NONCE" >&2
-                exit 2
-              fi
-              ;;
           esac
+          commitment_arguments=()
+          if test -n "$EXPECTED_GUEST_CREATION_NONCE_COMMITMENT"; then
+            commitment_arguments=(
+              --expected-guest-creation-nonce-commitment
+              "$EXPECTED_GUEST_CREATION_NONCE_COMMITMENT"
+            )
+          fi
           scripts/certify-target.sh \
             --mds "$MDS_PATH" \
             --target "$TARGET_ID" \
@@ -249,6 +267,7 @@ jobs:
             --cohort "$CERTIFICATION_COHORT" \
             --expected-binary-sha256 "$EXPECTED_BINARY_SHA256" \
             --expected-plan-digest "$EXPECTED_PLAN_DIGEST" \
+            "${commitment_arguments[@]}" \
             --profile "$CERTIFICATION_PROFILE"
       - name: Verify against reviewed release and plan
         if: always()
@@ -302,12 +321,6 @@ jobs:
           if grep -R -q -E '"(image_)?creation_nonce"[[:space:]]*:' \
             "$EVIDENCE_OUTPUT"; then
             echo "verified evidence contains a raw guest creation nonce field" >&2
-            exit 1
-          fi
-          if test -n "${MDS_EXPECTED_GUEST_CREATION_NONCE:-}" &&
-            printf '%s\n' "$MDS_EXPECTED_GUEST_CREATION_NONCE" |
-              grep -R -F -q -f - -- "$EVIDENCE_OUTPUT"; then
-            echo "verified evidence contains raw guest creation nonce bytes" >&2
             exit 1
           fi
       - name: Upload verified certification output

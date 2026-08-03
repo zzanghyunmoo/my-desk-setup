@@ -10,16 +10,23 @@ job을 실행할 네 전용 self-hosted runner를 준비하는 운영 절차다.
 runner 하나는 아래 표의 custom label 하나와 target 하나만 담당한다. 동일
 runner에 둘 이상의 `mds-*` custom label을 부여하지 않는다.
 
-| Target ID | 실행 위치 | Custom label | Guest ownership record |
-| --- | --- | --- | --- |
-| `macos-host:local` | 실제 macOS host | `mds-macos-host` | 없음 |
-| `windows-host:local` | 실제 Windows host | `mds-windows-host` | 없음 |
-| `wsl-guest:Ubuntu-26.04` | 해당 WSL guest 내부 | `mds-wsl-guest` | `wsl-Ubuntu-26.04.json` |
-| `lima-guest:mds` | 해당 Lima guest 내부 | `mds-lima-guest` | `lima-mds.json` |
+| Target ID | 실행 위치 | Custom label | Production `mds` path | Guest ownership record |
+| --- | --- | --- | --- | --- |
+| `macos-host:local` | 실제 macOS host | `mds-macos-host` | `/usr/local/bin/mds` | 없음 |
+| `windows-host:local` | 실제 Windows host | `mds-windows-host` | `C:/ProgramData/my-desk-setup/bin/mds.exe` | 없음 |
+| `wsl-guest:Ubuntu-26.04` | 해당 WSL guest 내부 | `mds-wsl-guest` | `/usr/local/bin/mds` | `wsl-Ubuntu-26.04.json` |
+| `lima-guest:mds` | 해당 Lima guest 내부 | `mds-lima-guest` | `/usr/local/bin/mds` | `lima-mds.json` |
 
-workflow는 target ID와 label의 exact pair를 다시 확인한다. host runner에는
-`MDS_EXPECTED_GUEST_CREATION_NONCE`를 설정하지 않는다. guest runner에는
-host committed ownership record와 일치하는 값이 없으면 job을 실행하지 않는다.
+workflow는 target ID와 label의 exact pair 및 위 고정 production path를 다시
+선택한다. Machine-local path는 dispatch input으로 받지 않는다. Raw guest nonce는
+host와 guest의 local ownership marker 밖으로 내보내지 않으며 runner process
+environment에도 설정하지 않는다.
+
+Guest certification profile은 해당 target에서 자동 설치 가능한 v1 catalog
+component 전체를 선택한다. WSL amd64 profile은 Flutter를 포함한다. Lima arm64는
+공식 Linux arm64 Flutter artifact가 없어 그 component만 `action-required`로 명시
+제외한다. Host profile은 guest lifecycle과 terminal capability 경계를 검증하며,
+일반 `all`/`owner` profile의 수동·platform-limited 상태 계약은 그대로 유지한다.
 
 ## 1. GitHub 보호 경계
 
@@ -37,7 +44,7 @@ repository 관리자가 다음 외부 상태를 먼저 만든다.
 
 `Actual target` job은 non-fork `workflow_dispatch`, `github.ref_protected`,
 `target-certification` reviewer 승인을 모두 요구한다. Dispatcher는 commit이나
-guest creation nonce를 입력할 수 없고, 네 dispatch는 같은 canonical
+raw guest creation nonce나 machine-local path를 입력할 수 없고, 네 dispatch는 같은 canonical
 `cert-<UTC YYYYMMDDThhmmssZ>-<commit8>` cohort를 사용한다. Cohort timestamp는
 첫 dispatch 직전에 GitHub 서버 시각으로 발급한다.
 
@@ -108,8 +115,8 @@ job 시작 전에 다음을 확인한다.
 - runner UTC와 GitHub 서버 UTC의 절대 오차가 60초 이하다.
 - runner에 다른 `mds-*` label이 없다.
 - work directory에 기존 checkout이나 credential file이 없다.
-- host runner process에는 `MDS_EXPECTED_GUEST_CREATION_NONCE`가 없다.
-- guest runner process는 다음 절차가 끝날 때까지 시작하지 않는다.
+- host와 guest runner process 모두 raw guest creation nonce 환경값이 없다.
+- guest runner process는 section 4의 read-only preparation이 끝날 때까지 시작하지 않는다.
 
 job 종료 뒤 runner가 GitHub에서 자동 deregister됐는지 확인한다. Process를
 종료하고 owner-only runner directory의 registration credential, `_diag`와
@@ -235,40 +242,39 @@ file이고 mode `0600`, `0640` 또는 `0644`여야 한다. root로 읽어 record
 확인한다. 하나라도 다르면 runner를 시작하지 말고 same-name replacement
 guest 또는 stale ownership conflict를 먼저 해결한다.
 
-## 4. Guest one-job runner에 target identity 주입
+## 4. Read-only preparation과 guest commitment
 
-guest의 one-shot GitHub runner process를 시작하는 systemd unit을
-`<runner-one-shot-unit>`이라 한다. Host record에서 확인한 64자 lowercase
-creation nonce와 비밀이 아닌 exact target identity를 해당 cohort/job에만 쓰는
-root-owned drop-in에 설정한다.
+먼저 host 전용 계정에서 guest ownership record와 live marker를 대조한 뒤, host
+`mds plan --format json`의
+`target.image_creation_nonce_commitment`만 복사한다. Commitment는
+`sha256:<64-lowercase-hex>`이고 raw nonce를 복원하지 못하는 공개 identity다.
+Raw nonce 자체는 terminal, clipboard, runner environment나 GitHub input에 넣지
+않는다.
 
-```ini
-# /etc/systemd/system/<runner-one-shot-unit>.service.d/mds-identity.conf
-[Service]
-Environment="MDS_EXPECTED_GUEST_CREATION_NONCE=<64-lowercase-hex>"
-# WSL guest에서는 아래 한 줄만 추가한다.
-Environment="WSL_DISTRO_NAME=Ubuntu-26.04"
-# Lima guest에서는 WSL_DISTRO_NAME 대신 아래 한 줄만 추가한다.
-Environment="LIMA_INSTANCE=mds"
+guest의 exact target identity 환경(`WSL_DISTRO_NAME=Ubuntu-26.04` 또는
+`LIMA_INSTANCE=mds`)에서 mutation 전에 다음 read-only preparation을 실행한다.
+
+```sh
+scripts/prepare-target-certification.sh \
+  --mds /usr/local/bin/mds \
+  --target lima-guest:mds \
+  --expected-binary-sha256 '<release-binary-sha256>' \
+  --profile certification-lima-guest > preparation.json
 ```
 
-directory는 root 소유 `0755`, 파일은 root 소유 `0600`으로 만들고 다음 순서로
-반영한다.
+`prepare`는 production binary를 private snapshot으로 고정하고 root-owned guest
+marker를 직접 읽어 raw nonce의 domain-separated commitment를 계산한다. 같은
+runtime probe로 read-only plan을 실행하며
+`mds.certification-preparation/v1` JSON에 exact CLI revision, catalog revision,
+target fingerprint, binary SHA-256와 plan digest만 출력한다. Apply, evidence
+upload와 인증은 수행하지 않는다.
 
-1. runner process가 실행 중이지 않은지 확인한다.
-2. root 권한 editor로 drop-in을 작성한다.
-3. owner/mode, nonce의 `^[0-9a-f]{64}$` 형식과 target identity의 exact 값을
-   root 권한으로 검사하되 nonce를 stdout에 출력하지 않는다.
-4. `systemctl daemon-reload` 뒤 one-shot runner를 시작한다.
-5. 전용 계정 process가 nonce와 exact target identity를 상속했는지만 root
-   권한으로 검사하고 실제 nonce는 log에 출력하지 않는다.
-6. job 종료와 deregistration 확인 뒤 unit/drop-in과 process environment에서
-   nonce를 제거하고 runner directory를 scrub한다.
-
-workflow는 guest target에서 nonce가 없거나 형식이 틀리거나 target identity가
-exact match하지 않으면 capture 전에 실패한다. host target에서 nonce가 발견돼도
-실패한다. Nonce는 workflow input, repository/environment secret 또는 job-level
-`env`로 대체하지 않는다.
+Operator와 environment reviewer가 이 JSON의 commitment를 host-reviewed
+commitment와 대조하고 나머지 identity를 release manifest와 대조한 뒤
+`plan_digest`와 guest target일 때만
+`guest_creation_nonce_commitment`를 workflow dispatch input으로 전달한다. Host
+target은 commitment input을 비워 둔다. Commitment와 plan digest는 GitHub metadata에
+남아도 raw nonce나 개인 경로를 노출하지 않는다.
 
 ## 5. Dispatch 전 점검
 
@@ -277,14 +283,15 @@ environment reviewer는 승인 전에 다음 값을 release manifest, reviewed p
 
 - protected ref의 `github.sha`와 네 target이 공유할 immutable cohort
 - target ID와 custom runner label exact pair
-- production `mds`의 absolute regular non-symlink path
+- target ID가 선택하는 위 고정 production `mds` path와 그 regular non-symlink 상태
 - release manifest의 on-disk binary SHA-256
 - certifier가 production path를 no-follow/reparse 거부로 한 번 열어 만든
   owner-only private snapshot의 SHA-256과, 모든 subprocess가 그 snapshot만
   실행한다는 경계
-- exact CLI revision, catalog revision과 target-eligible plan digest
-- guest라면 committed host record와 live marker의 provider/name/image/nonce
-  일치
+- `mds-evidence prepare` JSON의 exact CLI revision, catalog revision, target
+  fingerprint, binary SHA-256와 plan digest
+- guest라면 committed host record와 live marker의 provider/name/image 일치 및
+  host-reviewed nonce commitment와 guest preparation commitment 일치
 - runner work directory가 이전 job의 untracked file 없이 clean한 상태
 
 runner에는 실제 target과 production binary가 준비돼 있어야 한다. 인증되지
@@ -292,10 +299,8 @@ runner에는 실제 target과 production binary가 준비돼 있어야 한다. �
 대상이 아니다. Reviewer는 이를 `verified`로 바꾸지 않는다.
 
 Verified bundle 업로드 직전에는 exact file set/checksum 검증과 Gitleaks,
-credential-shaped key, nonce field-name 검사를 수행한다. Guest target은 여기에
-상속된 `MDS_EXPECTED_GUEST_CREATION_NONCE`의 exact byte sequence를 고정 문자열로
-추가 검사한다. 값이 어느 파일에서든 발견되면 값을 출력하지 않고 upload를
-중단한다.
+credential-shaped key, raw nonce field-name 검사를 수행한다. Raw nonce는 runner
+environment나 workflow input에 존재하지 않으며 evidence에는 commitment만 허용한다.
 
 Release promotion은 선택된 네 verified bundle을 고정 timestamp와 entry
 metadata를 가진 결정론적 ZIP으로 다시 묶는다. Promotion report에는 원본 Actions
@@ -313,13 +318,13 @@ guest를 다시 만들거나 host ownership record의 creation nonce가 바뀌�
 one-job runner process를 즉시 중지한다.
 
 1. 새 guest의 root-owned marker와 새 committed host record를 먼저 대조한다.
-2. old nonce가 든 one-shot drop-in을 새 nonce로 교체한다.
-3. `daemon-reload` 뒤 새 ephemeral runner를 등록·실행한다.
-4. old nonce가 process environment나 backup drop-in에 남지 않았는지 root
-   권한으로 확인한다.
-5. 새 commit에서 certification을 다시 수행한다.
+2. host plan에서 새 commitment를 확인하고 guest에서 read-only `prepare`를 다시
+   실행한다.
+3. 새 preparation JSON의 plan digest와 commitment로 새 ephemeral runner를
+   등록·dispatch한다.
+4. old commitment나 plan digest를 새 dispatch에 재사용하지 않았는지 확인한다.
+5. 새 commit 또는 새 ownership identity에서 certification을 다시 수행한다.
 
-old guest, old nonce, 이전 commit 또는 다른 cohort의 evidence는 새 target
+old guest, old nonce/commitment, 이전 commit 또는 다른 cohort의 evidence는 새 target
 identity의 certification으로 재사용하지 않는다. Job마다 GitHub deregistration,
-one-shot unit/drop-in 제거와 owner-only runner directory scrub을 사용자가
-확인한다.
+owner-only runner directory scrub을 사용자가 확인한다.

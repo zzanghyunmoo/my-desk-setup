@@ -50,9 +50,49 @@ func newRoot(stdout io.Writer) *cobra.Command {
 		SilenceErrors: true,
 	}
 	root.SetOut(stdout)
+	root.AddCommand(newPrepareCommand(stdout))
 	root.AddCommand(newCertifyCommand(stdout))
 	root.AddCommand(newVerifyCommand(stdout))
 	return root
+}
+
+func newPrepareCommand(stdout io.Writer) *cobra.Command {
+	var request evidence.PrepareRequest
+	command := &cobra.Command{
+		Use:   "prepare",
+		Short: "Derive the exact read-only certification identity",
+		Long: "Derive the exact target identity, production binary identity, catalog revision, and plan digest without applying changes. " +
+			"Review this bounded JSON before dispatching actual certification.",
+		Args: cobra.NoArgs,
+		RunE: func(command *cobra.Command, _ []string) error {
+			preparation, err := evidence.Prepare(command.Context(), request)
+			if err != nil {
+				return err
+			}
+			return writeJSON(stdout, preparation)
+		},
+	}
+	flags := command.Flags()
+	flags.StringVar(&request.MDSPath, "mds", "", "absolute production mds binary path")
+	flags.StringVar(&request.TargetID, "target", "", "explicit actual target ID")
+	flags.StringVar(
+		&request.ExpectedBinarySHA256,
+		"expected-binary-sha256",
+		"",
+		"SHA-256 of the exact release mds binary being prepared",
+	)
+	flags.BoolVar(&request.All, "all", false, "prepare every target-eligible component")
+	flags.StringVar(&request.Profile, "profile", "", "prepare a named profile")
+	flags.StringSliceVar(
+		&request.Components,
+		"component",
+		nil,
+		"prepare a component or capability",
+	)
+	_ = command.MarkFlagRequired("mds")
+	_ = command.MarkFlagRequired("target")
+	_ = command.MarkFlagRequired("expected-binary-sha256")
+	return command
 }
 
 func newCertifyCommand(stdout io.Writer) *cobra.Command {
@@ -104,6 +144,12 @@ func newCertifyCommand(stdout io.Writer) *cobra.Command {
 		"expected-plan-digest",
 		"",
 		"reviewed plan digest that must match before apply",
+	)
+	flags.StringVar(
+		&request.ExpectedGuestCreationNonceCommitment,
+		"expected-guest-creation-nonce-commitment",
+		"",
+		"host-reviewed guest creation nonce commitment; required only for guest targets",
 	)
 	flags.BoolVar(&request.All, "all", false, "certify every target-eligible component")
 	flags.StringVar(&request.Profile, "profile", "", "certify a named profile")

@@ -3,8 +3,26 @@ id: certification-wsl-guest
 description: Reachable WSL guest release certification surface.
 selection:
   - base-cli
-  - codex
-  - docker-engine
+  - bun
+  - mise
+  - java
+  - kotlin
   - go
+  - python
+  - typescript
+  - c-toolchain
+  - flutter
+  - gradle
+  - uv
   - neovim
   - nvchad
+  - herdr
+  - atlassian-cli
+  - notion-cli
+  - linear-cli
+  - gh
+  - glab
+  - docker-engine
+  - claude-code
+  - opencode
+  - codex

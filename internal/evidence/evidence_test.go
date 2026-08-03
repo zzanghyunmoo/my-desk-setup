@@ -519,15 +519,16 @@ func TestCertificationTargetPropagatesIndependentlyProbedGuestIdentity(t *testin
 		ImageProvenance:              "https://example.invalid/ubuntu.img",
 		ImageCreationNonceCommitment: fixtureNonceCommitment(t, strings.Repeat("a", 64)),
 	}
-	certified, environment, err := certificationTarget(CertifyRequest{
-		TargetID: id.String(),
-		RuntimeProbe: func(probed target.ID) (target.Facts, error) {
+	certified, environment, err := certificationTarget(
+		func(probed target.ID) (target.Facts, error) {
 			if probed != id {
 				return target.Facts{}, errors.New("unexpected target")
 			}
 			return facts, nil
 		},
-	}, id, strings.Repeat("a", 64))
+		id,
+		facts.ImageCreationNonceCommitment,
+	)
 	if err != nil {
 		t.Fatalf("certificationTarget(): %v", err)
 	}
@@ -555,7 +556,7 @@ func TestCertifiedGuestImageRejectsReplacementNonce(t *testing.T) {
 			CreationNonce: strings.Repeat("b", 64),
 		},
 		image,
-		strings.Repeat("c", 64),
+		fixtureNonceCommitment(t, strings.Repeat("c", 64)),
 	)
 	assertErrorContains(t, err, "creation identity")
 }
@@ -585,6 +586,72 @@ func TestTargetIdentityCompletenessKeepsPartialTargetsBlocked(t *testing.T) {
 	}
 }
 
+func TestPrepareDerivesExactPlanIdentityWithoutApplying(t *testing.T) {
+	bundle := certifyFixture(t, true)
+	root := filepath.Dir(bundle)
+	applyCountPath := filepath.Join(root, "fixture-apply-count")
+	if err := os.Remove(applyCountPath); err != nil {
+		t.Fatalf("reset fake apply count: %v", err)
+	}
+	var plan planning.Plan
+	readJSON(t, filepath.Join(root, "fixture-plan.json"), &plan)
+	binaryPath := filepath.Join(root, "fake-mds")
+
+	prepared, err := Prepare(context.Background(), PrepareRequest{
+		MDSPath:              binaryPath,
+		TargetID:             plan.Target.ID.String(),
+		ExpectedBinarySHA256: fileSHA256Fixture(t, binaryPath),
+		Components:           []string{"go"},
+		RuntimeProbe: func(id target.ID) (target.Facts, error) {
+			if id != plan.Target.ID {
+				return target.Facts{}, errors.New("unexpected target")
+			}
+			return plan.Target, nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("Prepare(): %v", err)
+	}
+	if prepared.SchemaVersion != PreparationSchema ||
+		prepared.PlanDigest != plan.Digest ||
+		prepared.CatalogRevision != plan.CatalogRevision ||
+		prepared.BinarySHA256 != fileSHA256Fixture(t, binaryPath) ||
+		prepared.GuestCreationNonceCommitment !=
+			plan.Target.ImageCreationNonceCommitment {
+		t.Fatalf("preparation = %+v", prepared)
+	}
+	if _, err := os.Lstat(applyCountPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("Prepare executed apply: %v", err)
+	}
+}
+
+func TestCertificationRequiresReviewedCommitmentOnlyForGuestCapture(t *testing.T) {
+	guestID, err := target.ParseID("lima-guest:mds")
+	if err != nil {
+		t.Fatalf("ParseID(guest): %v", err)
+	}
+	if err := validateExpectedGuestCreationNonceCommitment(guestID, ""); err == nil {
+		t.Fatal("guest capture accepted a missing reviewed commitment")
+	}
+	commitment := fixtureNonceCommitment(t, strings.Repeat("a", 64))
+	if err := validateExpectedGuestCreationNonceCommitment(
+		guestID,
+		commitment,
+	); err != nil {
+		t.Fatalf("guest commitment rejected: %v", err)
+	}
+	hostID, err := target.ParseID("macos-host:local")
+	if err != nil {
+		t.Fatalf("ParseID(host): %v", err)
+	}
+	if err := validateExpectedGuestCreationNonceCommitment(
+		hostID,
+		commitment,
+	); err == nil {
+		t.Fatal("host capture accepted a guest commitment")
+	}
+}
+
 func TestCertifyRejectsRepeatApplyMutationAfterDistinctFirstApply(t *testing.T) {
 	bundle := certifyFixture(t, true)
 	root := filepath.Dir(bundle)
@@ -608,12 +675,8 @@ func TestCertifyRejectsRepeatApplyMutationAfterDistinctFirstApply(t *testing.T) 
 		ExpectedBinarySHA256: fileSHA256Fixture(t, binaryPath),
 		ExpectedPlanDigest:   plan.Digest,
 		Components:           []string{"go"},
-		Getenv: func(key string) string {
-			if key == "MDS_EXPECTED_GUEST_CREATION_NONCE" {
-				return strings.Repeat("a", 64)
-			}
-			return ""
-		},
+		ExpectedGuestCreationNonceCommitment: plan.Target.
+			ImageCreationNonceCommitment,
 		Now: func() time.Time { return time.Unix(1<<40, 0).UTC() },
 		RuntimeProbe: func(id target.ID) (target.Facts, error) {
 			if id != plan.Target.ID {
@@ -651,12 +714,8 @@ func TestCertifyRejectsReviewedPlanMismatchBeforeApply(t *testing.T) {
 		Components:           []string{"go"},
 		ExpectedPlanDigest: "sha256:" +
 			strings.Repeat("f", 64),
-		Getenv: func(key string) string {
-			if key == "MDS_EXPECTED_GUEST_CREATION_NONCE" {
-				return strings.Repeat("a", 64)
-			}
-			return ""
-		},
+		ExpectedGuestCreationNonceCommitment: plan.Target.
+			ImageCreationNonceCommitment,
 		RuntimeProbe: func(id target.ID) (target.Facts, error) {
 			if id != plan.Target.ID {
 				return target.Facts{}, errors.New("unexpected target")
@@ -821,12 +880,8 @@ esac
 		ExpectedBinarySHA256: fileSHA256Fixture(t, binaryPath),
 		ExpectedPlanDigest:   plan.Digest,
 		Components:           []string{"go"},
-		Getenv: func(key string) string {
-			if key == "MDS_EXPECTED_GUEST_CREATION_NONCE" {
-				return strings.Repeat("a", 64)
-			}
-			return ""
-		},
+		ExpectedGuestCreationNonceCommitment: facts.
+			ImageCreationNonceCommitment,
 		Now: func() time.Time { return time.Unix(1<<40, 0).UTC() },
 		RuntimeProbe: func(id target.ID) (target.Facts, error) {
 			if id != plan.Target.ID {

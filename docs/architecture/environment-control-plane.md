@@ -211,10 +211,11 @@ Actions actual-target artifact를 찾아 다음 네 표준 target을 정확히 �
 
 각 bundle은 CLI commit, catalog revision, plan digest, target ID와 실제
 실행한 on-disk binary SHA-256을 release manifest에 다시 결합해 검증한다.
-guest bundle은 dispatcher가 설정할 수 없는 전용 one-job runner process의
-`MDS_EXPECTED_GUEST_CREATION_NONCE`를 root-owned marker와 대조하고, nonce를
-target fingerprint와 plan digest에 포함한다. 이 service 환경값은 host의
-committed ownership record에서 provisioning하며 guest target/name에 전용이다.
+guest bundle은 host plan에서 검토한 domain-separated nonce commitment를
+workflow input으로 받고 root-owned marker의 raw nonce에서 runtime에 재계산한
+commitment와 대조한다. Raw nonce는 runner service 환경이나 GitHub metadata로
+전달하지 않는다. Mutation 전 `mds-evidence prepare`가 같은 runtime probe와
+production binary snapshot으로 exact plan digest를 만든다.
 증거가 없거나 오래됐거나 중복됐거나 identity가 다르면 publication은
 fail closed다. 네 bundle은 동일한 immutable commit+cohort에 속하고 manifest
 capture 완료 시각이 24시간 이내이며 모두 `verified`여야 한다. `blocked`,
