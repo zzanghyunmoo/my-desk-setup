@@ -128,6 +128,15 @@ func TestComposerAcquiresSelectedArtifactsAndComposesDeterministically(t *testin
 		t.Fatalf("entrypoint = %q", got)
 	}
 	inputs := actionByComponent(t, first, "oh-my-harness").Inputs
+	harnessAction := actionByComponent(t, first, "oh-my-harness")
+	wantDependencies := []string{
+		base.Target.ID.String() + "/claude-code",
+		base.Target.ID.String() + "/codex",
+		base.Target.ID.String() + "/opencode",
+	}
+	if !reflect.DeepEqual(harnessAction.Dependencies, wantDependencies) {
+		t.Fatalf("harness dependencies = %q, want %q", harnessAction.Dependencies, wantDependencies)
+	}
 	for key, want := range map[string]string{
 		"harness_child_digest":    strings.Repeat("a", 64),
 		"harness_selected_agents": "claude-code,codex,opencode",

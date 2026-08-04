@@ -6,11 +6,11 @@
     "version": "0.3.0",
     "tag": "v0.3.0",
     "archive_filename": "oh-my-harness-v0.3.0.tgz",
-    "archive_sha256": "e337134899be4eb3e0d229f03fd40b3afb9b3e83b41361c1e670f2e490b5a82c",
-    "archive_size": 4725469,
+    "archive_sha256": "d62ac59bf91a6922a08b9d72bfece64466d5315af8bfc53aa11c8f7dd3a63a2c",
+    "archive_size": 15278763,
     "sidecar_filename": "oh-my-harness-v0.3.0.release.json",
-    "source_commit": "cd7c035d8a9664d6c3818bb496f05bc785bda5a3",
-    "source_tree": "a3890887fe659f92559bc46c4b88028152d654d7",
-    "catalog_revision": "e8568e26d8762c49c16c9da8372a2e38f746dbaed8c8d29e6e6a7303eedf97f8"
+    "source_commit": "51ff231d029fb8ed425f6336b5fdadf6d08b050d",
+    "source_tree": "fe42c39bf4086b00480e1ce7cef771bb03cb70ba",
+    "catalog_revision": "d96606bd060d6b38e0e8918eb6c3143adff63540168eb7398106ee31ac3971f6"
   }
 }

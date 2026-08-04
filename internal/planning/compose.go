@@ -279,6 +279,14 @@ func Compose(base Plan, composition Composition) (Plan, error) {
 		if action.ComponentID != harnessComponentID {
 			continue
 		}
+		for _, agentID := range selectedAgents {
+			agentAction, exists := planAction(result, agentID)
+			if !exists || contains(action.Dependencies, agentAction.ID) {
+				continue
+			}
+			action.Dependencies = append(action.Dependencies, agentAction.ID)
+		}
+		sort.Strings(action.Dependencies)
 		agentIdentities := make([]string, 0, len(selectedAgents))
 		for _, id := range selectedAgents {
 			agentIdentity := identityByID[id]
