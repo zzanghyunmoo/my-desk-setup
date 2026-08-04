@@ -27,13 +27,15 @@ type Streams struct {
 }
 
 type Runtime struct {
-	GOOS          string
-	GOARCH        string
-	Getenv        func(string) string
-	HomeDir       func() (string, error)
-	Now           func() time.Time
-	ObserveTarget func(context.Context, target.Facts) (target.Facts, error)
-	newAdapter    adapterFactory
+	GOOS             string
+	GOARCH           string
+	Getenv           func(string) string
+	HomeDir          func() (string, error)
+	Now              func() time.Time
+	ObserveTarget    func(context.Context, target.Facts) (target.Facts, error)
+	HarnessAcquirer  planning.SnapshotAcquirer
+	HarnessPreviewer planning.ChildPreviewer
+	newAdapter       adapterFactory
 }
 
 func DefaultStreams() Streams {
@@ -155,7 +157,9 @@ func newPlanCommand(streams Streams, system Runtime) *cobra.Command {
 			}
 			facts.CLIRevision = version.String()
 			facts.CatalogRevision = revision
-			plan, err := planning.Build(environment, facts, request)
+			plan, err := buildPlan(
+				command.Context(), environment, facts, request, system,
+			)
 			if err != nil {
 				return invalidInput(err)
 			}

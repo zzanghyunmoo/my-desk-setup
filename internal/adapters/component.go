@@ -34,3 +34,10 @@ type Component interface {
 	Apply(context.Context, planning.Action) error
 	Verify(context.Context, planning.Action) error
 }
+
+// PlanPreflighter performs component-specific, read-only validation before
+// any action in an approved plan is allowed to mutate the target. The cleanup
+// keeps verified temporary inputs alive for the duration of the apply.
+type PlanPreflighter interface {
+	Preflight(context.Context, planning.Plan) (func() error, error)
+}

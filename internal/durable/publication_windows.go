@@ -39,6 +39,14 @@ func publishFileNoReplaceDurably(source, destination string) error {
 	)
 }
 
+func publishDirectoryNoReplaceDurably(source, destination string) error {
+	return moveFileDurably(
+		source,
+		destination,
+		windows.MOVEFILE_WRITE_THROUGH,
+	)
+}
+
 func moveFileDurably(source, destination string, flags uint32) error {
 	sourceUTF16, err := windows.UTF16PtrFromString(source)
 	if err != nil {

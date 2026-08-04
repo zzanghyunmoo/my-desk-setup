@@ -25,14 +25,15 @@ type Receipt struct {
 }
 
 type ActionOutcome struct {
-	ActionID         string `json:"action_id"`
-	Status           string `json:"status"`
-	RequestedVersion string `json:"requested_version"`
-	InstalledVersion string `json:"installed_version,omitempty"`
-	VerifiedVersion  string `json:"verified_version,omitempty"`
-	Noop             bool   `json:"noop"`
-	ReasonCode       string `json:"reason_code,omitempty"`
-	Reason           string `json:"reason,omitempty"`
+	ActionID         string            `json:"action_id"`
+	Status           string            `json:"status"`
+	RequestedVersion string            `json:"requested_version"`
+	InstalledVersion string            `json:"installed_version,omitempty"`
+	VerifiedVersion  string            `json:"verified_version,omitempty"`
+	Noop             bool              `json:"noop"`
+	ReasonCode       string            `json:"reason_code,omitempty"`
+	Reason           string            `json:"reason,omitempty"`
+	Approval         map[string]string `json:"approval,omitempty"`
 }
 
 func WriteReceipt(directory string, receipt Receipt) (string, error) {

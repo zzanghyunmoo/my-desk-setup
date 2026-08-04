@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/zzanghyunmoo/my-desk-setup/internal/output"
+	"github.com/zzanghyunmoo/my-desk-setup/internal/planning"
 	"github.com/zzanghyunmoo/my-desk-setup/internal/state"
 	updateflow "github.com/zzanghyunmoo/my-desk-setup/internal/update"
 )
@@ -83,6 +84,46 @@ func TestRunnerReceiptSchemaSurvivesDirectAndNestedJSON(t *testing.T) {
 			)
 		}
 	})
+}
+
+func TestHarnessReceiptPreservesSecretFreeApprovalIdentity(t *testing.T) {
+	plan := singleActionPlan(t, "macos-host:local")
+	action := &plan.Actions[0]
+	action.ComponentID = "oh-my-harness"
+	action.ID = plan.Target.ID.String() + "/oh-my-harness"
+	action.Inputs = map[string]string{
+		"artifact_archive_sha256":          strings.Repeat("a", 64),
+		"harness_child_digest":             strings.Repeat("b", 64),
+		"harness_child_catalog_revision":   strings.Repeat("c", 64),
+		"harness_config_digest":            "sha256:" + strings.Repeat("d", 64),
+		"harness_addon_summary_digest":     "sha256:" + strings.Repeat("e", 64),
+		"harness_ownership_summary_digest": "sha256:" + strings.Repeat("f", 64),
+	}
+	plan.Selection = []string{"oh-my-harness"}
+	var err error
+	plan.Digest, err = planning.Digest(plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	receipt, err := testRunner(newFakeAdapter()).Apply(
+		context.Background(), plan, plan.Digest, filepath.Join(t.TempDir(), "state"),
+	)
+	if err != nil {
+		t.Fatalf("Apply(): %v", err)
+	}
+	if len(receipt.Outcomes) != 1 ||
+		!reflect.DeepEqual(receipt.Outcomes[0].Approval, action.Inputs) {
+		t.Fatalf("harness receipt approval = %+v, want %+v", receipt.Outcomes, action.Inputs)
+	}
+	encoded, err := json.Marshal(receipt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, forbidden := range []string{"token", "password", "/Users/", "C:\\Users\\"} {
+		if strings.Contains(strings.ToLower(string(encoded)), strings.ToLower(forbidden)) {
+			t.Fatalf("receipt leaked forbidden material %q: %s", forbidden, encoded)
+		}
+	}
 }
 
 func TestCompleteReceiptSurvivesFailedRetryUntilLaterSuccess(t *testing.T) {

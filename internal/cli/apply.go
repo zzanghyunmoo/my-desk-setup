@@ -81,7 +81,9 @@ func newApplyCommand(streams Streams, system Runtime) *cobra.Command {
 			}
 			facts.CLIRevision = version.String()
 			facts.CatalogRevision = revision
-			plan, err := planning.Build(environment, facts, request)
+			plan, err := buildPlan(
+				command.Context(), environment, facts, request, system,
+			)
 			if err != nil {
 				return invalidInput(err)
 			}
@@ -235,6 +237,23 @@ func currentAdapter(
 			hostadapter.Options{
 				AllowReplace:          options.AllowReplace,
 				GuestBootstrapArchive: options.GuestBootstrapArchive,
+				HarnessAcquirer:       system.HarnessAcquirer,
+				HarnessConfigRoot:     runtimeConfigRoot(home, system),
+				HarnessTempRoot:       runtimeTemporaryRoot(system),
+				HarnessStateRoot: filepath.Join(
+					defaultStateRoot(home, system), "oh-my-harness",
+				),
+				HarnessLocale: func() string {
+					if value := runtimeEnvironment(system, "LC_ALL"); value != "" {
+						return value
+					}
+					return runtimeEnvironment(system, "LANG")
+				}(),
+				SystemRoot:   runtimeEnvironment(system, "SystemRoot"),
+				ComSpec:      runtimeEnvironment(system, "ComSpec"),
+				AppData:      runtimeEnvironment(system, "APPDATA"),
+				LocalAppData: runtimeEnvironment(system, "LOCALAPPDATA"),
+				PathExt:      runtimeEnvironment(system, "PATHEXT"),
 			},
 		)
 	case target.KindWSLGuest, target.KindLimaGuest:

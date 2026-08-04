@@ -52,6 +52,36 @@ func TestPublishDirectoryMovesSyncedTree(t *testing.T) {
 	}
 }
 
+func TestPublishDirectoryNoReplacePreservesExistingDirectory(t *testing.T) {
+	root := t.TempDir()
+	staging := filepath.Join(root, "staging")
+	destination := filepath.Join(root, "published")
+	if err := os.Mkdir(staging, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(staging, "new"), []byte("new"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(destination, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(destination, "owned"), []byte("owned"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := PublishDirectoryNoReplace(staging, destination); err == nil {
+		t.Fatal("PublishDirectoryNoReplace() replaced an existing directory")
+	}
+	if content, err := os.ReadFile(filepath.Join(destination, "owned")); err != nil ||
+		string(content) != "owned" {
+		t.Fatalf("existing destination changed: content=%q err=%v", content, err)
+	}
+	if content, err := os.ReadFile(filepath.Join(staging, "new")); err != nil ||
+		string(content) != "new" {
+		t.Fatalf("failed staging was not retained: content=%q err=%v", content, err)
+	}
+}
+
 func TestWriteFileNoReplaceNeverExposesOrOverwritesPartialContent(t *testing.T) {
 	root := t.TempDir()
 	path := filepath.Join(root, "ownership.json")

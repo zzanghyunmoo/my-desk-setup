@@ -21,6 +21,19 @@ func PublishDirectory(staging, destination string) error {
 	return nil
 }
 
+// PublishDirectoryNoReplace makes a staged regular tree durable and publishes
+// it atomically only when the destination does not exist. It is intended for
+// immutable, content-addressed generations that must never replace user data.
+func PublishDirectoryNoReplace(staging, destination string) error {
+	if err := SyncTree(staging); err != nil {
+		return err
+	}
+	if err := publishDirectoryNoReplaceDurably(staging, destination); err != nil {
+		return fmt.Errorf("publish durable directory without overwrite: %w", err)
+	}
+	return nil
+}
+
 func WriteFile(path string, content []byte, permission os.FileMode) error {
 	return writeFile(path, content, permission, false)
 }

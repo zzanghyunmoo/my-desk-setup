@@ -14,6 +14,7 @@ import (
 	"github.com/zzanghyunmoo/my-desk-setup/internal/catalog"
 	"github.com/zzanghyunmoo/my-desk-setup/internal/execution"
 	"github.com/zzanghyunmoo/my-desk-setup/internal/output"
+	"github.com/zzanghyunmoo/my-desk-setup/internal/planning"
 	"github.com/zzanghyunmoo/my-desk-setup/internal/target"
 	updateflow "github.com/zzanghyunmoo/my-desk-setup/internal/update"
 	"github.com/zzanghyunmoo/my-desk-setup/internal/version"
@@ -127,10 +128,19 @@ func newUpdateCommand(streams Streams, system Runtime) *cobra.Command {
 				}
 				facts.CLIRevision = version.String()
 				facts.CatalogRevision = beforeRevision
-				plan, updated, err = updateflow.Build(
+				plan, updated, err = updateflow.BuildWithPlanBuilder(
 					environment,
 					facts,
 					candidate,
+					func(
+						environment catalog.Environment,
+						facts target.Facts,
+						selection planning.Selection,
+					) (planning.Plan, error) {
+						return buildPlan(
+							command.Context(), environment, facts, selection, system,
+						)
+					},
 				)
 				if err != nil {
 					return updateError(err)

@@ -20,6 +20,7 @@ import (
 	catalogdata "github.com/zzanghyunmoo/my-desk-setup/catalog"
 	"github.com/zzanghyunmoo/my-desk-setup/internal/catalog"
 	"github.com/zzanghyunmoo/my-desk-setup/internal/cli"
+	"github.com/zzanghyunmoo/my-desk-setup/internal/planning"
 	"github.com/zzanghyunmoo/my-desk-setup/internal/target"
 	updateflow "github.com/zzanghyunmoo/my-desk-setup/internal/update"
 )
@@ -88,6 +89,65 @@ func TestUpdatePlanIsDeterministicAndDoesNotMutateInput(t *testing.T) {
 				entry.TargetKind != catalog.TargetLimaGuest) {
 			t.Fatalf("unexpected compatibility entry: %+v", entry)
 		}
+	}
+}
+
+func TestUpdateUsesInjectedTargetPlanBuilderAndRejectsHarnessUpdates(t *testing.T) {
+	environment, err := catalog.LoadFS(catalogdata.FS)
+	if err != nil {
+		t.Fatalf("LoadFS(): %v", err)
+	}
+	id, _ := target.NewID(target.KindLimaGuest, "mds")
+	facts := target.Facts{
+		ID: id, OS: "linux", OSVersion: "26.04", Architecture: "arm64",
+		SystemdSupported: true, SystemdActive: true, Reachable: true,
+		CLIRevision: "dev",
+	}
+	candidate := updateflow.Candidate{
+		ComponentID: "typescript", Version: "6.0.3", Source: "npm registry",
+		Provenance: "https://www.npmjs.com/package/typescript/v/6.0.3",
+		NPM:        fixtureNPMArtifact("typescript", "6.0.3", []byte("typescript-6.0.3")),
+	}
+	buildCount := 0
+	plan, _, err := updateflow.BuildWithPlanBuilder(
+		environment,
+		facts,
+		candidate,
+		func(
+			environment catalog.Environment,
+			facts target.Facts,
+			selection planning.Selection,
+		) (planning.Plan, error) {
+			buildCount++
+			return planning.Build(environment, facts, selection)
+		},
+	)
+	if err != nil || plan.Digest == "" || buildCount != 1 {
+		t.Fatalf("BuildWithPlanBuilder() plan=%+v count=%d err=%v", plan, buildCount, err)
+	}
+	for _, componentID := range []string{"oh-my-harness", "omh-node-runtime"} {
+		_, _, err := updateflow.Build(
+			catalog.Environment{},
+			facts,
+			updateflow.Candidate{
+				ComponentID: componentID, Version: "0.4.0", Source: "fixture",
+				Provenance: "https://example.com/" + componentID + "/0.4.0",
+			},
+		)
+		if err == nil || !strings.Contains(err.Error(), "reviewed catalog/lock change") {
+			t.Fatalf("Build(%s) error = %v", componentID, err)
+		}
+	}
+	unsupported := updateflow.Plan{
+		SchemaVersion: updateflow.PlanSchema, ComponentID: "oh-my-harness",
+	}
+	unsupported.Digest, err = updateflow.Digest(unsupported)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := updateflow.Verify(unsupported, unsupported.Digest); err == nil ||
+		!strings.Contains(err.Error(), "not supported by generic update") {
+		t.Fatalf("Verify(unsupported resume) error = %v", err)
 	}
 }
 
