@@ -1,0 +1,18 @@
+schema_version: 1
+id: windows-host
+description: Windows AI development workstation.
+selection:
+  - go
+  - c-toolchain
+  - python
+  - claude-code
+  - opencode
+  - codex
+  - wezterm
+  - herdr
+  - notion-desktop
+  - slack
+  - kakaotalk
+  - linear-desktop
+  - wsl
+  - gh

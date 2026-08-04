@@ -1,21 +1,18 @@
 schema_version: 1
-id: certification-lima-guest
-description: Reachable Lima guest release certification surface.
+id: lima-guest
+description: Lima language and terminal development guest.
 selection:
   - base-cli
   - bun
   - mise
   - go
-  - python
-  - typescript
   - c-toolchain
+  - python
   - uv
   - neovim
   - nvchad
   - nvim-ide-tools
-  - atlassian-cli
   - notion-cli
   - linear-cli
   - gh
-  - glab
   - docker-engine

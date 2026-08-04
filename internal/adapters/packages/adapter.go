@@ -49,6 +49,9 @@ func (adapter Adapter) Observe(
 	}
 	if action.Installer == "vendor" && component.VersionPolicy.Mode == "pinned" {
 		path := filepath.Join(adapter.Home, ".local", "bin", action.Verification[0][0])
+		if adapter.Vendor.Platform == "windows" {
+			path += ".exe"
+		}
 		if _, err := os.Lstat(path); errors.Is(err, os.ErrNotExist) {
 			return adapters.Observation{State: adapters.StateAbsent}, nil
 		}
@@ -237,6 +240,9 @@ func (adapter Adapter) commandWithManagedLauncher(
 		return command
 	}
 	path := filepath.Join(adapter.Home, ".local", "bin", command.Executable)
+	if adapter.Vendor.Platform == "windows" {
+		path += ".exe"
+	}
 	info, err := os.Lstat(path)
 	if err == nil && info.Mode().IsRegular() {
 		command.Executable = path

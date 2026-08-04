@@ -1,0 +1,27 @@
+schema_version: 1
+id: macos-host
+description: macOS AI development workstation.
+selection:
+  - go
+  - c-toolchain
+  - python
+  - typescript
+  - java
+  - claude-code
+  - opencode
+  - codex
+  - wezterm
+  - herdr
+  - neovim
+  - nvchad
+  - notion-desktop
+  - notion-cli
+  - slack
+  - kakaotalk
+  - linear-desktop
+  - linear-cli
+  - lima
+  - atlassian-cli
+  - gh
+  - glab
+  - docker-engine

@@ -6,6 +6,7 @@ selection:
   - chrome
   - claude-code
   - codex
+  - gh
   - notion-desktop
   - opencode
   - slack

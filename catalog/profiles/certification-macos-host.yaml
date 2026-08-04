@@ -6,10 +6,16 @@ selection:
   - chrome
   - claude-code
   - codex
+  - herdr
   - kakaotalk
   - lima
   - linear-desktop
   - notion-desktop
   - opencode
   - slack
+  - typescript
+  - notion-cli
+  - linear-cli
+  - gh
+  - glab
   - wezterm

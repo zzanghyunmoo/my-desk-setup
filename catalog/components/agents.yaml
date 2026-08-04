@@ -20,13 +20,11 @@ components:
         installer: bun
         package: "@anthropic-ai/claude-code"
       wsl-guest:
-        status: supported
-        installer: bun
-        package: "@anthropic-ai/claude-code"
+        status: unsupported
+        reason: AI coding agents belong to the macOS or Windows host workspace.
       lima-guest:
-        status: supported
-        installer: bun
-        package: "@anthropic-ai/claude-code"
+        status: unsupported
+        reason: AI coding agents belong to the macOS or Windows host workspace.
 
   - id: opencode
     name: OpenCode
@@ -48,13 +46,11 @@ components:
         installer: bun
         package: opencode-ai
       wsl-guest:
-        status: supported
-        installer: bun
-        package: opencode-ai
+        status: unsupported
+        reason: AI coding agents belong to the macOS or Windows host workspace.
       lima-guest:
-        status: supported
-        installer: bun
-        package: opencode-ai
+        status: unsupported
+        reason: AI coding agents belong to the macOS or Windows host workspace.
 
   - id: codex
     name: OpenAI Codex
@@ -76,10 +72,8 @@ components:
         installer: bun
         package: "@openai/codex"
       wsl-guest:
-        status: supported
-        installer: bun
-        package: "@openai/codex"
+        status: unsupported
+        reason: AI coding agents belong to the macOS or Windows host workspace.
       lima-guest:
-        status: supported
-        installer: bun
-        package: "@openai/codex"
+        status: unsupported
+        reason: AI coding agents belong to the macOS or Windows host workspace.
