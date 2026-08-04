@@ -11,14 +11,5 @@ func NewLocal() Local {
 }
 
 func (local Local) Run(ctx context.Context, command Command) (Result, error) {
-	return local.executor.Run(
-		ctx,
-		command.Executable,
-		command.Arguments,
-		command.Stdin,
-		command.Environment,
-		command.WorkingDirectory,
-		command.Timeout,
-		command.OutputLimit,
-	)
+	return local.executor.RunCommand(ctx, command)
 }
