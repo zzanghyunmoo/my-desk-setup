@@ -67,6 +67,18 @@ func Validate(environment Environment) error {
 				fmt.Sprintf("component %q has invalid kind %q", component.ID, component.Kind),
 			)
 		}
+		switch component.SelectionPolicy {
+		case "", SelectionPolicyDirect, SelectionPolicyDependencyOnly:
+		default:
+			problems = append(
+				problems,
+				fmt.Sprintf(
+					"component %q has invalid selection policy %q",
+					component.ID,
+					component.SelectionPolicy,
+				),
+			)
+		}
 		if len(component.Provides) == 0 {
 			problems = append(problems, fmt.Sprintf("component %q provides no capabilities", component.ID))
 		}
@@ -173,13 +185,26 @@ func Validate(environment Environment) error {
 			duplicateValues("profile "+profile.ID+" selection", profile.Selection)...,
 		)
 		for _, selection := range profile.Selection {
-			if _, component := components[selection]; component {
-				continue
+			componentID := selection
+			if owner, capability := capabilityOwner[selection]; capability {
+				componentID = owner
 			}
-			if _, capability := capabilityOwner[selection]; !capability {
+			component, exists := components[componentID]
+			if !exists {
 				problems = append(
 					problems,
 					fmt.Sprintf("profile %q references unknown selection %q", id, selection),
+				)
+				continue
+			}
+			if component.SelectionPolicy == SelectionPolicyDependencyOnly {
+				problems = append(
+					problems,
+					fmt.Sprintf(
+						"profile %q directly selects dependency-only component %q",
+						id,
+						component.ID,
+					),
 				)
 			}
 		}
@@ -408,6 +433,8 @@ func validateVersionPolicy(
 			if !catalogIdentifierPattern.MatchString(platform) ||
 				validateReviewedHTTPS(artifact.URL) != nil ||
 				exactartifact.ValidateSHA256(artifact.SHA256) != nil ||
+				(artifact.ExecutableSHA256 != "" &&
+					exactartifact.ValidateSHA256(artifact.ExecutableSHA256) != nil) ||
 				(artifact.Format != "binary" &&
 					artifact.Format != "zip" &&
 					artifact.Format != "tar.gz" &&
@@ -415,7 +442,16 @@ func validateVersionPolicy(
 				artifact.Executable == "" {
 				return []string{
 					fmt.Sprintf(
-						"lock key %q artifact %q requires a valid platform identifier, credential-free HTTPS URL, SHA-256, binary/zip/tar.gz/tar.xz format, and executable",
+						"lock key %q artifact %q requires a valid platform identifier, credential-free HTTPS URL, archive/executable SHA-256, binary/zip/tar.gz/tar.xz format, and executable",
+						key,
+						platform,
+					),
+				}
+			}
+			if component.Kind == "agent" && artifact.ExecutableSHA256 == "" {
+				return []string{
+					fmt.Sprintf(
+						"lock key %q agent artifact %q requires an executable SHA-256",
 						key,
 						platform,
 					),

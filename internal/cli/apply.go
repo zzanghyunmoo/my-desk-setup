@@ -58,12 +58,8 @@ func newApplyCommand(streams Streams, system Runtime) *cobra.Command {
 			}
 			var interactive []string
 			if selection.interactive {
-				labels := make(map[string]string, len(environment.Catalog.Components))
-				for _, component := range environment.Catalog.Components {
-					labels[component.ID] = component.Name
-				}
 				interactive, err = ui.Choose(
-					ui.Choices(labels),
+					ui.Choices(interactiveLabels(environment)),
 					streams.Input,
 					streams.Output,
 				)

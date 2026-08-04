@@ -24,20 +24,31 @@ const (
 	StatusActionRequired SupportStatus = "action-required"
 )
 
+type SelectionPolicy string
+
+const (
+	// SelectionPolicyDirect is the default for existing catalog components.
+	// The empty serialized value is intentionally equivalent so older catalogs
+	// remain valid without exposing a new required field.
+	SelectionPolicyDirect         SelectionPolicy = "direct"
+	SelectionPolicyDependencyOnly SelectionPolicy = "dependency-only"
+)
+
 type Catalog struct {
 	SchemaVersion int         `yaml:"schema_version" json:"schema_version"`
 	Components    []Component `yaml:"components" json:"components"`
 }
 
 type Component struct {
-	ID            string                       `yaml:"id" json:"id"`
-	Name          string                       `yaml:"name" json:"name"`
-	Kind          string                       `yaml:"kind" json:"kind"`
-	Provides      []string                     `yaml:"provides" json:"provides"`
-	Dependencies  []string                     `yaml:"dependencies" json:"dependencies"`
-	VersionPolicy VersionPolicy                `yaml:"version_policy" json:"version_policy"`
-	Verification  Verification                 `yaml:"verification" json:"verification"`
-	Targets       map[TargetKind]TargetSupport `yaml:"targets" json:"targets"`
+	ID              string                       `yaml:"id" json:"id"`
+	Name            string                       `yaml:"name" json:"name"`
+	Kind            string                       `yaml:"kind" json:"kind"`
+	SelectionPolicy SelectionPolicy              `yaml:"selection_policy,omitempty" json:"selection_policy,omitempty"`
+	Provides        []string                     `yaml:"provides" json:"provides"`
+	Dependencies    []string                     `yaml:"dependencies" json:"dependencies"`
+	VersionPolicy   VersionPolicy                `yaml:"version_policy" json:"version_policy"`
+	Verification    Verification                 `yaml:"verification" json:"verification"`
+	Targets         map[TargetKind]TargetSupport `yaml:"targets" json:"targets"`
 }
 
 type VersionPolicy struct {
@@ -86,10 +97,11 @@ type NPMArtifact struct {
 }
 
 type Artifact struct {
-	URL        string `yaml:"url" json:"url"`
-	SHA256     string `yaml:"sha256" json:"sha256"`
-	Format     string `yaml:"format" json:"format"`
-	Executable string `yaml:"executable" json:"executable"`
+	URL              string `yaml:"url" json:"url"`
+	SHA256           string `yaml:"sha256" json:"sha256"`
+	Format           string `yaml:"format" json:"format"`
+	Executable       string `yaml:"executable" json:"executable"`
+	ExecutableSHA256 string `yaml:"executable_sha256,omitempty" json:"executable_sha256,omitempty"`
 }
 
 type Environment struct {

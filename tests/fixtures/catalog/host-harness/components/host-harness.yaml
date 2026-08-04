@@ -1,0 +1,132 @@
+schema_version: 1
+components:
+  - id: omh-node-runtime
+    name: OMH Internal Node Runtime
+    kind: build
+    selection_policy: dependency-only
+    provides: [omh-node-runtime]
+    dependencies: []
+    version_policy:
+      mode: pinned
+      lock_key: omh-node-runtime
+    verification:
+      command: [node, --version]
+    targets:
+      macos-host:
+        status: supported
+        installer: vendor
+        package: omh-node-runtime
+      windows-host:
+        status: supported
+        installer: vendor
+        package: omh-node-runtime
+      wsl-guest:
+        status: unsupported
+        reason: Host harness runtime is not part of the guest inventory.
+      lima-guest:
+        status: unsupported
+        reason: Host harness runtime is not part of the guest inventory.
+
+  - id: oh-my-harness
+    name: Oh My Harness
+    kind: cli
+    provides: [oh-my-harness, agent-harness]
+    dependencies: [omh-node-runtime]
+    version_policy:
+      mode: pinned
+      lock_key: oh-my-harness
+    verification:
+      command: [omh, --version]
+    targets:
+      macos-host:
+        status: supported
+        installer: vendor
+        package: oh-my-harness
+      windows-host:
+        status: supported
+        installer: vendor
+        package: oh-my-harness
+      wsl-guest:
+        status: unsupported
+        reason: Host harness is not part of the guest inventory.
+      lima-guest:
+        status: unsupported
+        reason: Host harness is not part of the guest inventory.
+
+  - id: claude-code
+    name: Claude Code Native
+    kind: agent
+    provides: [claude-code]
+    dependencies: []
+    version_policy:
+      mode: pinned
+      lock_key: claude-code
+    verification:
+      command: [claude, --version]
+    targets:
+      macos-host:
+        status: supported
+        installer: vendor
+        package: claude-code
+      windows-host:
+        status: supported
+        installer: vendor
+        package: claude-code
+      wsl-guest:
+        status: unsupported
+        reason: This fixture models host-owned native agent acquisition only.
+      lima-guest:
+        status: unsupported
+        reason: This fixture models host-owned native agent acquisition only.
+
+  - id: opencode
+    name: OpenCode Native
+    kind: agent
+    provides: [opencode]
+    dependencies: []
+    version_policy:
+      mode: pinned
+      lock_key: opencode
+    verification:
+      command: [opencode, --version]
+    targets:
+      macos-host:
+        status: supported
+        installer: vendor
+        package: opencode
+      windows-host:
+        status: supported
+        installer: vendor
+        package: opencode
+      wsl-guest:
+        status: unsupported
+        reason: This fixture models host-owned native agent acquisition only.
+      lima-guest:
+        status: unsupported
+        reason: This fixture models host-owned native agent acquisition only.
+
+  - id: codex
+    name: Codex Native
+    kind: agent
+    provides: [codex]
+    dependencies: []
+    version_policy:
+      mode: pinned
+      lock_key: codex
+    verification:
+      command: [codex, --version]
+    targets:
+      macos-host:
+        status: supported
+        installer: vendor
+        package: codex
+      windows-host:
+        status: supported
+        installer: vendor
+        package: codex
+      wsl-guest:
+        status: unsupported
+        reason: This fixture models host-owned native agent acquisition only.
+      lima-guest:
+        status: unsupported
+        reason: This fixture models host-owned native agent acquisition only.

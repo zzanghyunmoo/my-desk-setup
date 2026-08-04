@@ -1,0 +1,4 @@
+schema_version: 1
+id: owner
+description: Pre-publish host harness consumer contract fixture.
+selection: [claude-code, opencode, codex, oh-my-harness]
