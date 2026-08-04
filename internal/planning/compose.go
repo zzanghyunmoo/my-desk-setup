@@ -464,7 +464,7 @@ func lockedArtifact(
 func executableAlias(id, platform string) string {
 	alias := id
 	if id == nodeComponentID {
-		alias = "node"
+		return ""
 	}
 	if id == harnessComponentID {
 		return ""

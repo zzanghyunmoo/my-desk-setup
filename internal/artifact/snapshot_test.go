@@ -176,6 +176,47 @@ func TestSnapshotterRejectsUnsafeZipEntries(t *testing.T) {
 	}
 }
 
+func TestSnapshotterExecutableOnlyIgnoresNonMaterializedLinks(t *testing.T) {
+	executable := []byte("exact")
+	for _, test := range []struct {
+		name    string
+		format  string
+		archive []byte
+	}{
+		{
+			name: "tar.gz", format: "tar.gz",
+			archive: tarGzFixture(t, []archiveEntry{
+				{name: "bin/tool", body: executable, typeflag: tar.TypeReg},
+				{name: "bin/helper", typeflag: tar.TypeSymlink, linkname: "../lib/helper"},
+			}),
+		},
+		{
+			name: "zip", format: "zip",
+			archive: zipEntriesFixture(t, []zipArchiveEntry{
+				{name: "bin/tool", body: executable},
+				{name: "bin/helper", body: []byte("../lib/helper"), mode: os.ModeSymlink | 0o777},
+			}),
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			snapshot, err := (Snapshotter{Open: fixtureOpener(test.archive)}).Acquire(
+				context.Background(), SnapshotRequest{
+					URL: "fixture://tool", SHA256: digest(test.archive),
+					Format: test.format, Executable: "bin/tool",
+					ExecutableSHA256: digest(executable),
+				},
+			)
+			if err != nil {
+				t.Fatalf("Acquire(): %v", err)
+			}
+			defer snapshot.Close()
+			if _, err := os.Stat(snapshot.Path("bin/helper")); !os.IsNotExist(err) {
+				t.Fatalf("ignored link was materialized: %v", err)
+			}
+		})
+	}
+}
+
 func TestSnapshotterRejectsIdentityFormatAndBounds(t *testing.T) {
 	executable := []byte("exact")
 	archive := tarGzFixture(t, []archiveEntry{{

@@ -51,6 +51,9 @@ func (acquirer *fakeAcquirer) Acquire(
 	id := request.Alias
 	if id == "" {
 		id = "omh"
+		if strings.Contains(request.URL, "omh-node-runtime") {
+			id = "node"
+		}
 	}
 	return &fakeSnapshot{
 		id: id, root: "/private/snapshots/" + id,
@@ -110,8 +113,12 @@ func TestComposerAcquiresSelectedArtifactsAndComposesDeterministically(t *testin
 	for _, request := range firstRequests {
 		aliases = append(aliases, request.Alias)
 	}
-	if want := []string{"node", "", "claude", "codex", "opencode"}; !reflect.DeepEqual(aliases, want) {
+	if want := []string{"", "", "claude", "codex", "opencode"}; !reflect.DeepEqual(aliases, want) {
 		t.Fatalf("artifact aliases = %q, want %q", aliases, want)
+	}
+	if firstRequests[0].ExtractAll ||
+		!strings.HasSuffix(firstRequests[0].Executable, "/bin/node") {
+		t.Fatalf("Node request = %+v, want original archive executable path", firstRequests[0])
 	}
 	if !firstRequests[1].ExtractAll ||
 		firstRequests[1].Executable != "package/omh" {

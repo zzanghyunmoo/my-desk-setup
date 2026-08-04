@@ -514,6 +514,9 @@ func extractSnapshotTarGz(
 				executablePath = destination
 			}
 		default:
+			if !request.ExtractAll && canonical != request.Executable {
+				continue
+			}
 			return "", fmt.Errorf(
 				"unsupported archive entry %q with type %d",
 				canonical,
@@ -547,13 +550,6 @@ func extractSnapshotZip(
 		}
 		mode := entry.Mode()
 		isDirectory := entry.FileInfo().IsDir()
-		if !isDirectory && !mode.IsRegular() {
-			canonical, pathErr := safeArchivePath(entry.Name)
-			if pathErr != nil {
-				return "", pathErr
-			}
-			return "", fmt.Errorf("unsupported archive entry %q", canonical)
-		}
 		size := int64(entry.UncompressedSize64)
 		if isDirectory {
 			size = 0
@@ -561,6 +557,12 @@ func extractSnapshotZip(
 		canonical, err := budget.admit(entry.Name, size)
 		if err != nil {
 			return "", err
+		}
+		if !isDirectory && !mode.IsRegular() {
+			if !request.ExtractAll && canonical != request.Executable {
+				continue
+			}
+			return "", fmt.Errorf("unsupported archive entry %q", canonical)
 		}
 		if isDirectory {
 			if request.ExtractAll {
@@ -616,9 +618,10 @@ func writeSnapshotFile(
 	if copyErr == nil && written != expected {
 		copyErr = fmt.Errorf("snapshot entry size mismatch: expected %d got %d", expected, written)
 	}
-	if copyErr == nil {
-		copyErr = file.Sync()
-	}
+	// Extracted entries are ephemeral children of an already-synced,
+	// digest-verified archive. Syncing every member makes small packages with
+	// thousands of files take minutes without adding a durability guarantee the
+	// temporary snapshot needs.
 	closeErr := file.Close()
 	if copyErr != nil {
 		copyErr = fmt.Errorf("write snapshot file: %w", copyErr)
