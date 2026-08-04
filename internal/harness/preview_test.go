@@ -18,12 +18,14 @@ type recordingPort struct {
 	command transport.Command
 	result  transport.Result
 	err     error
+	calls   int
 }
 
 func (port *recordingPort) Run(
 	_ context.Context,
 	command transport.Command,
 ) (transport.Result, error) {
+	port.calls++
 	port.command = command
 	return port.result, port.err
 }
