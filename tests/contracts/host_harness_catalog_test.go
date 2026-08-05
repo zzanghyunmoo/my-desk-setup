@@ -108,6 +108,7 @@ func TestHostHarnessFixtureLoadsWithClosedPublishedIdentity(t *testing.T) {
 
 func TestProductionCatalogUsesPublishedHostHarnessRelease(t *testing.T) {
 	environment := loadCatalog(t)
+	reviewedFixture := loadHostHarnessFixture(t)
 	node := catalogComponentByID(t, environment, "omh-node-runtime")
 	if node.SelectionPolicy != catalog.SelectionPolicyDependencyOnly {
 		t.Fatalf("production Node selection policy = %q", node.SelectionPolicy)
@@ -133,6 +134,14 @@ func TestProductionCatalogUsesPublishedHostHarnessRelease(t *testing.T) {
 	}
 	for _, id := range []string{"claude-code", "opencode", "codex"} {
 		entry := environment.Lock.Versions[id]
+		reviewed := reviewedFixture.Lock.Versions[id]
+		if entry.Version != reviewed.Version ||
+			!reflect.DeepEqual(entry.Artifacts, reviewed.Artifacts) {
+			t.Fatalf(
+				"production %s identity drifted from the OMH-reviewed fixture",
+				id,
+			)
+		}
 		if len(entry.Artifacts) != 4 {
 			t.Fatalf("production %s lock has %d host artifacts", id, len(entry.Artifacts))
 		}
