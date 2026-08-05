@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/zzanghyunmoo/my-desk-setup/internal/adapters"
-	guestadapter "github.com/zzanghyunmoo/my-desk-setup/internal/adapters/guest"
 	"github.com/zzanghyunmoo/my-desk-setup/internal/adapters/packages"
 	"github.com/zzanghyunmoo/my-desk-setup/internal/artifact"
 	"github.com/zzanghyunmoo/my-desk-setup/internal/catalog"
@@ -148,13 +147,6 @@ func NewWithOptions(
 		"notion-desktop", "linear-desktop", "slack", "kakaotalk", "chrome",
 	} {
 		byID[componentID] = desktop
-	}
-	if platform == "darwin" {
-		for _, componentID := range []string{"claude-code", "opencode", "codex"} {
-			byID[componentID] = guestadapter.Agent{
-				Home: home, Delegate: packageComponent,
-			}
-		}
 	}
 	tempRoot := options.HarnessTempRoot
 	if tempRoot == "" {
