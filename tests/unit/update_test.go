@@ -684,7 +684,7 @@ func TestUpdateDiscoveryEscapesScopedNPMPackage(t *testing.T) {
 	content := []byte("reviewed scoped package")
 	server := newNPMRegistry(
 		t,
-		"@anthropic-ai/claude-code",
+		"@schpet/linear-cli",
 		"99.0.0",
 		content,
 		fixtureSRI(content),
@@ -694,8 +694,8 @@ func TestUpdateDiscoveryEscapesScopedNPMPackage(t *testing.T) {
 	candidate, err := updateflow.Discover(
 		context.Background(),
 		environment,
-		catalog.TargetWindowsHost,
-		"claude-code",
+		catalog.TargetMacOSHost,
+		"linear-cli",
 		server.Client(),
 		server.URL,
 	)
@@ -703,9 +703,9 @@ func TestUpdateDiscoveryEscapesScopedNPMPackage(t *testing.T) {
 		t.Fatalf("Discover(): %v", err)
 	}
 	if candidate.Version != "99.0.0" ||
-		!strings.Contains(candidate.Provenance, "/@anthropic-ai/claude-code/v/99.0.0") ||
+		!strings.Contains(candidate.Provenance, "/@schpet/linear-cli/v/99.0.0") ||
 		candidate.NPM == nil ||
-		!strings.Contains(candidate.NPM.Tarball, "/@anthropic-ai/claude-code/-/") {
+		!strings.Contains(candidate.NPM.Tarball, "/@schpet/linear-cli/-/") {
 		t.Fatalf("candidate = %+v", candidate)
 	}
 }

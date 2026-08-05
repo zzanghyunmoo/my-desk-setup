@@ -11,6 +11,7 @@ selection:
   - lima
   - linear-desktop
   - notion-desktop
+  - oh-my-harness
   - opencode
   - slack
   - typescript

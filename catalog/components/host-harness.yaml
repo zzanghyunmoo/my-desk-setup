@@ -1,0 +1,54 @@
+schema_version: 1
+components:
+  - id: omh-node-runtime
+    name: OMH Internal Node Runtime
+    kind: build
+    selection_policy: dependency-only
+    provides: [omh-node-runtime]
+    dependencies: []
+    version_policy:
+      mode: pinned
+      lock_key: omh-node-runtime
+    verification:
+      command: [node, --version]
+    targets:
+      macos-host:
+        status: supported
+        installer: vendor
+        package: omh-node-runtime
+      windows-host:
+        status: supported
+        installer: vendor
+        package: omh-node-runtime
+      wsl-guest:
+        status: unsupported
+        reason: Host harness runtime is not part of the guest inventory.
+      lima-guest:
+        status: unsupported
+        reason: Host harness runtime is not part of the guest inventory.
+
+  - id: oh-my-harness
+    name: Oh My Harness
+    kind: cli
+    provides: [oh-my-harness, agent-harness]
+    dependencies: [omh-node-runtime]
+    version_policy:
+      mode: pinned
+      lock_key: oh-my-harness
+    verification:
+      command: [omh, --version]
+    targets:
+      macos-host:
+        status: supported
+        installer: vendor
+        package: oh-my-harness
+      windows-host:
+        status: supported
+        installer: vendor
+        package: oh-my-harness
+      wsl-guest:
+        status: unsupported
+        reason: Host harness is not part of the guest inventory.
+      lima-guest:
+        status: unsupported
+        reason: Host harness is not part of the guest inventory.

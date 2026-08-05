@@ -4,7 +4,7 @@ components:
     name: Claude Code
     kind: agent
     provides: [claude-code]
-    dependencies: [bun]
+    dependencies: []
     version_policy:
       mode: pinned
       lock_key: claude-code
@@ -13,12 +13,12 @@ components:
     targets:
       macos-host:
         status: supported
-        installer: bun
-        package: "@anthropic-ai/claude-code"
+        installer: vendor
+        package: claude-code
       windows-host:
         status: supported
-        installer: bun
-        package: "@anthropic-ai/claude-code"
+        installer: vendor
+        package: claude-code
       wsl-guest:
         status: unsupported
         reason: AI coding agents belong to the macOS or Windows host workspace.
@@ -30,7 +30,7 @@ components:
     name: OpenCode
     kind: agent
     provides: [opencode]
-    dependencies: [bun]
+    dependencies: []
     version_policy:
       mode: pinned
       lock_key: opencode
@@ -39,12 +39,12 @@ components:
     targets:
       macos-host:
         status: supported
-        installer: bun
-        package: opencode-ai
+        installer: vendor
+        package: opencode
       windows-host:
         status: supported
-        installer: bun
-        package: opencode-ai
+        installer: vendor
+        package: opencode
       wsl-guest:
         status: unsupported
         reason: AI coding agents belong to the macOS or Windows host workspace.
@@ -56,7 +56,7 @@ components:
     name: OpenAI Codex
     kind: agent
     provides: [codex]
-    dependencies: [bun]
+    dependencies: []
     version_policy:
       mode: pinned
       lock_key: codex
@@ -65,12 +65,12 @@ components:
     targets:
       macos-host:
         status: supported
-        installer: bun
-        package: "@openai/codex"
+        installer: vendor
+        package: codex
       windows-host:
         status: supported
-        installer: bun
-        package: "@openai/codex"
+        installer: vendor
+        package: codex
       wsl-guest:
         status: unsupported
         reason: AI coding agents belong to the macOS or Windows host workspace.

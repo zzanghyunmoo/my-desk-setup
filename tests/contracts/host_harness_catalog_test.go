@@ -15,7 +15,7 @@ import (
 	"github.com/zzanghyunmoo/my-desk-setup/internal/target"
 )
 
-func TestHostHarnessFixtureLoadsWithClosedPrePublishIdentity(t *testing.T) {
+func TestHostHarnessFixtureLoadsWithClosedPublishedIdentity(t *testing.T) {
 	environment := loadHostHarnessFixture(t)
 	if err := catalog.Validate(environment); err != nil {
 		t.Fatalf("Validate(host harness fixture): %v", err)
@@ -76,8 +76,8 @@ func TestHostHarnessFixtureLoadsWithClosedPrePublishIdentity(t *testing.T) {
 	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
 		t.Fatalf("release identity has trailing data: %v", err)
 	}
-	if identity.SchemaVersion != 1 || identity.Production ||
-		identity.Purpose != "pre-publish-consumer-contract" ||
+	if identity.SchemaVersion != 1 || !identity.Production ||
+		identity.Purpose != "published-release-consumer-contract" ||
 		identity.Release.Version != "0.3.0" ||
 		identity.Release.Tag != "v0.3.0" ||
 		identity.Release.ArchiveFilename != "oh-my-harness-v0.3.0.tgz" ||
@@ -102,6 +102,52 @@ func TestHostHarnessFixtureLoadsWithClosedPrePublishIdentity(t *testing.T) {
 				artifact.SHA256,
 				identity.Release.ArchiveSHA256,
 			)
+		}
+	}
+}
+
+func TestProductionCatalogUsesPublishedHostHarnessRelease(t *testing.T) {
+	environment := loadCatalog(t)
+	node := catalogComponentByID(t, environment, "omh-node-runtime")
+	if node.SelectionPolicy != catalog.SelectionPolicyDependencyOnly {
+		t.Fatalf("production Node selection policy = %q", node.SelectionPolicy)
+	}
+	omH := catalogComponentByID(t, environment, "oh-my-harness")
+	if !reflect.DeepEqual(omH.Dependencies, []string{"omh-node-runtime"}) {
+		t.Fatalf("production OMH dependencies = %v", omH.Dependencies)
+	}
+	lock := environment.Lock.Versions["oh-my-harness"]
+	if lock.Version != "0.3.0" ||
+		lock.Provenance != "https://github.com/zzanghyunmoo/oh-my-harness/commit/95882328d339e7336e8a60a90f3e2640c1244da3" {
+		t.Fatalf("production OMH lock = %+v", lock)
+	}
+	const archiveURL = "https://github.com/zzanghyunmoo/oh-my-harness/releases/download/v0.3.0/oh-my-harness-v0.3.0.tgz"
+	const archiveSHA256 = "da805da0130e937913706f98ddb415f5e4b4bc12d04505b269f08bf66237ea73"
+	for _, platform := range []string{
+		"darwin-arm64", "darwin-amd64", "windows-arm64", "windows-amd64",
+	} {
+		artifact, ok := lock.Artifacts[platform]
+		if !ok || artifact.URL != archiveURL || artifact.SHA256 != archiveSHA256 {
+			t.Fatalf("production OMH %s artifact = %+v", platform, artifact)
+		}
+	}
+	for _, id := range []string{"claude-code", "opencode", "codex"} {
+		entry := environment.Lock.Versions[id]
+		if len(entry.Artifacts) != 4 {
+			t.Fatalf("production %s lock has %d host artifacts", id, len(entry.Artifacts))
+		}
+		for platform, artifact := range entry.Artifacts {
+			if len(artifact.SHA256) != 64 || len(artifact.ExecutableSHA256) != 64 {
+				t.Fatalf("production %s/%s identity = %+v", id, platform, artifact)
+			}
+		}
+	}
+	for _, profileID := range []string{
+		"owner", "certification-macos-host", "certification-windows-host",
+	} {
+		profile := environment.Profiles[profileID]
+		if !containsString(profile.Selection, "oh-my-harness") {
+			t.Fatalf("profile %s does not select oh-my-harness: %+v", profileID, profile)
 		}
 	}
 }

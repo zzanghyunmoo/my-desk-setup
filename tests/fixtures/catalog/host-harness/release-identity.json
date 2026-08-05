@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
-  "purpose": "pre-publish-consumer-contract",
-  "production": false,
+  "purpose": "published-release-consumer-contract",
+  "production": true,
   "release": {
     "version": "0.3.0",
     "tag": "v0.3.0",
