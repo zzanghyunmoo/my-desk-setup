@@ -81,8 +81,8 @@ func TestHostHarnessFixtureLoadsWithClosedPrePublishIdentity(t *testing.T) {
 		identity.Release.Version != "0.3.0" ||
 		identity.Release.Tag != "v0.3.0" ||
 		identity.Release.ArchiveFilename != "oh-my-harness-v0.3.0.tgz" ||
-		identity.Release.ArchiveSHA256 != "e0a40c13ac603102a6e0ce12197f00e81aa07f282522cd40eb31be2fcfc32704" ||
-		identity.Release.ArchiveSize != 15406290 ||
+		identity.Release.ArchiveSHA256 != "da805da0130e937913706f98ddb415f5e4b4bc12d04505b269f08bf66237ea73" ||
+		identity.Release.ArchiveSize != 15444272 ||
 		identity.Release.SidecarFilename != "oh-my-harness-v0.3.0.release.json" ||
 		identity.Release.SourceCommit != "95882328d339e7336e8a60a90f3e2640c1244da3" ||
 		identity.Release.SourceTree != "818aeec8721961d6732b1f674561f08f803cb4a3" ||

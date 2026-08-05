@@ -33,22 +33,22 @@ versions:
     artifacts:
       darwin-arm64:
         url: https://fixtures.invalid/oh-my-harness/oh-my-harness-v0.3.0.tgz
-        sha256: e0a40c13ac603102a6e0ce12197f00e81aa07f282522cd40eb31be2fcfc32704
+        sha256: da805da0130e937913706f98ddb415f5e4b4bc12d04505b269f08bf66237ea73
         format: tar.gz
         executable: package/omh
       darwin-amd64:
         url: https://fixtures.invalid/oh-my-harness/oh-my-harness-v0.3.0.tgz
-        sha256: e0a40c13ac603102a6e0ce12197f00e81aa07f282522cd40eb31be2fcfc32704
+        sha256: da805da0130e937913706f98ddb415f5e4b4bc12d04505b269f08bf66237ea73
         format: tar.gz
         executable: package/omh
       windows-arm64:
         url: https://fixtures.invalid/oh-my-harness/oh-my-harness-v0.3.0.tgz
-        sha256: e0a40c13ac603102a6e0ce12197f00e81aa07f282522cd40eb31be2fcfc32704
+        sha256: da805da0130e937913706f98ddb415f5e4b4bc12d04505b269f08bf66237ea73
         format: tar.gz
         executable: package/omh.cmd
       windows-amd64:
         url: https://fixtures.invalid/oh-my-harness/oh-my-harness-v0.3.0.tgz
-        sha256: e0a40c13ac603102a6e0ce12197f00e81aa07f282522cd40eb31be2fcfc32704
+        sha256: da805da0130e937913706f98ddb415f5e4b4bc12d04505b269f08bf66237ea73
         format: tar.gz
         executable: package/omh.cmd
 
