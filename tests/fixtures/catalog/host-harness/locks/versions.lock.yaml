@@ -29,26 +29,26 @@ versions:
   oh-my-harness:
     version: 0.3.0
     source: Pre-publish fixture bound to release-identity.json
-    provenance: https://github.com/zzanghyunmoo/oh-my-harness/commit/51ff231d029fb8ed425f6336b5fdadf6d08b050d
+    provenance: https://github.com/zzanghyunmoo/oh-my-harness/commit/95882328d339e7336e8a60a90f3e2640c1244da3
     artifacts:
       darwin-arm64:
         url: https://fixtures.invalid/oh-my-harness/oh-my-harness-v0.3.0.tgz
-        sha256: d62ac59bf91a6922a08b9d72bfece64466d5315af8bfc53aa11c8f7dd3a63a2c
+        sha256: e0a40c13ac603102a6e0ce12197f00e81aa07f282522cd40eb31be2fcfc32704
         format: tar.gz
         executable: package/omh
       darwin-amd64:
         url: https://fixtures.invalid/oh-my-harness/oh-my-harness-v0.3.0.tgz
-        sha256: d62ac59bf91a6922a08b9d72bfece64466d5315af8bfc53aa11c8f7dd3a63a2c
+        sha256: e0a40c13ac603102a6e0ce12197f00e81aa07f282522cd40eb31be2fcfc32704
         format: tar.gz
         executable: package/omh
       windows-arm64:
         url: https://fixtures.invalid/oh-my-harness/oh-my-harness-v0.3.0.tgz
-        sha256: d62ac59bf91a6922a08b9d72bfece64466d5315af8bfc53aa11c8f7dd3a63a2c
+        sha256: e0a40c13ac603102a6e0ce12197f00e81aa07f282522cd40eb31be2fcfc32704
         format: tar.gz
         executable: package/omh.cmd
       windows-amd64:
         url: https://fixtures.invalid/oh-my-harness/oh-my-harness-v0.3.0.tgz
-        sha256: d62ac59bf91a6922a08b9d72bfece64466d5315af8bfc53aa11c8f7dd3a63a2c
+        sha256: e0a40c13ac603102a6e0ce12197f00e81aa07f282522cd40eb31be2fcfc32704
         format: tar.gz
         executable: package/omh.cmd
 

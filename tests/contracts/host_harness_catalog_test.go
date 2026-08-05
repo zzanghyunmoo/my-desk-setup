@@ -81,13 +81,28 @@ func TestHostHarnessFixtureLoadsWithClosedPrePublishIdentity(t *testing.T) {
 		identity.Release.Version != "0.3.0" ||
 		identity.Release.Tag != "v0.3.0" ||
 		identity.Release.ArchiveFilename != "oh-my-harness-v0.3.0.tgz" ||
-		identity.Release.ArchiveSHA256 != "d62ac59bf91a6922a08b9d72bfece64466d5315af8bfc53aa11c8f7dd3a63a2c" ||
-		identity.Release.ArchiveSize != 15278763 ||
+		identity.Release.ArchiveSHA256 != "e0a40c13ac603102a6e0ce12197f00e81aa07f282522cd40eb31be2fcfc32704" ||
+		identity.Release.ArchiveSize != 15406290 ||
 		identity.Release.SidecarFilename != "oh-my-harness-v0.3.0.release.json" ||
-		len(identity.Release.SourceCommit) != 40 ||
-		len(identity.Release.SourceTree) != 40 ||
-		len(identity.Release.CatalogRevision) != 64 {
+		identity.Release.SourceCommit != "95882328d339e7336e8a60a90f3e2640c1244da3" ||
+		identity.Release.SourceTree != "818aeec8721961d6732b1f674561f08f803cb4a3" ||
+		identity.Release.CatalogRevision != "e0fb45739b54b868cf34d8adae09e1611e5d7be1bd813e3c4d0eaf02a9f553e2" {
 		t.Fatalf("release fixture identity is not closed and exact: %+v", identity)
+	}
+	omH := environment.Lock.Versions["oh-my-harness"]
+	if omH.Provenance != "https://github.com/zzanghyunmoo/oh-my-harness/commit/"+
+		identity.Release.SourceCommit {
+		t.Fatalf("OMH lock provenance = %q, want fixture source commit", omH.Provenance)
+	}
+	for platform, artifact := range omH.Artifacts {
+		if artifact.SHA256 != identity.Release.ArchiveSHA256 {
+			t.Fatalf(
+				"OMH %s archive digest = %q, want fixture digest %q",
+				platform,
+				artifact.SHA256,
+				identity.Release.ArchiveSHA256,
+			)
+		}
 	}
 }
 
