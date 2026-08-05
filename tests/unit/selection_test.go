@@ -86,10 +86,13 @@ func TestPlannerSeparatesGuestAndHostOwnership(t *testing.T) {
 		t.Fatalf("Build(host all): %v", err)
 	}
 	for _, action := range hostPlan.Actions {
-		for _, forbidden := range []string{"java", "kotlin", "go", "python", "flutter", "neovim"} {
-			if action.ComponentID == forbidden {
-				t.Fatalf("host all contains guest toolchain %q", action.ComponentID)
-			}
+		if action.ComponentID == "kotlin" || action.ComponentID == "flutter" {
+			t.Fatalf("host all contains unsupported component %q", action.ComponentID)
+		}
+		if (action.ComponentID == "java" || action.ComponentID == "go" ||
+			action.ComponentID == "python" || action.ComponentID == "neovim") &&
+			action.Status != planning.ActionActionRequired {
+			t.Fatalf("host preparation action = %+v, want action-required", action)
 		}
 	}
 }

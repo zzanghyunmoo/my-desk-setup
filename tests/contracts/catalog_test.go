@@ -461,19 +461,84 @@ func TestNotionCLISelectionDoesNotResolveDesktop(t *testing.T) {
 	}
 }
 
-func TestGuestAllExcludesGUI(t *testing.T) {
+func TestGuestAllExcludesHostWorkspaceTools(t *testing.T) {
 	environment := loadCatalog(t)
 	resolved, err := catalog.ResolveProfile(environment, "all", catalog.TargetLimaGuest)
 	if err != nil {
 		t.Fatalf("ResolveProfile(all): %v", err)
 	}
+	hostOnly := map[string]bool{
+		"claude-code": true,
+		"codex":       true,
+		"herdr":       true,
+		"opencode":    true,
+	}
 	for _, item := range resolved {
 		if item.Component.Kind == "gui" {
 			t.Fatalf("guest all contains GUI component %q", item.Component.ID)
 		}
+		if hostOnly[item.Component.ID] {
+			t.Fatalf("guest all contains host workspace tool %q", item.Component.ID)
+		}
 		if item.Support.Status == catalog.StatusUnsupported {
 			t.Fatalf("guest all contains unsupported component %q", item.Component.ID)
 		}
+	}
+}
+
+func TestWorkstationProfilesKeepHostAndGuestResponsibilitiesSeparate(t *testing.T) {
+	environment := loadCatalog(t)
+	tests := []struct {
+		profile string
+		target  catalog.TargetKind
+		want    []string
+		forbid  []string
+	}{
+		{
+			profile: "windows-host", target: catalog.TargetWindowsHost,
+			want:   []string{"go", "c-toolchain", "python", "claude-code", "opencode", "codex", "wezterm", "herdr", "gh", "wsl"},
+			forbid: []string{"neovim", "nvchad", "notion-cli", "linear-cli", "docker-engine"},
+		},
+		{
+			profile: "macos-host", target: catalog.TargetMacOSHost,
+			want:   []string{"go", "c-toolchain", "python", "typescript", "java", "claude-code", "opencode", "codex", "wezterm", "herdr", "neovim", "nvchad", "notion-cli", "linear-cli", "atlassian-cli", "gh", "glab", "docker-engine", "lima"},
+			forbid: []string{"wsl"},
+		},
+		{
+			profile: "wsl-guest", target: catalog.TargetWSLGuest,
+			want:   []string{"go", "c-toolchain", "python", "uv", "neovim", "nvchad", "notion-cli", "linear-cli", "gh", "docker-engine"},
+			forbid: []string{"claude-code", "opencode", "codex", "herdr", "typescript", "java", "kotlin", "flutter", "gradle"},
+		},
+		{
+			profile: "lima-guest", target: catalog.TargetLimaGuest,
+			want:   []string{"go", "c-toolchain", "python", "uv", "neovim", "nvchad", "notion-cli", "linear-cli", "gh", "docker-engine"},
+			forbid: []string{"claude-code", "opencode", "codex", "herdr", "typescript", "java", "kotlin", "flutter", "gradle"},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.profile, func(t *testing.T) {
+			resolved, err := catalog.ResolveProfile(environment, test.profile, test.target)
+			if err != nil {
+				t.Fatalf("ResolveProfile(): %v", err)
+			}
+			ids := resolvedIDs(resolved)
+			for _, id := range test.want {
+				if !ids[id] {
+					t.Fatalf("%s is missing %q: %v", test.profile, id, ids)
+				}
+			}
+			for _, id := range test.forbid {
+				if ids[id] {
+					t.Fatalf("%s unexpectedly includes %q: %v", test.profile, id, ids)
+				}
+			}
+			for _, item := range resolved {
+				if item.Support.Status == catalog.StatusUnsupported {
+					t.Fatalf("%s selected unsupported component %q", test.profile, item.Component.ID)
+				}
+			}
+		})
 	}
 }
 

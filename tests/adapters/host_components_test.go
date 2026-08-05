@@ -28,7 +28,7 @@ const (
 	hostRuntimeCatalogRevision = "sha256:reviewed-catalog"
 )
 
-func TestHostAllContainsNoGuestToolchainOrAuthCommand(t *testing.T) {
+func TestHostAllPreservesManualPreparationAndNoAuthCommand(t *testing.T) {
 	environment, err := catalog.LoadFS(catalogdata.FS)
 	if err != nil {
 		t.Fatalf("LoadFS(): %v", err)
@@ -43,9 +43,8 @@ func TestHostAllContainsNoGuestToolchainOrAuthCommand(t *testing.T) {
 		t.Fatalf("Build(): %v", err)
 	}
 	for _, action := range plan.Actions {
-		switch action.ComponentID {
-		case "java", "kotlin", "go", "python", "flutter", "neovim", "docker-engine":
-			t.Fatalf("host all contains guest-owned component %q", action.ComponentID)
+		if action.ComponentID == "kotlin" || action.ComponentID == "flutter" {
+			t.Fatalf("host all contains unsupported component %q", action.ComponentID)
 		}
 		for _, command := range action.Verification {
 			for _, argument := range command {

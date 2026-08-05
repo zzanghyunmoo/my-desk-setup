@@ -11,11 +11,11 @@ components:
       command: [git, --version]
     targets:
       macos-host:
-        status: unsupported
-        reason: Development CLI belongs to the Linux guest.
+        status: action-required
+        reason: Install Command Line Tools with `xcode-select --install` before applying host-managed tools.
       windows-host:
-        status: unsupported
-        reason: Development CLI belongs to the Linux guest.
+        status: action-required
+        reason: Install Git for Windows and curl before applying host-managed tools.
       wsl-guest:
         status: supported
         installer: apt
@@ -66,11 +66,11 @@ components:
       command: [mise, --version]
     targets:
       macos-host:
-        status: unsupported
-        reason: Primary language toolchains belong to the Linux guest.
+        status: action-required
+        reason: Install mise on macOS from its reviewed release before installing pinned language toolchains.
       windows-host:
-        status: unsupported
-        reason: Primary language toolchains belong to the Linux guest.
+        status: action-required
+        reason: Install mise on Windows from its reviewed release before installing pinned language toolchains.
       wsl-guest:
         status: supported
         installer: vendor
@@ -93,19 +93,17 @@ components:
       functional: [javac, -version]
     targets:
       macos-host:
-        status: unsupported
-        reason: Primary language toolchains belong to the Linux guest.
+        status: action-required
+        reason: Install a Java 25 JDK on macOS, then verify `java --version` and `javac -version`.
       windows-host:
         status: unsupported
         reason: Primary language toolchains belong to the Linux guest.
       wsl-guest:
-        status: supported
-        installer: mise
-        package: java
+        status: unsupported
+        reason: WSL and Lima guests are limited to Go, C/C++, and Python.
       lima-guest:
-        status: supported
-        installer: mise
-        package: java
+        status: unsupported
+        reason: WSL and Lima guests are limited to Go, C/C++, and Python.
 
   - id: kotlin
     name: Kotlin
@@ -125,13 +123,11 @@ components:
         status: unsupported
         reason: Primary language toolchains belong to the Linux guest.
       wsl-guest:
-        status: supported
-        installer: mise
-        package: kotlin
+        status: unsupported
+        reason: WSL and Lima guests are limited to Go, C/C++, and Python.
       lima-guest:
-        status: supported
-        installer: mise
-        package: kotlin
+        status: unsupported
+        reason: WSL and Lima guests are limited to Go, C/C++, and Python.
 
   - id: go
     name: Go
@@ -146,11 +142,11 @@ components:
       functional: [go, env, GOROOT]
     targets:
       macos-host:
-        status: unsupported
-        reason: Primary language toolchains belong to the Linux guest.
+        status: action-required
+        reason: Install the pinned Go toolchain with mise after installing macOS base tools.
       windows-host:
-        status: unsupported
-        reason: Primary language toolchains belong to the Linux guest.
+        status: action-required
+        reason: Install the pinned Go toolchain with mise after installing Windows base tools.
       wsl-guest:
         status: supported
         installer: mise
@@ -173,11 +169,11 @@ components:
       functional: [python, -c, "print('ok')"]
     targets:
       macos-host:
-        status: unsupported
-        reason: Primary language toolchains belong to the Linux guest.
+        status: action-required
+        reason: Install the pinned Python toolchain with mise after installing macOS base tools.
       windows-host:
-        status: unsupported
-        reason: Primary language toolchains belong to the Linux guest.
+        status: action-required
+        reason: Install the pinned Python toolchain with mise after installing Windows base tools.
       wsl-guest:
         status: supported
         installer: mise
@@ -200,8 +196,9 @@ components:
       functional: [bun, -e, "const value: number = 1; console.log(value)"]
     targets:
       macos-host:
-        status: unsupported
-        reason: Primary language toolchains belong to the Linux guest.
+        status: supported
+        installer: bun
+        package: typescript
       windows-host:
         status: unsupported
         reason: Primary language toolchains belong to the Linux guest.
@@ -226,11 +223,11 @@ components:
       functional: [cc, --help]
     targets:
       macos-host:
-        status: unsupported
-        reason: Primary language toolchains belong to the Linux guest.
+        status: action-required
+        reason: Install macOS Command Line Tools with `xcode-select --install`.
       windows-host:
-        status: unsupported
-        reason: Primary language toolchains belong to the Linux guest.
+        status: action-required
+        reason: Install MSVC Build Tools with the Desktop development with C++ workload.
       wsl-guest:
         status: supported
         installer: apt
@@ -259,13 +256,11 @@ components:
         status: unsupported
         reason: Primary language toolchains belong to the Linux guest.
       wsl-guest:
-        status: supported
-        installer: mise
-        package: http:flutter
+        status: unsupported
+        reason: WSL and Lima guests are limited to Go, C/C++, and Python.
       lima-guest:
-        status: supported
-        installer: mise
-        package: http:flutter
+        status: unsupported
+        reason: WSL and Lima guests are limited to Go, C/C++, and Python.
 
   - id: gradle
     name: Gradle
@@ -285,13 +280,11 @@ components:
         status: unsupported
         reason: Build tools belong to the Linux guest.
       wsl-guest:
-        status: supported
-        installer: mise
-        package: gradle
+        status: unsupported
+        reason: WSL and Lima guests are limited to Go, C/C++, and Python.
       lima-guest:
-        status: supported
-        installer: mise
-        package: gradle
+        status: unsupported
+        reason: WSL and Lima guests are limited to Go, C/C++, and Python.
 
   - id: uv
     name: uv
@@ -332,8 +325,8 @@ components:
       functional: [nvim, --headless, "+quit"]
     targets:
       macos-host:
-        status: unsupported
-        reason: The primary editor belongs to the Linux guest.
+        status: action-required
+        reason: Install the reviewed Neovim release on macOS, then apply the NvChad configuration.
       windows-host:
         status: unsupported
         reason: The primary editor belongs to the Linux guest.
@@ -358,8 +351,8 @@ components:
       command: [nvim, --headless, "+checkhealth", "+quit"]
     targets:
       macos-host:
-        status: unsupported
-        reason: The primary editor belongs to the Linux guest.
+        status: action-required
+        reason: Apply NvChad after the macOS Neovim installation is verified.
       windows-host:
         status: unsupported
         reason: The primary editor belongs to the Linux guest.
@@ -428,7 +421,7 @@ components:
     name: Herdr
     kind: terminal
     provides: [herdr]
-    dependencies: [base-cli]
+    dependencies: []
     version_policy:
       mode: pinned
       lock_key: herdr
@@ -436,19 +429,18 @@ components:
       command: [herdr, --version]
     targets:
       macos-host:
-        status: unsupported
-        reason: Herdr belongs to the Linux guest profile.
+        status: supported
+        installer: vendor
+        package: herdr
       windows-host:
-        status: unsupported
-        reason: Herdr belongs to the Linux guest profile.
+        status: action-required
+        reason: Install the official Windows beta with `powershell -ExecutionPolicy Bypass -c "irm https://herdr.dev/install.ps1 | iex"`.
       wsl-guest:
-        status: supported
-        installer: vendor
-        package: herdr
+        status: unsupported
+        reason: Herdr belongs to the macOS or Windows host workspace.
       lima-guest:
-        status: supported
-        installer: vendor
-        package: herdr
+        status: unsupported
+        reason: Herdr belongs to the macOS or Windows host workspace.
 
   - id: atlassian-cli
     name: Atlassian CLI
@@ -462,8 +454,8 @@ components:
       command: [acli, --version]
     targets:
       macos-host:
-        status: unsupported
-        reason: Collaboration CLI belongs to the Linux guest.
+        status: action-required
+        reason: Install the reviewed Atlassian CLI release for macOS, then authenticate manually.
       windows-host:
         status: unsupported
         reason: Collaboration CLI belongs to the Linux guest.
@@ -488,8 +480,9 @@ components:
       command: [ntn, --version]
     targets:
       macos-host:
-        status: unsupported
-        reason: Collaboration CLI belongs to the Linux guest.
+        status: supported
+        installer: bun
+        package: ntn
       windows-host:
         status: unsupported
         reason: Collaboration CLI belongs to the Linux guest.
@@ -514,8 +507,9 @@ components:
       command: [linear, --version]
     targets:
       macos-host:
-        status: unsupported
-        reason: Collaboration CLI belongs to the Linux guest.
+        status: supported
+        installer: bun
+        package: "@schpet/linear-cli"
       windows-host:
         status: unsupported
         reason: Collaboration CLI belongs to the Linux guest.
@@ -532,18 +526,20 @@ components:
     name: GitHub CLI
     kind: cli
     provides: [gh, github-cli]
-    dependencies: [base-cli]
+    dependencies: []
     version_policy:
       mode: manager
     verification:
       command: [gh, --version]
     targets:
       macos-host:
-        status: unsupported
-        reason: Collaboration CLI belongs to the Linux guest.
+        status: supported
+        installer: brew
+        package: gh
       windows-host:
-        status: unsupported
-        reason: Collaboration CLI belongs to the Linux guest.
+        status: supported
+        installer: winget
+        package: GitHub.cli
       wsl-guest:
         status: supported
         installer: apt
@@ -557,15 +553,16 @@ components:
     name: GitLab CLI
     kind: cli
     provides: [glab, gitlab-cli]
-    dependencies: [base-cli]
+    dependencies: []
     version_policy:
       mode: manager
     verification:
       command: [glab, --version]
     targets:
       macos-host:
-        status: unsupported
-        reason: Collaboration CLI belongs to the Linux guest.
+        status: supported
+        installer: brew
+        package: glab
       windows-host:
         status: unsupported
         reason: Collaboration CLI belongs to the Linux guest.
@@ -590,8 +587,8 @@ components:
       functional: [docker, info, --format, "{{.ServerVersion}}"]
     targets:
       macos-host:
-        status: unsupported
-        reason: Docker Desktop and host Docker engine are outside v1.
+        status: action-required
+        reason: Install Docker Desktop for Mac, start the engine, and verify `docker version`.
       windows-host:
         status: unsupported
         reason: Docker Desktop and host Docker engine are outside v1.

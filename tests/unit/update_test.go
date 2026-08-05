@@ -80,12 +80,13 @@ func TestUpdatePlanIsDeterministicAndDoesNotMutateInput(t *testing.T) {
 		first.TargetPlan.CatalogRevision != first.AfterCatalogRevision {
 		t.Fatalf("resulting target plan = %+v", first.TargetPlan)
 	}
-	if got, want := len(first.CompatibilityMatrix), 4; got != want {
+	if got, want := len(first.CompatibilityMatrix), 6; got != want {
 		t.Fatalf("compatibility matrix entries = %d, want %d", got, want)
 	}
 	for _, entry := range first.CompatibilityMatrix {
 		if entry.PlanDigest == "" ||
-			(entry.TargetKind != catalog.TargetWSLGuest &&
+			(entry.TargetKind != catalog.TargetMacOSHost &&
+				entry.TargetKind != catalog.TargetWSLGuest &&
 				entry.TargetKind != catalog.TargetLimaGuest) {
 			t.Fatalf("unexpected compatibility entry: %+v", entry)
 		}
@@ -666,7 +667,7 @@ func TestUpdateDiscoveryRateLimitAndUnsupportedProviderMutateNothing(t *testing.
 	if _, err := updateflow.Discover(
 		context.Background(),
 		environment,
-		catalog.TargetLimaGuest,
+		catalog.TargetMacOSHost,
 		"herdr",
 		server.Client(),
 		server.URL,
@@ -693,7 +694,7 @@ func TestUpdateDiscoveryEscapesScopedNPMPackage(t *testing.T) {
 	candidate, err := updateflow.Discover(
 		context.Background(),
 		environment,
-		catalog.TargetLimaGuest,
+		catalog.TargetWindowsHost,
 		"claude-code",
 		server.Client(),
 		server.URL,
