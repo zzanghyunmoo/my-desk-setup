@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -236,6 +237,10 @@ func TestPreviewRejectsNonRegularOrUnknownAgentExecutable(t *testing.T) {
 
 func previewRequest(t *testing.T, agents []string) Request {
 	t.Helper()
+	platform := "darwin"
+	if runtime.GOOS == "windows" {
+		platform = "windows"
+	}
 	root := t.TempDir()
 	bin := filepath.Join(root, "bin")
 	if err := os.Mkdir(bin, 0o700); err != nil {
@@ -272,7 +277,7 @@ func previewRequest(t *testing.T, agents []string) Request {
 		Home:             home,
 		ConfigRoot:       configRoot,
 		TempRoot:         tempRoot,
-		Platform:         "darwin",
+		Platform:         platform,
 		Locale:           "C.UTF-8",
 		AgentExecutables: agentExecutables,
 		Timeout:          2 * time.Second,
