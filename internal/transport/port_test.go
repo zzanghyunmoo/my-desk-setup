@@ -86,6 +86,55 @@ func TestCommandEnvironmentRejectsCredentialOverrides(t *testing.T) {
 	}
 }
 
+func TestCommandEnvironmentReplaceModeDoesNotInheritSafeAmbientValues(t *testing.T) {
+	t.Setenv("PATH", "/ambient/bin")
+	t.Setenv("HOME", "/ambient/home")
+	t.Setenv("LANG", "ambient")
+
+	environment, err := commandEnvironmentFor(
+		map[string]string{
+			"HOME": "/isolated/home",
+			"PATH": "/trusted/bin",
+		},
+		EnvironmentReplace,
+	)
+	if err != nil {
+		t.Fatalf("commandEnvironmentFor(): %v", err)
+	}
+	if got, want := environment, []string{
+		"HOME=/isolated/home",
+		"PATH=/trusted/bin",
+	}; !slices.Equal(got, want) {
+		t.Fatalf("environment = %q, want %q", got, want)
+	}
+}
+
+func TestExecutorRunCommandReplaceModeIsExact(t *testing.T) {
+	t.Setenv("HOME", "/ambient/home")
+	t.Setenv("LANG", "ambient")
+	result, err := (Executor{}).RunCommand(context.Background(), Command{
+		Executable:      os.Args[0],
+		Arguments:       []string{"-test.run=TestExecutorReplaceEnvironmentHelper"},
+		Environment:     map[string]string{"MDS_ISOLATED_HELPER": "1"},
+		EnvironmentMode: EnvironmentReplace,
+	})
+	if err != nil {
+		t.Fatalf("RunCommand(): %v\nstderr: %s", err, result.Stderr)
+	}
+}
+
+func TestExecutorReplaceEnvironmentHelper(t *testing.T) {
+	if os.Getenv("MDS_ISOLATED_HELPER") != "1" {
+		return
+	}
+	for _, key := range []string{"HOME", "LANG"} {
+		if value := os.Getenv(key); value != "" {
+			_, _ = fmt.Fprintf(os.Stderr, "ambient %s leaked", key)
+			os.Exit(1)
+		}
+	}
+}
+
 func TestExecutorDoesNotPassInheritedCredentials(t *testing.T) {
 	t.Setenv("MDS_TEST_API_TOKEN", "must-not-leak")
 

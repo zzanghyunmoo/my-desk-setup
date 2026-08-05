@@ -32,7 +32,52 @@ func ResolveSelection(
 		return nil, fmt.Errorf("unknown target %q", target)
 	}
 	components, capabilities := index(environment)
+	for _, reference := range selection {
+		id := reference
+		if owner, exists := capabilities[reference]; exists {
+			id = owner
+		}
+		component, exists := components[id]
+		if !exists {
+			continue
+		}
+		if component.SelectionPolicy == SelectionPolicyDependencyOnly {
+			return nil, fmt.Errorf(
+				"component %q is dependency-only and cannot be selected directly",
+				component.ID,
+			)
+		}
+	}
 	return resolveSelection(components, capabilities, selection, target)
+}
+
+// SelectionCandidates returns the stable user-facing root set before a target
+// is observed. Dependencies remain resolvable but are never offered directly.
+func SelectionCandidates(environment Environment) []Component {
+	result := make([]Component, 0, len(environment.Catalog.Components))
+	for _, component := range environment.Catalog.Components {
+		if component.SelectionPolicy == SelectionPolicyDependencyOnly {
+			continue
+		}
+		result = append(result, component)
+	}
+	sort.Slice(result, func(left, right int) bool {
+		return result[left].ID < result[right].ID
+	})
+	return result
+}
+
+// SelectionRoots returns the target-reachable direct root set used by --all.
+// A dependency-only component can still appear in the resulting closure.
+func SelectionRoots(environment Environment, target TargetKind) []Component {
+	result := make([]Component, 0, len(environment.Catalog.Components))
+	for _, component := range SelectionCandidates(environment) {
+		if component.Targets[target].Status == StatusUnsupported {
+			continue
+		}
+		result = append(result, component)
+	}
+	return result
 }
 
 func resolveSelection(
@@ -88,10 +133,8 @@ func resolveSelection(
 func resolveAll(environment Environment, target TargetKind) []ResolvedComponent {
 	components, capabilities := index(environment)
 	ids := make([]string, 0, len(components))
-	for id, component := range components {
-		if component.Targets[target].Status != StatusUnsupported {
-			ids = append(ids, id)
-		}
+	for _, component := range SelectionRoots(environment, target) {
+		ids = append(ids, component.ID)
 	}
 	resolved, err := resolveSelection(components, capabilities, ids, target)
 	if err != nil {

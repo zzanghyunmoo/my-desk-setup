@@ -9,7 +9,6 @@ import (
 	"github.com/zzanghyunmoo/my-desk-setup/internal/catalog"
 	"github.com/zzanghyunmoo/my-desk-setup/internal/doctor"
 	"github.com/zzanghyunmoo/my-desk-setup/internal/output"
-	"github.com/zzanghyunmoo/my-desk-setup/internal/planning"
 	"github.com/zzanghyunmoo/my-desk-setup/internal/ui"
 	"github.com/zzanghyunmoo/my-desk-setup/internal/version"
 )
@@ -42,12 +41,8 @@ func newDoctorCommand(streams Streams, system Runtime) *cobra.Command {
 			}
 			var interactive []string
 			if selection.interactive {
-				labels := make(map[string]string, len(environment.Catalog.Components))
-				for _, component := range environment.Catalog.Components {
-					labels[component.ID] = component.Name
-				}
 				interactive, err = ui.Choose(
-					ui.Choices(labels),
+					ui.Choices(interactiveLabels(environment)),
 					streams.Input,
 					streams.Output,
 				)
@@ -69,7 +64,9 @@ func newDoctorCommand(streams Streams, system Runtime) *cobra.Command {
 			}
 			facts.CLIRevision = version.String()
 			facts.CatalogRevision = revision
-			plan, err := planning.Build(environment, facts, request)
+			plan, err := buildPlan(
+				command.Context(), environment, facts, request, system,
+			)
 			if err != nil {
 				return invalidInput(err)
 			}

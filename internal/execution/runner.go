@@ -96,6 +96,29 @@ func (runner Runner) apply(
 				"; restore target readiness and rerun the same reviewed digest",
 		}
 	}
+	if preflighter, ok := runner.Adapter.(adapters.PlanPreflighter); ok {
+		cleanup, err := preflighter.Preflight(ctx, plan)
+		if err != nil {
+			var actionRequired *adapters.ActionRequiredError
+			if errors.As(err, &actionRequired) {
+				return state.Receipt{}, err
+			}
+			return state.Receipt{}, &StalePlanError{Cause: fmt.Errorf(
+				"plan-wide component preflight changed: %w", err,
+			)}
+		}
+		if cleanup != nil {
+			defer func() {
+				if err := cleanup(); err != nil {
+					result = state.Receipt{}
+					resultErr = errors.Join(
+						resultErr,
+						fmt.Errorf("clean plan-wide component preflight: %w", err),
+					)
+				}
+			}()
+		}
+	}
 
 	paths, err := state.NewPaths(stateRoot, plan.Target.ID.String())
 	if err != nil {
@@ -135,6 +158,7 @@ func (runner Runner) apply(
 	for _, action := range plan.Actions {
 		outcome := state.ActionOutcome{
 			ActionID: action.ID, RequestedVersion: action.Version,
+			Approval: actionApproval(action),
 		}
 		if action.Status == planning.ActionUnsupported ||
 			action.Status == planning.ActionActionRequired {
@@ -288,6 +312,30 @@ func (runner Runner) apply(
 		return state.Receipt{}, err
 	}
 	return receipt, nil
+}
+
+func actionApproval(action planning.Action) map[string]string {
+	if action.ComponentID != "oh-my-harness" {
+		return nil
+	}
+	keys := []string{
+		"artifact_archive_sha256",
+		"harness_child_digest",
+		"harness_child_catalog_revision",
+		"harness_config_digest",
+		"harness_addon_summary_digest",
+		"harness_ownership_summary_digest",
+	}
+	result := make(map[string]string, len(keys))
+	for _, key := range keys {
+		if value := action.Inputs[key]; value != "" {
+			result[key] = value
+		}
+	}
+	if len(result) == 0 {
+		return nil
+	}
+	return result
 }
 
 func complete(outcomes []state.ActionOutcome) bool {

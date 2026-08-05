@@ -175,6 +175,71 @@ func TestStaleDigestMutatesNothing(t *testing.T) {
 	}
 }
 
+func TestPlanWideComponentPreflightBlocksEveryMutationAndCleansRetainedInputs(t *testing.T) {
+	plan := singleActionPlan(t, "lima-guest:mds")
+	stateRoot := filepath.Join(t.TempDir(), "state")
+	adapter := &planPreflightAdapter{
+		fakeAdapter:  newFakeAdapter(),
+		preflightErr: errors.New("child digest changed after approval"),
+	}
+	_, err := testRunner(adapter).Apply(
+		context.Background(), plan, plan.Digest, stateRoot,
+	)
+	var stale *execution.StalePlanError
+	if !errors.As(err, &stale) {
+		t.Fatalf("Apply(preflight drift) error = %v, want stale plan", err)
+	}
+	if _, statErr := os.Lstat(stateRoot); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("state root exists after component preflight: %v", statErr)
+	}
+	if adapter.preflights != 1 || adapter.cleanups != 0 || len(adapter.applyCount) != 0 {
+		t.Fatalf(
+			"blocked lifecycle preflights=%d cleanups=%d applies=%v",
+			adapter.preflights,
+			adapter.cleanups,
+			adapter.applyCount,
+		)
+	}
+
+	adapter = &planPreflightAdapter{fakeAdapter: newFakeAdapter()}
+	adapter.failOnce["a"] = true
+	receipt, err := testRunner(adapter).Apply(
+		context.Background(), plan, plan.Digest, stateRoot,
+	)
+	if err != nil {
+		t.Fatalf("Apply(failed action): %v", err)
+	}
+	if receipt.Complete || adapter.preflights != 1 || adapter.cleanups != 1 {
+		t.Fatalf(
+			"failed lifecycle receipt=%+v preflights=%d cleanups=%d",
+			receipt,
+			adapter.preflights,
+			adapter.cleanups,
+		)
+	}
+}
+
+func TestPlanWideActionRequiredPreflightPreservesClassification(t *testing.T) {
+	plan := singleActionPlan(t, "lima-guest:mds")
+	adapter := &planPreflightAdapter{
+		fakeAdapter: newFakeAdapter(),
+		preflightErr: &adapters.ActionRequiredError{
+			Reason: "user-owned harness launcher must be resolved manually",
+		},
+	}
+	stateRoot := filepath.Join(t.TempDir(), "state")
+	_, err := testRunner(adapter).Apply(
+		context.Background(), plan, plan.Digest, stateRoot,
+	)
+	var actionRequired *adapters.ActionRequiredError
+	if !errors.As(err, &actionRequired) {
+		t.Fatalf("Apply(action-required preflight) error = %v", err)
+	}
+	if _, statErr := os.Lstat(stateRoot); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("state root exists after action-required preflight: %v", statErr)
+	}
+}
+
 func TestChangedTargetPreimageMutatesNothing(t *testing.T) {
 	plan := singleActionPlan(t, "lima-guest:mds")
 	adapter := newFakeAdapter()
@@ -301,6 +366,27 @@ type fakeAdapter struct {
 	installed  map[string]bool
 	applyCount map[string]int
 	failOnce   map[string]bool
+}
+
+type planPreflightAdapter struct {
+	*fakeAdapter
+	preflightErr error
+	preflights   int
+	cleanups     int
+}
+
+func (adapter *planPreflightAdapter) Preflight(
+	_ context.Context,
+	_ planning.Plan,
+) (func() error, error) {
+	adapter.preflights++
+	if adapter.preflightErr != nil {
+		return nil, adapter.preflightErr
+	}
+	return func() error {
+		adapter.cleanups++
+		return nil
+	}, nil
 }
 
 type actionRequiredAdapter struct {

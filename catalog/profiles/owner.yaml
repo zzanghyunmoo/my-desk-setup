@@ -26,6 +26,7 @@ selection:
   - notion-cli
   - notion-desktop
   - nvchad
+  - oh-my-harness
   - opencode
   - python
   - slack

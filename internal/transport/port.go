@@ -25,10 +25,22 @@ type Command struct {
 	Arguments        []string
 	Stdin            []byte
 	Environment      map[string]string
+	EnvironmentMode  EnvironmentMode
 	WorkingDirectory string
 	Timeout          time.Duration
 	OutputLimit      int
 }
+
+type EnvironmentMode string
+
+const (
+	// EnvironmentSafeInherited preserves the existing command contract: only
+	// the reviewed ambient allowlist is inherited, then explicit values win.
+	EnvironmentSafeInherited EnvironmentMode = ""
+	// EnvironmentReplace starts from an empty environment and passes exactly
+	// the validated entries supplied by the caller.
+	EnvironmentReplace EnvironmentMode = "replace"
+)
 
 type Result struct {
 	Executable string
@@ -54,6 +66,25 @@ func (Executor) Run(
 	timeout time.Duration,
 	outputLimit int,
 ) (Result, error) {
+	return (Executor{}).RunCommand(ctx, Command{
+		Executable:       executable,
+		Arguments:        arguments,
+		Stdin:            stdin,
+		Environment:      environment,
+		WorkingDirectory: workingDirectory,
+		Timeout:          timeout,
+		OutputLimit:      outputLimit,
+	})
+}
+
+func (Executor) RunCommand(ctx context.Context, specification Command) (Result, error) {
+	executable := specification.Executable
+	arguments := specification.Arguments
+	stdin := specification.Stdin
+	environment := specification.Environment
+	workingDirectory := specification.WorkingDirectory
+	timeout := specification.Timeout
+	outputLimit := specification.OutputLimit
 	if executable == "" {
 		return Result{}, errors.New("executable is required")
 	}
@@ -63,7 +94,10 @@ func (Executor) Run(
 	if outputLimit <= 0 {
 		outputLimit = DefaultOutputLimit
 	}
-	commandEnv, err := commandEnvironment(environment)
+	commandEnv, err := commandEnvironmentFor(
+		environment,
+		specification.EnvironmentMode,
+	)
 	if err != nil {
 		return Result{}, fmt.Errorf("prepare command environment: %w", err)
 	}
@@ -128,10 +162,22 @@ func (Executor) Run(
 }
 
 func commandEnvironment(overrides map[string]string) ([]string, error) {
+	return commandEnvironmentFor(overrides, EnvironmentSafeInherited)
+}
+
+func commandEnvironmentFor(
+	overrides map[string]string,
+	mode EnvironmentMode,
+) ([]string, error) {
+	if mode != EnvironmentSafeInherited && mode != EnvironmentReplace {
+		return nil, fmt.Errorf("unsupported command environment mode %q", mode)
+	}
 	values := make(map[string]string, len(safeInheritedEnvironmentKeys)+len(overrides))
-	for _, key := range safeInheritedEnvironmentKeys {
-		if value, ok := os.LookupEnv(key); ok {
-			values[key] = value
+	if mode == EnvironmentSafeInherited {
+		for _, key := range safeInheritedEnvironmentKeys {
+			if value, ok := os.LookupEnv(key); ok {
+				values[key] = value
+			}
 		}
 	}
 	for key, value := range overrides {

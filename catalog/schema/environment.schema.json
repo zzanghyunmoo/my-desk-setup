@@ -53,6 +53,9 @@
             "terminal"
           ]
         },
+        "selection_policy": {
+          "enum": ["direct", "dependency-only"]
+        },
         "provides": {
           "type": "array",
           "minItems": 1,

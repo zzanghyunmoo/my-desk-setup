@@ -23,7 +23,25 @@ func Build(
 	facts target.Facts,
 	candidate Candidate,
 ) (Plan, catalog.Environment, error) {
-	plan, updated, err := build(environment, facts, candidate)
+	return BuildWithPlanBuilder(environment, facts, candidate, planning.Build)
+}
+
+type TargetPlanBuilder func(
+	catalog.Environment,
+	target.Facts,
+	planning.Selection,
+) (planning.Plan, error)
+
+// BuildWithPlanBuilder lets CLI entrypoints use the same composed target-plan
+// builder as plan/apply/doctor. OMH itself remains intentionally unsupported by
+// the generic lock updater until a future transaction can review child state.
+func BuildWithPlanBuilder(
+	environment catalog.Environment,
+	facts target.Facts,
+	candidate Candidate,
+	planBuilder TargetPlanBuilder,
+) (Plan, catalog.Environment, error) {
+	plan, updated, err := build(environment, facts, candidate, planBuilder)
 	if err != nil {
 		return Plan{}, catalog.Environment{}, invalid(err)
 	}
@@ -34,9 +52,19 @@ func build(
 	environment catalog.Environment,
 	facts target.Facts,
 	candidate Candidate,
+	planBuilder TargetPlanBuilder,
 ) (Plan, catalog.Environment, error) {
 	if err := validateCandidate(candidate); err != nil {
 		return Plan{}, catalog.Environment{}, err
+	}
+	if unsupportedHarnessUpdate(candidate.ComponentID) {
+		return Plan{}, catalog.Environment{}, fmt.Errorf(
+			"component %q must be updated through a reviewed catalog/lock change; generic update cannot preserve the approved child harness contract",
+			candidate.ComponentID,
+		)
+	}
+	if planBuilder == nil {
+		return Plan{}, catalog.Environment{}, errors.New("target plan builder is required")
 	}
 	component, err := pinnedComponent(environment, candidate.ComponentID)
 	if err != nil {
@@ -79,7 +107,7 @@ func build(
 	if err != nil {
 		return Plan{}, catalog.Environment{}, err
 	}
-	targetPlan, err := planning.Build(updated, facts, selection)
+	targetPlan, err := planBuilder(updated, facts, selection)
 	if err != nil {
 		return Plan{}, catalog.Environment{}, fmt.Errorf("build resulting target plan: %w", err)
 	}
@@ -105,6 +133,10 @@ func build(
 		return Plan{}, catalog.Environment{}, err
 	}
 	return plan, updated, nil
+}
+
+func unsupportedHarnessUpdate(componentID string) bool {
+	return componentID == "oh-my-harness" || componentID == "omh-node-runtime"
 }
 
 func usesInstaller(component catalog.Component, installer string) bool {
@@ -319,6 +351,12 @@ func Verify(plan Plan, expected string) error {
 func verify(plan Plan, expected string) error {
 	if plan.SchemaVersion != PlanSchema {
 		return fmt.Errorf("unsupported update plan schema %q", plan.SchemaVersion)
+	}
+	if unsupportedHarnessUpdate(plan.ComponentID) {
+		return fmt.Errorf(
+			"component %q is not supported by generic update",
+			plan.ComponentID,
+		)
 	}
 	actual, err := Digest(plan)
 	if err != nil {

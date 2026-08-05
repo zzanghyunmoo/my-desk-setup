@@ -3,6 +3,7 @@ package cli
 import (
 	"errors"
 
+	"github.com/zzanghyunmoo/my-desk-setup/internal/catalog"
 	"github.com/zzanghyunmoo/my-desk-setup/internal/planning"
 )
 
@@ -11,6 +12,15 @@ type selectionArguments struct {
 	profile     string
 	components  []string
 	interactive bool
+}
+
+func interactiveLabels(environment catalog.Environment) map[string]string {
+	components := catalog.SelectionCandidates(environment)
+	labels := make(map[string]string, len(components))
+	for _, component := range components {
+		labels[component.ID] = component.Name
+	}
+	return labels
 }
 
 func (arguments selectionArguments) selection(interactive []string) (planning.Selection, error) {

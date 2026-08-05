@@ -51,21 +51,63 @@ versions:
         format: zip
         executable: bun-windows-x64-baseline/bun.exe
   claude-code:
-    version: 2.1.212
-    source: npm registry
-    provenance: https://www.npmjs.com/package/@anthropic-ai/claude-code
-    npm:
-      tarball: https://registry.npmjs.org/@anthropic-ai/claude-code/-/claude-code-2.1.212.tgz
-      integrity: sha512-MEasj1oaoARRKEWU7eHJ6DWC2TC8ogml9QUDihbmxYI2Ij5Ol1leW90DIj8/a0xX3lfHZOwT3gJr0JxVKa8Sxw==
-      sha256: 2162841dd793d21671eccb7fe76fe9c3da6816adf447ba3890a4871b7e5f4e69
+    version: 2.1.210
+    source: OMH v0.3.0 reviewed native release
+    provenance: https://github.com/anthropics/claude-code/releases/tag/v2.1.210
+    artifacts:
+      darwin-arm64:
+        url: https://github.com/anthropics/claude-code/releases/download/v2.1.210/claude-darwin-arm64.tar.gz
+        sha256: 0d30caeef4dd693b331da31e0e0250e4ca6c5ec811f58ce961c2441d27efb1a2
+        format: tar.gz
+        executable: claude
+        executable_sha256: 1b471d62d1117482689d75447f5e050c640da717a5a3c91e6c13792450f8c662
+      darwin-amd64:
+        url: https://github.com/anthropics/claude-code/releases/download/v2.1.210/claude-darwin-x64.tar.gz
+        sha256: cb720c25d0eb355c333f9d69e37180a18cee1aef5e47a119d5f95853a1104bb0
+        format: tar.gz
+        executable: claude
+        executable_sha256: 892f2c878050d8829e67119328dd9768345fba18a58c169212b70597c9175c40
+      windows-arm64:
+        url: https://github.com/anthropics/claude-code/releases/download/v2.1.210/claude-win32-arm64.zip
+        sha256: 8a223f544b1bedf11b99dd6cb0b7901f6b55a50aa27e5f47b2f41d580da14566
+        format: zip
+        executable: claude.exe
+        executable_sha256: 4a603da0a33d49478e55938898ddd06c4ec5d1ec7f443d92dd4352665faaef05
+      windows-amd64:
+        url: https://github.com/anthropics/claude-code/releases/download/v2.1.210/claude-win32-x64.zip
+        sha256: c11829a1ca6beb6e705a5859820392830f64f9c3708c16e8eac5104e4182e327
+        format: zip
+        executable: claude.exe
+        executable_sha256: 29aa99c436f0d4125780691123b756176d83b59cc7d492304cd4694292d3f04f
   codex:
-    version: 0.144.6
-    source: GitHub release
-    provenance: https://github.com/openai/codex/releases
-    npm:
-      tarball: https://registry.npmjs.org/@openai/codex/-/codex-0.144.6.tgz
-      integrity: sha512-wk+2CWiBNXiJLBoN2D08N9RceWkSBnlgk5g2K1a4CXrP/C0gdlHyRUG7RFzm9y41DCK/7tvCct233JVxyFmznw==
-      sha256: 779eab25aa8473583b3d1d6f9316a0ab8d0643fdfd0bfef80ce76cc8cf85e401
+    version: 0.144.4
+    source: OMH v0.3.0 reviewed native release
+    provenance: https://github.com/openai/codex/releases/tag/rust-v0.144.4
+    artifacts:
+      darwin-arm64:
+        url: https://github.com/openai/codex/releases/download/rust-v0.144.4/codex-aarch64-apple-darwin.tar.gz
+        sha256: 77c8969a481302f9db1d9ea2a6c21c083abae3f1a8fc8a7275dc38323699391e
+        format: tar.gz
+        executable: codex-aarch64-apple-darwin
+        executable_sha256: 3302acbda5f53de1a71ebdb0c0f2aae0d47f9324aa9fb6b4e78a47014fd51c7d
+      darwin-amd64:
+        url: https://github.com/openai/codex/releases/download/rust-v0.144.4/codex-x86_64-apple-darwin.tar.gz
+        sha256: 274ea4931246621d477ad61d61ea3303527878e77fa910087df52153f5e6188e
+        format: tar.gz
+        executable: codex-x86_64-apple-darwin
+        executable_sha256: 1c87c8df60f80a2b08d78bbb9b381fbe0829dc6bbf66b6fa1974cd21e37a5da1
+      windows-arm64:
+        url: https://github.com/openai/codex/releases/download/rust-v0.144.4/codex-aarch64-pc-windows-msvc.exe.zip
+        sha256: 42a3aaa271626dc479aef5000a5632d017d25d8b483304070903b73b11aba11d
+        format: zip
+        executable: codex-aarch64-pc-windows-msvc.exe
+        executable_sha256: 84406bf7cb8c689e46ebd31244f0458fce3eeed781ec1030399a96baab062932
+      windows-amd64:
+        url: https://github.com/openai/codex/releases/download/rust-v0.144.4/codex-x86_64-pc-windows-msvc.exe.zip
+        sha256: d731eee110fe287fcb8e201e9bdf39920e863bfc3c97f21e2d697a35d38c63c5
+        format: zip
+        executable: codex-x86_64-pc-windows-msvc.exe
+        executable_sha256: 51398051c2332b6afe08dc3b9dbb4056085c197f35ca57a307ee303d450cada5
   flutter:
     version: 3.44.4
     source: Flutter stable archive
@@ -193,14 +235,85 @@ versions:
       tarball: https://registry.npmjs.org/ntn/-/ntn-0.21.5.tgz
       integrity: sha512-GxSo9x8nuarbx1haWL5Ue1hl+3i5iF+BtGwVJhf8bx8SRat6OkwD8Jf+MEB42sqk7PoePDpGQPh8mih0sSFwTw==
       sha256: 884d6518ed7a457925e2980b6386055a49f9dc09cb960428db35b3fd377f5025
+  omh-node-runtime:
+    version: 22.19.0
+    source: Official Node.js release for OMH v0.3.0
+    provenance: https://nodejs.org/dist/v22.19.0/SHASUMS256.txt
+    artifacts:
+      darwin-arm64:
+        url: https://nodejs.org/dist/v22.19.0/node-v22.19.0-darwin-arm64.tar.gz
+        sha256: c59006db713c770d6ec63ae16cb3edc11f49ee093b5c415d667bb4f436c6526d
+        format: tar.gz
+        executable: node-v22.19.0-darwin-arm64/bin/node
+      darwin-amd64:
+        url: https://nodejs.org/dist/v22.19.0/node-v22.19.0-darwin-x64.tar.gz
+        sha256: 3cfed4795cd97277559763c5f56e711852d2cc2420bda1cea30c8aa9ac77ce0c
+        format: tar.gz
+        executable: node-v22.19.0-darwin-x64/bin/node
+      windows-arm64:
+        url: https://nodejs.org/dist/v22.19.0/node-v22.19.0-win-arm64.zip
+        sha256: e4a7336010d58ff35b53d9dd5869095c56089c70913cf22508cf8183593e56b2
+        format: zip
+        executable: node-v22.19.0-win-arm64/node.exe
+      windows-amd64:
+        url: https://nodejs.org/dist/v22.19.0/node-v22.19.0-win-x64.zip
+        sha256: ea3fad0e67a991d8477d8c01344b56e69c676ccb733f065b22436994b1253f86
+        format: zip
+        executable: node-v22.19.0-win-x64/node.exe
+  oh-my-harness:
+    version: 0.3.0
+    source: GitHub immutable release
+    provenance: https://github.com/zzanghyunmoo/oh-my-harness/commit/95882328d339e7336e8a60a90f3e2640c1244da3
+    artifacts:
+      darwin-arm64:
+        url: https://github.com/zzanghyunmoo/oh-my-harness/releases/download/v0.3.0/oh-my-harness-v0.3.0.tgz
+        sha256: da805da0130e937913706f98ddb415f5e4b4bc12d04505b269f08bf66237ea73
+        format: tar.gz
+        executable: package/omh
+      darwin-amd64:
+        url: https://github.com/zzanghyunmoo/oh-my-harness/releases/download/v0.3.0/oh-my-harness-v0.3.0.tgz
+        sha256: da805da0130e937913706f98ddb415f5e4b4bc12d04505b269f08bf66237ea73
+        format: tar.gz
+        executable: package/omh
+      windows-arm64:
+        url: https://github.com/zzanghyunmoo/oh-my-harness/releases/download/v0.3.0/oh-my-harness-v0.3.0.tgz
+        sha256: da805da0130e937913706f98ddb415f5e4b4bc12d04505b269f08bf66237ea73
+        format: tar.gz
+        executable: package/omh.cmd
+      windows-amd64:
+        url: https://github.com/zzanghyunmoo/oh-my-harness/releases/download/v0.3.0/oh-my-harness-v0.3.0.tgz
+        sha256: da805da0130e937913706f98ddb415f5e4b4bc12d04505b269f08bf66237ea73
+        format: tar.gz
+        executable: package/omh.cmd
   opencode:
-    version: 1.17.7
-    source: GitHub release
-    provenance: https://github.com/anomalyco/opencode/releases
-    npm:
-      tarball: https://registry.npmjs.org/opencode-ai/-/opencode-ai-1.17.7.tgz
-      integrity: sha512-5oMjuqlVL78JhvXshwp2NCXCI+CHr24wWi7/5aI0CZoHnI44qTqssWOBUW59dPTpRGSOQmXTDTOOsPVYW38JPg==
-      sha256: 1642eca13464b2616a786c5a860edfc7daf1c40dc9cfb880d27a37a5d1c04e1a
+    version: 1.18.0
+    source: OMH v0.3.0 reviewed native release
+    provenance: https://github.com/anomalyco/opencode/releases/tag/v1.18.0
+    artifacts:
+      darwin-arm64:
+        url: https://github.com/anomalyco/opencode/releases/download/v1.18.0/opencode-darwin-arm64.zip
+        sha256: 2b2b5e2da7a3bc82cad8551373114683e8632df09f5ea6af1b9ea36961795abd
+        format: zip
+        executable: opencode
+        executable_sha256: 74537e1cdb65451b593a8854af26ea6a8482d87350958e326f53141f62849ac4
+      darwin-amd64:
+        url: https://github.com/anomalyco/opencode/releases/download/v1.18.0/opencode-darwin-x64-baseline.zip
+        sha256: 6b157acf606906e953c58c9d3b7c101dbe6f5e7eb4e8a12e4e45b4134f3e269c
+        format: zip
+        executable: opencode
+        executable_sha256: 57d1872102ced94f4755ae5eb85e96c7b2579b5b2a92b621c47929efccf82239
+      windows-arm64:
+        url: https://github.com/anomalyco/opencode/releases/download/v1.18.0/opencode-windows-arm64.zip
+        sha256: e76bb2bbcbbd982fcbbbdc0cd812018920b577e9e2bbe229a11d7190bbf0b467
+        format: zip
+        executable: opencode.exe
+        executable_sha256: f698132b366d3d4d5345cec0e3148ea5f50a0c41ddbf73c6c59bbe992095a776
+      windows-amd64:
+        url: https://github.com/anomalyco/opencode/releases/download/v1.18.0/opencode-windows-x64-baseline.zip
+        sha256: cb08eeece06127b8034d4b0acadcb4b6fb0192fe98ba8fa582cd6530c0ee3438
+        format: zip
+        executable: opencode.exe
+        executable_sha256: 06f5e20813ed50aefcbb0c2d120e89ffca9d5f35826990f1bafa39af1ce2707e
   linear-cli:
     version: 2.3.0
     source: npm registry

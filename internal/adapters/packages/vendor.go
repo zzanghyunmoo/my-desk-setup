@@ -17,6 +17,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/zzanghyunmoo/my-desk-setup/internal/adapters"
 	exactartifact "github.com/zzanghyunmoo/my-desk-setup/internal/artifact"
 	"github.com/zzanghyunmoo/my-desk-setup/internal/catalog"
 )
@@ -192,11 +193,59 @@ func (vendor Vendor) Install(
 			return err
 		}
 	}
-	name := filepath.Base(artifact.Executable)
-	if vendor.Platform != "windows" {
-		name = strings.TrimSuffix(name, ".exe")
+	if artifact.ExecutableSHA256 != "" {
+		if _, err := exactVendorExecutableDigest(sourcePath, artifact); err != nil {
+			return err
+		}
+	}
+	name, err := vendorExecutableName(component, artifact, vendor.Platform)
+	if err != nil {
+		return err
 	}
 	return installExecutable(sourcePath, filepath.Join(vendor.Home, ".local", "bin", name))
+}
+
+func exactVendorExecutableDigest(
+	path string,
+	artifact catalog.Artifact,
+) (string, error) {
+	digest, err := exactartifact.SHA256File(path)
+	if err != nil {
+		return "", fmt.Errorf("hash extracted executable: %w", err)
+	}
+	if artifact.ExecutableSHA256 != "" && digest != artifact.ExecutableSHA256 {
+		return digest, fmt.Errorf(
+			"executable digest mismatch: expected %s got %s",
+			artifact.ExecutableSHA256,
+			digest,
+		)
+	}
+	return digest, nil
+}
+
+func vendorExecutableName(
+	component catalog.Component,
+	artifact catalog.Artifact,
+	platform string,
+) (string, error) {
+	name := filepath.Base(artifact.Executable)
+	if component.Kind == "agent" {
+		if len(component.Verification.Command) == 0 {
+			return "", fmt.Errorf("agent %s has no verification command", component.ID)
+		}
+		name = component.Verification.Command[0]
+		if !adapters.ValidExecutableName(name) {
+			return "", fmt.Errorf("agent %s has invalid executable name %q", component.ID, name)
+		}
+	}
+	if platform == "windows" {
+		if !strings.HasSuffix(strings.ToLower(name), ".exe") {
+			name += ".exe"
+		}
+	} else {
+		name = strings.TrimSuffix(name, ".exe")
+	}
+	return name, nil
 }
 
 func ReviewedHTTPClient(

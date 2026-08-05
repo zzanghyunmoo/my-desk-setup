@@ -2,12 +2,16 @@ package host
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/zzanghyunmoo/my-desk-setup/internal/adapters"
-	guestadapter "github.com/zzanghyunmoo/my-desk-setup/internal/adapters/guest"
 	"github.com/zzanghyunmoo/my-desk-setup/internal/adapters/packages"
+	"github.com/zzanghyunmoo/my-desk-setup/internal/artifact"
 	"github.com/zzanghyunmoo/my-desk-setup/internal/catalog"
+	harnessruntime "github.com/zzanghyunmoo/my-desk-setup/internal/harness"
+	"github.com/zzanghyunmoo/my-desk-setup/internal/planning"
 	"github.com/zzanghyunmoo/my-desk-setup/internal/transport"
 	"github.com/zzanghyunmoo/my-desk-setup/internal/version"
 )
@@ -15,6 +19,17 @@ import (
 type Options struct {
 	AllowReplace          bool
 	GuestBootstrapArchive string
+	HarnessAcquirer       planning.SnapshotAcquirer
+	HarnessRuntime        HarnessRuntime
+	HarnessConfigRoot     string
+	HarnessTempRoot       string
+	HarnessStateRoot      string
+	HarnessLocale         string
+	SystemRoot            string
+	ComSpec               string
+	AppData               string
+	LocalAppData          string
+	PathExt               string
 }
 
 type GuestBootstrapArchiveError struct {
@@ -133,12 +148,41 @@ func NewWithOptions(
 	} {
 		byID[componentID] = desktop
 	}
-	if platform == "darwin" {
-		for _, componentID := range []string{"claude-code", "opencode", "codex"} {
-			byID[componentID] = guestadapter.Agent{
-				Home: home, Delegate: packageComponent,
-			}
+	tempRoot := options.HarnessTempRoot
+	if tempRoot == "" {
+		tempRoot = os.TempDir()
+	}
+	configRoot := options.HarnessConfigRoot
+	if configRoot == "" {
+		configRoot = filepath.Join(home, ".config")
+	}
+	stateRoot := options.HarnessStateRoot
+	if stateRoot == "" {
+		stateRoot = filepath.Join(
+			home, ".local", "state", "my-desk-setup", "oh-my-harness",
+		)
+	}
+	acquirer := options.HarnessAcquirer
+	if acquirer == nil {
+		acquirer = planning.ArtifactSnapshotAcquirer{
+			Snapshotter: artifact.Snapshotter{TempRoot: tempRoot},
 		}
+	}
+	childRuntime := options.HarnessRuntime
+	if childRuntime == nil {
+		childRuntime = harnessruntime.Runner{Port: port}
+	}
+	byID["oh-my-harness"] = &Harness{
+		Environment: environment,
+		Composer: planning.Composer{
+			Acquirer: acquirer, Previewer: childRuntime,
+			Home: home, ConfigRoot: configRoot, TempRoot: tempRoot,
+			StateRoot: stateRoot, Locale: options.HarnessLocale,
+			SystemRoot: options.SystemRoot, ComSpec: options.ComSpec,
+			AppData: options.AppData, LocalAppData: options.LocalAppData,
+			PathExt: options.PathExt, Timeout: 45 * time.Second,
+		},
+		Runtime: childRuntime, Home: home, Platform: platform,
 	}
 	return adapters.Router{
 		Default: packageComponent,

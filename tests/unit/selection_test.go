@@ -22,13 +22,9 @@ func TestAllProfileAndComponentsProduceSamePlan(t *testing.T) {
 	environment := embeddedCatalog(t)
 	facts := fixedGuestFacts()
 
-	allResolved, err := catalog.ResolveProfile(environment, "all", catalog.TargetLimaGuest)
-	if err != nil {
-		t.Fatalf("ResolveProfile(all): %v", err)
-	}
 	var ids []string
-	for _, item := range allResolved {
-		ids = append(ids, item.Component.ID)
+	for _, component := range catalog.SelectionRoots(environment, catalog.TargetLimaGuest) {
+		ids = append(ids, component.ID)
 	}
 	environment.Profiles = copyCatalogProfiles(environment.Profiles)
 	environment.Profiles["computed-all"] = catalog.Profile{

@@ -2,10 +2,51 @@ package adapters
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/zzanghyunmoo/my-desk-setup/internal/planning"
 )
+
+func (router Router) Preflight(
+	ctx context.Context,
+	plan planning.Plan,
+) (func() error, error) {
+	cleanups := make([]func() error, 0)
+	for _, action := range plan.Actions {
+		component, err := router.adapter(action.ComponentID)
+		if err != nil {
+			cleanupErr := cleanupAll(cleanups)()
+			return nil, errors.Join(err, cleanupErr)
+		}
+		preflighter, ok := component.(PlanPreflighter)
+		if !ok {
+			continue
+		}
+		cleanup, err := preflighter.Preflight(ctx, plan)
+		if err != nil {
+			if cleanup != nil {
+				cleanups = append(cleanups, cleanup)
+			}
+			cleanupErr := cleanupAll(cleanups)()
+			return nil, errors.Join(err, cleanupErr)
+		}
+		if cleanup != nil {
+			cleanups = append(cleanups, cleanup)
+		}
+	}
+	return cleanupAll(cleanups), nil
+}
+
+func cleanupAll(cleanups []func() error) func() error {
+	return func() error {
+		var result error
+		for index := len(cleanups) - 1; index >= 0; index-- {
+			result = errors.Join(result, cleanups[index]())
+		}
+		return result
+	}
+}
 
 type Router struct {
 	Default Component

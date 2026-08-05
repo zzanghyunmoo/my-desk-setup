@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "purpose": "published-release-consumer-contract",
+  "production": true,
+  "release": {
+    "version": "0.3.0",
+    "tag": "v0.3.0",
+    "archive_filename": "oh-my-harness-v0.3.0.tgz",
+    "archive_sha256": "da805da0130e937913706f98ddb415f5e4b4bc12d04505b269f08bf66237ea73",
+    "archive_size": 15444272,
+    "sidecar_filename": "oh-my-harness-v0.3.0.release.json",
+    "source_commit": "95882328d339e7336e8a60a90f3e2640c1244da3",
+    "source_tree": "818aeec8721961d6732b1f674561f08f803cb4a3",
+    "catalog_revision": "e0fb45739b54b868cf34d8adae09e1611e5d7be1bd813e3c4d0eaf02a9f553e2"
+  }
+}

@@ -822,6 +822,24 @@ func validateCertificationReceipt(
 				action.ID,
 			)
 		}
+		if action.ComponentID == "oh-my-harness" {
+			for _, key := range []string{
+				"artifact_archive_sha256",
+				"harness_child_digest",
+				"harness_child_catalog_revision",
+				"harness_config_digest",
+				"harness_addon_summary_digest",
+				"harness_ownership_summary_digest",
+			} {
+				if outcome.Approval[key] != action.Inputs[key] || outcome.Approval[key] == "" {
+					return fmt.Errorf(
+						"receipt outcome %s does not preserve approved harness input %s",
+						action.ID,
+						key,
+					)
+				}
+			}
+		}
 		if outcome.Status != "ready" {
 			allReady = false
 		}
