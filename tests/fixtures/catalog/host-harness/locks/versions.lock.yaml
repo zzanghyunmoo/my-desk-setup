@@ -128,7 +128,7 @@ versions:
         sha256: 274ea4931246621d477ad61d61ea3303527878e77fa910087df52153f5e6188e
         format: tar.gz
         executable: codex-x86_64-apple-darwin
-        executable_sha256: 1c87c8df60b80a2b08d78bbb9b381fbe0829dc6bbf66b6fa1974cd21e37a5da1
+        executable_sha256: 1c87c8df60f80a2b08d78bbb9b381fbe0829dc6bbf66b6fa1974cd21e37a5da1
       windows-arm64:
         url: https://github.com/openai/codex/releases/download/rust-v0.144.4/codex-aarch64-pc-windows-msvc.exe.zip
         sha256: 42a3aaa271626dc479aef5000a5632d017d25d8b483304070903b73b11aba11d

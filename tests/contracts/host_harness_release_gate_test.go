@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/zzanghyunmoo/my-desk-setup/internal/artifact"
+	"github.com/zzanghyunmoo/my-desk-setup/internal/catalog"
 	"github.com/zzanghyunmoo/my-desk-setup/internal/harness"
 	"github.com/zzanghyunmoo/my-desk-setup/internal/transport"
 )
@@ -99,6 +100,7 @@ func TestHostHarnessReleaseGateRunsActualMergedArtifactPreviewAndApply(t *testin
 			t.Errorf("Close(OMH snapshot): %v", closeErr)
 		}
 	})
+	assertReleaseAdapterIdentities(t, omHSnapshot, environment)
 
 	root := t.TempDir()
 	request := harness.Request{
@@ -135,6 +137,84 @@ func TestHostHarnessReleaseGateRunsActualMergedArtifactPreviewAndApply(t *testin
 		applied.CatalogRevision != preview.CatalogRevision ||
 		len(applied.SelectedAgents) != 0 {
 		t.Fatalf("actual apply = %+v", applied)
+	}
+}
+
+type releaseRuntimeAdapter struct {
+	Platforms []struct {
+		Acquisition struct {
+			Asset struct {
+				DownloadURL string `json:"downloadUrl"`
+				SHA256      string `json:"sha256"`
+			} `json:"asset"`
+		} `json:"acquisition"`
+		Architecture string `json:"architecture"`
+		Executable   struct {
+			MemberPath string `json:"memberPath"`
+			SHA256     string `json:"sha256"`
+		} `json:"executable"`
+		OS string `json:"os"`
+	} `json:"platforms"`
+}
+
+func assertReleaseAdapterIdentities(
+	t *testing.T,
+	snapshot *artifact.Snapshot,
+	environment catalog.Environment,
+) {
+	t.Helper()
+	files := map[string]string{
+		"claude-code": "claude-code.json",
+		"opencode":    "opencode.json",
+		"codex":       "codex.json",
+	}
+	for id, name := range files {
+		var adapter releaseRuntimeAdapter
+		decodeBoundedReleaseJSON(
+			t,
+			snapshot.Path("package/harness/adapters/"+name),
+			&adapter,
+		)
+		actual := make(map[string]catalog.Artifact, 4)
+		for _, platform := range adapter.Platforms {
+			osName := platform.OS
+			if osName == "win32" {
+				osName = "windows"
+			}
+			architecture := platform.Architecture
+			if architecture == "x64" {
+				architecture = "amd64"
+			}
+			key := osName + "-" + architecture
+			if key != "darwin-arm64" && key != "darwin-amd64" &&
+				key != "windows-arm64" && key != "windows-amd64" {
+				continue
+			}
+			actual[key] = catalog.Artifact{
+				URL:              platform.Acquisition.Asset.DownloadURL,
+				SHA256:           platform.Acquisition.Asset.SHA256,
+				Executable:       platform.Executable.MemberPath,
+				ExecutableSHA256: platform.Executable.SHA256,
+			}
+		}
+		reviewed := environment.Lock.Versions[id].Artifacts
+		if len(actual) != 4 || len(reviewed) != 4 {
+			t.Fatalf("%s release identity platforms=%d fixture=%d", id, len(actual), len(reviewed))
+		}
+		for key, expected := range reviewed {
+			got, exists := actual[key]
+			if !exists || got.URL != expected.URL || got.SHA256 != expected.SHA256 ||
+				got.Executable != expected.Executable ||
+				got.ExecutableSHA256 != expected.ExecutableSHA256 {
+				t.Fatalf(
+					"%s/%s release identity=%+v fixture=%+v",
+					id,
+					key,
+					got,
+					expected,
+				)
+			}
+		}
 	}
 }
 
