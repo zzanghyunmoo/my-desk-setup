@@ -183,21 +183,22 @@ func (composer Composer) Compose(
 		agentExecutables[id] = snapshot.Executable()
 	}
 	child, err := composer.Previewer.Preview(ctx, harness.Request{
-		NodeExecutable:   nodeSnapshot.Executable(),
-		Entrypoint:       harnessSnapshot.Path(harnessEntrypoint),
-		StateRoot:        composer.StateRoot,
-		Home:             composer.Home,
-		ConfigRoot:       composer.ConfigRoot,
-		TempRoot:         composer.TempRoot,
-		Platform:         base.Target.OS,
-		Locale:           composer.Locale,
-		SystemRoot:       composer.SystemRoot,
-		ComSpec:          composer.ComSpec,
-		AppData:          composer.AppData,
-		LocalAppData:     composer.LocalAppData,
-		PathExt:          composer.PathExt,
-		AgentExecutables: agentExecutables,
-		Timeout:          composer.Timeout,
+		NodeExecutable:         nodeSnapshot.Executable(),
+		Entrypoint:             harnessSnapshot.Path(harnessEntrypoint),
+		StateRoot:              composer.StateRoot,
+		Home:                   composer.Home,
+		ConfigRoot:             composer.ConfigRoot,
+		TempRoot:               composer.TempRoot,
+		Platform:               base.Target.OS,
+		Locale:                 composer.Locale,
+		SystemRoot:             composer.SystemRoot,
+		ComSpec:                composer.ComSpec,
+		AppData:                composer.AppData,
+		LocalAppData:           composer.LocalAppData,
+		PathExt:                composer.PathExt,
+		AgentExecutables:       agentExecutables,
+		ManagedAgentIdentities: runtimeIdentities(specifications, selectedAgents),
+		Timeout:                composer.Timeout,
 	})
 	if err != nil {
 		code := "child-preview"
@@ -287,15 +288,7 @@ func Compose(base Plan, composition Composition) (Plan, error) {
 			action.Dependencies = append(action.Dependencies, agentAction.ID)
 		}
 		sort.Strings(action.Dependencies)
-		agentIdentities := make([]string, 0, len(selectedAgents))
-		for _, id := range selectedAgents {
-			agentIdentity := identityByID[id]
-			agentIdentities = append(agentIdentities,
-				id+"@"+agentIdentity.Version+":"+
-					agentIdentity.ArchiveSHA256+":"+
-					agentIdentity.ExecutableSHA256,
-			)
-		}
+		agentIdentities := runtimeIdentitiesFromMap(identityByID, selectedAgents)
 		action.Inputs["harness_schema_version"] = child.SchemaVersion
 		action.Inputs["harness_child_digest"] = child.Digest
 		action.Inputs["harness_child_catalog_revision"] = child.CatalogRevision
@@ -546,6 +539,24 @@ func identities(specifications []snapshotSpecification) []ArtifactIdentity {
 	result := make([]ArtifactIdentity, 0, len(specifications))
 	for _, specification := range specifications {
 		result = append(result, specification.identity)
+	}
+	return result
+}
+
+func runtimeIdentities(specifications []snapshotSpecification, selectedAgents []string) []string {
+	byID := make(map[string]ArtifactIdentity, len(specifications))
+	for _, specification := range specifications {
+		byID[specification.identity.ComponentID] = specification.identity
+	}
+	return runtimeIdentitiesFromMap(byID, selectedAgents)
+}
+
+func runtimeIdentitiesFromMap(byID map[string]ArtifactIdentity, selectedAgents []string) []string {
+	result := make([]string, 0, len(selectedAgents))
+	for _, id := range selectedAgents {
+		identity := byID[id]
+		result = append(result, id+"@"+identity.Version+":"+
+			identity.ArchiveSHA256+":"+identity.ExecutableSHA256)
 	}
 	return result
 }
