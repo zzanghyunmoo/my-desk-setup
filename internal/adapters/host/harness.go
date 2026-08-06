@@ -542,9 +542,18 @@ func (harness *Harness) stableRequest(action planning.Action) harnessruntime.Req
 		SystemRoot: harness.Composer.SystemRoot, ComSpec: harness.Composer.ComSpec,
 		AppData: harness.Composer.AppData, LocalAppData: harness.Composer.LocalAppData,
 		PathExt: harness.Composer.PathExt, AgentExecutables: agentExecutables,
-		Timeout: harness.Composer.Timeout,
+		ManagedAgentIdentities: managedAgentIdentities(action),
+		Timeout:                harness.Composer.Timeout,
 	}
 	return request
+}
+
+func managedAgentIdentities(action planning.Action) []string {
+	value := action.Inputs["harness_agent_identities"]
+	if value == "" || value == "none" {
+		return nil
+	}
+	return strings.Split(value, ",")
 }
 
 func (harness *Harness) validateDestination(action planning.Action) error {

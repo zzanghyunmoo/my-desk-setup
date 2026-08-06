@@ -127,6 +127,13 @@ func TestComposerAcquiresSelectedArtifactsAndComposesDeterministically(t *testin
 	if got := previewer.requests[0].Entrypoint; !strings.HasSuffix(got, "/package/dist/cli/main.js") {
 		t.Fatalf("entrypoint = %q", got)
 	}
+	if got, want := previewer.requests[0].ManagedAgentIdentities, []string{
+		"claude-code@1.0.0:" + strings.Repeat("4", 64) + ":" + strings.Repeat("e", 64),
+		"codex@1.0.0:" + strings.Repeat("6", 64) + ":" + strings.Repeat("e", 64),
+		"opencode@1.0.0:" + strings.Repeat("1", 64) + ":" + strings.Repeat("e", 64),
+	}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("managed runtime identities = %q, want %q", got, want)
+	}
 	inputs := actionByComponent(t, first, "oh-my-harness").Inputs
 	harnessAction := actionByComponent(t, first, "oh-my-harness")
 	wantDependencies := []string{

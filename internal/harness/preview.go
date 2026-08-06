@@ -39,26 +39,30 @@ var (
 		"security-guidance",
 		"skill-creator",
 	}
-	summaryIDPattern = regexp.MustCompile(`^[a-z0-9]+(?:[.:_-][a-z0-9]+)*$`)
-	sha256Pattern    = regexp.MustCompile(`^[a-f0-9]{64}$`)
+	summaryIDPattern       = regexp.MustCompile(`^[a-z0-9]+(?:[.:_-][a-z0-9]+)*$`)
+	sha256Pattern          = regexp.MustCompile(`^[a-f0-9]{64}$`)
+	runtimeIdentityPattern = regexp.MustCompile(
+		`^(claude-code|codex|opencode)@([^:]{1,128}):([a-f0-9]{64}):([a-f0-9]{64})$`,
+	)
 )
 
 type Request struct {
-	NodeExecutable   string
-	Entrypoint       string
-	StateRoot        string
-	Home             string
-	ConfigRoot       string
-	TempRoot         string
-	Platform         string
-	Locale           string
-	SystemRoot       string
-	ComSpec          string
-	AppData          string
-	LocalAppData     string
-	PathExt          string
-	AgentExecutables map[string]string
-	Timeout          time.Duration
+	NodeExecutable         string
+	Entrypoint             string
+	StateRoot              string
+	Home                   string
+	ConfigRoot             string
+	TempRoot               string
+	Platform               string
+	Locale                 string
+	SystemRoot             string
+	ComSpec                string
+	AppData                string
+	LocalAppData           string
+	PathExt                string
+	AgentExecutables       map[string]string
+	ManagedAgentIdentities []string
+	Timeout                time.Duration
 }
 
 type Addon struct {
@@ -228,6 +232,11 @@ func validateRequest(request Request) ([]string, []string, error) {
 			return nil, nil, &Error{Code: "agent-executable"}
 		}
 	}
+	if err := validateRuntimeIdentities(
+		request.ManagedAgentIdentities, agents, request.AgentExecutables,
+	); err != nil {
+		return nil, nil, &Error{Code: "runtime-identity"}
+	}
 	directories := []string{filepath.Dir(request.NodeExecutable)}
 	for _, id := range agents {
 		directories = append(directories, filepath.Dir(request.AgentExecutables[id]))
@@ -235,6 +244,43 @@ func validateRequest(request Request) ([]string, []string, error) {
 	sort.Strings(directories)
 	directories = compact(directories)
 	return agents, directories, nil
+}
+
+func validateRuntimeIdentities(
+	identities []string,
+	agents []string,
+	executables map[string]string,
+) error {
+	if len(identities) == 0 {
+		return nil
+	}
+	if len(identities) != len(agents) {
+		return errors.New("runtime identities must match selected agents")
+	}
+	for index, identity := range identities {
+		match := runtimeIdentityPattern.FindStringSubmatch(identity)
+		if len(match) != 5 || match[1] != agents[index] {
+			return errors.New("invalid runtime identity")
+		}
+		actual, err := executableSHA256(executables[agents[index]])
+		if err != nil || actual != match[4] {
+			return errors.New("runtime executable digest differs")
+		}
+	}
+	return nil
+}
+
+func executableSHA256(path string) (string, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer file.Close()
+	hash := sha256.New()
+	if _, err := io.Copy(hash, file); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(hash.Sum(nil)), nil
 }
 
 func requireRegularAbsolute(value string) error {
@@ -264,6 +310,9 @@ func isolatedEnvironment(request Request, trustedDirectories []string) map[strin
 		"TMP":             request.TempRoot,
 		"TMPDIR":          request.TempRoot,
 		"XDG_CONFIG_HOME": request.ConfigRoot,
+	}
+	if len(request.ManagedAgentIdentities) > 0 {
+		environment["MDS_RUNTIME_IDENTITIES"] = strings.Join(request.ManagedAgentIdentities, ",")
 	}
 	if request.Platform == "windows" {
 		environment["USERPROFILE"] = request.Home

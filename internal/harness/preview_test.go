@@ -367,3 +367,35 @@ func pathListContains(value, wanted, platform string) bool {
 	}
 	return false
 }
+
+func TestValidateRuntimeIdentitiesBindsSelectedExecutableBytes(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "codex")
+	if err := os.WriteFile(path, []byte("verified runtime\n"), 0o700); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	digest, err := executableSHA256(path)
+	if err != nil {
+		t.Fatalf("executableSHA256: %v", err)
+	}
+	identity := "codex@0.146.1:" + strings.Repeat("a", 64) + ":" + digest
+	if err := validateRuntimeIdentities([]string{identity}, []string{"codex"}, map[string]string{"codex": path}); err != nil {
+		t.Fatalf("validateRuntimeIdentities(valid): %v", err)
+	}
+	wrongIdentity := "codex@0.146.1:" + strings.Repeat("a", 64) + ":" + strings.Repeat("0", 64)
+	if err := validateRuntimeIdentities([]string{wrongIdentity}, []string{"codex"}, map[string]string{"codex": path}); err == nil {
+		t.Fatal("validateRuntimeIdentities accepted a mismatched executable digest")
+	}
+}
+
+func TestIsolatedEnvironmentCarriesOnlyBoundRuntimeIdentities(t *testing.T) {
+	request := Request{
+		Home: "/home/test", ConfigRoot: "/config", TempRoot: "/temp", Platform: "darwin",
+		ManagedAgentIdentities: []string{
+			"codex@0.146.1:" + strings.Repeat("a", 64) + ":" + strings.Repeat("b", 64),
+		},
+	}
+	environment := isolatedEnvironment(request, []string{"/trusted/bin"})
+	if got, want := environment["MDS_RUNTIME_IDENTITIES"], request.ManagedAgentIdentities[0]; got != want {
+		t.Fatalf("MDS_RUNTIME_IDENTITIES = %q, want %q", got, want)
+	}
+}
