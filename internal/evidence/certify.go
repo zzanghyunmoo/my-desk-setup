@@ -15,6 +15,7 @@ import (
 
 	catalogdata "github.com/zzanghyunmoo/my-desk-setup/catalog"
 	exactartifact "github.com/zzanghyunmoo/my-desk-setup/internal/artifact"
+	"github.com/zzanghyunmoo/my-desk-setup/internal/capability"
 	"github.com/zzanghyunmoo/my-desk-setup/internal/catalog"
 	"github.com/zzanghyunmoo/my-desk-setup/internal/cli"
 	"github.com/zzanghyunmoo/my-desk-setup/internal/doctor"
@@ -254,7 +255,8 @@ func Certify(ctx context.Context, request CertifyRequest) (Manifest, error) {
 		!applyReceipt.Complete ||
 		repeatReceipt == nil ||
 		!snapshot.Ready ||
-		!targetIdentityComplete(plan.Target) {
+		!targetIdentityComplete(plan.Target) ||
+		!capabilitiesReady(plan, snapshot.Capabilities) {
 		status = StatusBlocked
 	}
 	now := time.Now().UTC()
@@ -270,6 +272,7 @@ func Certify(ctx context.Context, request CertifyRequest) (Manifest, error) {
 		CatalogRevision: plan.CatalogRevision, PlanDigest: plan.Digest,
 		Components: components, ApplyReceipt: &applyReceipt,
 		RepeatReceipt: repeatReceipt,
+		Capabilities:  snapshot.Capabilities,
 	}
 	if err := writeBundle(request.OutputDir, manifest, plan, snapshot); err != nil {
 		return Manifest{}, err
@@ -941,5 +944,45 @@ func doctorSnapshot(
 		CLIRevision:     report.Target.CLIRevision,
 		Ready:           report.Ready,
 		Checks:          checks,
+		Capabilities:    cloneCapabilityReceipt(report.Capabilities),
 	}, nil
+}
+
+func capabilitiesReady(plan planning.Plan, receipt *capability.Receipt) bool {
+	components := planComponentIDs(plan)
+	if len(capability.Expected(components)) == 0 {
+		return receipt == nil || validCapabilityReceipt(receipt)
+	}
+	return capability.MatchesExpected(components, receipt)
+}
+
+func validCapabilityReceipt(receipt *capability.Receipt) bool {
+	if receipt == nil || receipt.SchemaVersion != capability.SchemaVersion {
+		return false
+	}
+	recomputed := capability.Aggregate(receipt.ExpectedIDs, receipt.Checks)
+	return recomputed.Ready && receipt.Ready && len(receipt.Problems) == 0
+}
+
+func planRequiresIDECapabilities(plan planning.Plan) bool {
+	return len(capability.Expected(planComponentIDs(plan))) > 0
+}
+
+func planComponentIDs(plan planning.Plan) []string {
+	result := make([]string, 0, len(plan.Actions))
+	for _, action := range plan.Actions {
+		result = append(result, action.ComponentID)
+	}
+	return result
+}
+
+func cloneCapabilityReceipt(receipt *capability.Receipt) *capability.Receipt {
+	if receipt == nil {
+		return nil
+	}
+	cloned := capability.Aggregate(receipt.ExpectedIDs, receipt.Checks)
+	cloned.SchemaVersion = receipt.SchemaVersion
+	cloned.Ready = receipt.Ready
+	cloned.Problems = append([]capability.Problem(nil), receipt.Problems...)
+	return &cloned
 }

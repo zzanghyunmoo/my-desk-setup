@@ -119,6 +119,8 @@ func TestSnapshotterRejectsUnsafeArchiveEntries(t *testing.T) {
 		{name: "hardlink", entries: []archiveEntry{{name: "package/tool", typeflag: tar.TypeLink, linkname: "target"}}, want: "unsupported archive entry"},
 		{name: "device", entries: []archiveEntry{{name: "package/tool", typeflag: tar.TypeChar}}, want: "unsupported archive entry"},
 		{name: "duplicate", entries: []archiveEntry{{name: "package/tool", body: []byte("a"), typeflag: tar.TypeReg}, {name: "package/tool", body: []byte("b"), typeflag: tar.TypeReg}}, want: "duplicate archive path"},
+		{name: "case collision", entries: []archiveEntry{{name: "package/Tool", body: []byte("a"), typeflag: tar.TypeReg}, {name: "package/tool", body: []byte("b"), typeflag: tar.TypeReg}}, want: "case-colliding archive paths"},
+		{name: "parent case collision", entries: []archiveEntry{{name: "package/one", body: []byte("a"), typeflag: tar.TypeReg}, {name: "Package/two", body: []byte("b"), typeflag: tar.TypeReg}}, want: "case-colliding archive paths"},
 	}
 	for _, test := range cases {
 		t.Run(test.name, func(t *testing.T) {
@@ -153,6 +155,7 @@ func TestSnapshotterRejectsUnsafeZipEntries(t *testing.T) {
 		{name: "backslash", entries: []zipArchiveEntry{{name: `package\tool`, body: []byte("x")}}, want: "unsafe archive path"},
 		{name: "symlink", entries: []zipArchiveEntry{{name: "tool", body: []byte("target"), mode: os.ModeSymlink | 0o777}}, want: "unsupported archive entry"},
 		{name: "duplicate", entries: []zipArchiveEntry{{name: "tool", body: []byte("a")}, {name: "tool", body: []byte("b")}}, want: "duplicate archive path"},
+		{name: "case collision", entries: []zipArchiveEntry{{name: "Tool", body: []byte("a")}, {name: "tool", body: []byte("b")}}, want: "case-colliding archive paths"},
 	}
 	for _, test := range cases {
 		t.Run(test.name, func(t *testing.T) {

@@ -86,6 +86,30 @@ func TestCommandEnvironmentRejectsCredentialOverrides(t *testing.T) {
 	}
 }
 
+func TestCommandEnvironmentRejectsCredentialShapedValues(t *testing.T) {
+	_, err := commandEnvironment(map[string]string{
+		"MDS_OPTION": "ghp_canary123",
+	})
+	if err == nil || !strings.Contains(err.Error(), "credential") {
+		t.Fatalf("commandEnvironment() error = %v, want credential-shaped value rejection", err)
+	}
+}
+
+func TestGuestArgvReplaceModeClearsAmbientGuestEnvironment(t *testing.T) {
+	executable, arguments := guestArgv(Command{
+		Executable:      "/managed/tool",
+		Environment:     map[string]string{"HOME": "/isolated/home"},
+		EnvironmentMode: EnvironmentReplace,
+	})
+	if executable != "env" {
+		t.Fatalf("executable = %q, want env", executable)
+	}
+	want := []string{"-i", "HOME=/isolated/home", "/managed/tool"}
+	if !slices.Equal(arguments, want) {
+		t.Fatalf("arguments = %q, want exact replace argv %q", arguments, want)
+	}
+}
+
 func TestCommandEnvironmentReplaceModeDoesNotInheritSafeAmbientValues(t *testing.T) {
 	t.Setenv("PATH", "/ambient/bin")
 	t.Setenv("HOME", "/ambient/home")

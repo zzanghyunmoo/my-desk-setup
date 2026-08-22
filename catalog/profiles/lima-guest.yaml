@@ -12,6 +12,8 @@ selection:
   - neovim
   - nvchad
   - nvim-ide-tools
+  - nvim-jvm
+  - nvim-dotnet
   - notion-cli
   - linear-cli
   - gh

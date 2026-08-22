@@ -2,6 +2,7 @@ package packages
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -19,6 +20,7 @@ type Adapter struct {
 	Environment  catalog.Environment
 	Port         transport.Port
 	Vendor       Vendor
+	RuntimeTrees RuntimeTreeManager
 	Home         string
 	AllowReplace bool
 }
@@ -30,16 +32,43 @@ func (adapter Adapter) Observe(
 	if adapter.Port == nil {
 		return adapters.Observation{}, errors.New("package transport port is required")
 	}
-	component, _, err := adapter.componentAndLock(action.ComponentID)
+	component, lock, err := adapter.componentAndLock(action.ComponentID)
 	if err != nil {
 		return adapters.Observation{}, err
 	}
-	specs, err := adapter.launcherSpecs(action, component)
-	if err != nil {
-		return adapters.Observation{}, err
-	}
-	if launcher := observeLaunchers(specs); launcher.State != adapters.StateReady {
-		return launcher, nil
+	runtimeTree, hasRuntimeTree := adapter.runtimeTree(lock)
+	if hasRuntimeTree {
+		observation, _, err := runtimeTree.Observe(component, lock)
+		if err != nil || observation.State != adapters.StateReady {
+			return observation, err
+		}
+		viewLauncher := ""
+		if requiresRuntimeView(component) {
+			viewObservation, launcher, err := runtimeTree.ObserveRuntimeView(component, lock)
+			if err != nil || viewObservation.State != adapters.StateReady {
+				return viewObservation, err
+			}
+			viewLauncher = launcher
+		}
+		specs, err := adapter.runtimeTreeLauncherSpecs(action, component, lock, runtimeTree, viewLauncher)
+		if err != nil {
+			return adapters.Observation{}, err
+		}
+		if launcher := observeLaunchers(specs); launcher.State != adapters.StateReady {
+			return launcher, nil
+		}
+		// The immutable tree identity is the authoritative installed version.
+		// Executing a launcher belongs to Verify: protocol servers may not expose
+		// a version flag and Observe must remain a side-effect-free state probe.
+		return observation, nil
+	} else {
+		specs, err := adapter.launcherSpecs(action, component)
+		if err != nil {
+			return adapters.Observation{}, err
+		}
+		if launcher := observeLaunchers(specs); launcher.State != adapters.StateReady {
+			return launcher, nil
+		}
 	}
 	if len(action.Verification) == 0 || len(action.Verification[0]) == 0 {
 		return adapters.Observation{
@@ -47,7 +76,7 @@ func (adapter Adapter) Observe(
 			Detail: "verification command is missing",
 		}, nil
 	}
-	if action.Installer == "vendor" && component.VersionPolicy.Mode == "pinned" {
+	if !hasRuntimeTree && action.Installer == "vendor" && component.VersionPolicy.Mode == "pinned" {
 		path := filepath.Join(adapter.Home, ".local", "bin", action.Verification[0][0])
 		if adapter.Vendor.Platform == "windows" {
 			path += ".exe"
@@ -110,6 +139,31 @@ func (adapter Adapter) Apply(
 	if err != nil {
 		return err
 	}
+	runtimeTree, hasRuntimeTree := adapter.runtimeTree(lock)
+	if hasRuntimeTree {
+		if err := runtimeTree.Apply(ctx, component, lock); err != nil {
+			return err
+		}
+		if err := runtimeTree.ApplyRuntimeView(ctx, component, lock); err != nil {
+			return err
+		}
+		viewLauncher := ""
+		if requiresRuntimeView(component) {
+			viewObservation, launcher, err := runtimeTree.ObserveRuntimeView(component, lock)
+			if err != nil {
+				return err
+			}
+			if viewObservation.State != adapters.StateReady {
+				return errors.New("runtime view is not ready: " + viewObservation.Detail)
+			}
+			viewLauncher = launcher
+		}
+		specs, err := adapter.runtimeTreeLauncherSpecs(action, component, lock, runtimeTree, viewLauncher)
+		if err != nil {
+			return err
+		}
+		return publishLaunchers(specs)
+	}
 	specs, err := adapter.launcherSpecs(action, component)
 	if err != nil {
 		return err
@@ -170,7 +224,12 @@ func (adapter Adapter) Apply(
 		if buildErr != nil {
 			return errors.Join(buildErr, cleanup())
 		}
-		err = errors.Join(adapter.run(ctx, command), cleanup())
+		commands := make([]transport.Command, 0, 2)
+		if adapter.bunGlobalDependencyExists(action.Package) {
+			commands = append(commands, BunRemove(action.Package, adapter.environment()))
+		}
+		commands = append(commands, command)
+		err = errors.Join(adapter.runAll(ctx, commands), cleanup())
 	case "vendor":
 		adapter.Vendor.Home = adapter.Home
 		err = adapter.Vendor.Install(ctx, component, lock)
@@ -181,6 +240,25 @@ func (adapter Adapter) Apply(
 		return err
 	}
 	return publishLaunchers(specs)
+}
+
+func (adapter Adapter) bunGlobalDependencyExists(packageName string) bool {
+	manifestPath := filepath.Join(
+		adapter.Home,
+		".local", "share", "bun", "install", "global", "package.json",
+	)
+	content, err := os.ReadFile(manifestPath)
+	if err != nil {
+		return false
+	}
+	var manifest struct {
+		Dependencies map[string]json.RawMessage `json:"dependencies"`
+	}
+	if json.Unmarshal(content, &manifest) != nil {
+		return false
+	}
+	_, exists := manifest.Dependencies[packageName]
+	return exists
 }
 
 func validateMiseAction(action planning.Action, lock catalog.LockEntry) error {
@@ -213,6 +291,45 @@ func (adapter Adapter) Verify(
 	if adapter.Port == nil {
 		return errors.New("package transport port is required")
 	}
+	runtimeLauncher := ""
+	runtimeTree, component, lock, hasRuntimeTree, err := adapter.runtimeTreeForVerification(
+		action.ComponentID,
+	)
+	if err != nil {
+		return err
+	}
+	if hasRuntimeTree {
+		observation, launcher, err := runtimeTree.Observe(component, lock)
+		if err != nil {
+			return err
+		}
+		if observation.State != adapters.StateReady {
+			return errors.New("runtime tree is not ready: " + observation.Detail)
+		}
+		viewLauncher := ""
+		if requiresRuntimeView(component) {
+			viewObservation, candidate, err := runtimeTree.ObserveRuntimeView(component, lock)
+			if err != nil {
+				return err
+			}
+			if viewObservation.State != adapters.StateReady {
+				return errors.New("runtime view is not ready: " + viewObservation.Detail)
+			}
+			viewLauncher = candidate
+			launcher = candidate
+		}
+		specs, err := adapter.runtimeTreeLauncherSpecs(action, component, lock, runtimeTree, viewLauncher)
+		if err != nil {
+			return err
+		}
+		if launcherObservation := observeLaunchers(specs); launcherObservation.State != adapters.StateReady {
+			return errors.New("runtime tree launcher is not ready: " + launcherObservation.Detail)
+		}
+		runtimeLauncher = launcher
+		if runtimeTreeIsResource(lock, runtimeTree.Platform, runtimeTree.Arch) {
+			return nil
+		}
+	}
 	for _, argv := range action.Verification {
 		if len(argv) == 0 {
 			return fmt.Errorf("empty verification command for %s", action.ID)
@@ -225,11 +342,68 @@ func (adapter Adapter) Verify(
 			return err
 		}
 		command = adapter.commandWithManagedLauncher(action, command)
+		if runtimeLauncher != "" && runtimeTreeLauncherMatchesCommand(
+			lock, runtimeTree.Platform, runtimeTree.Arch, argv[0],
+		) {
+			command.Executable = runtimeLauncher
+		}
 		if _, err := adapter.execute(ctx, command); err != nil {
 			return fmt.Errorf("verify %s with %s: %w", action.ID, argv[0], err)
 		}
 	}
 	return adapter.verifyFunctionalToolchain(ctx, action)
+}
+
+// runtimeTreeForVerification preserves Verify's existing ability to execute
+// standalone bounded actions that are not backed by a catalog component. A
+// catalog-owned component still fails closed if its pinned lock is invalid.
+func (adapter Adapter) runtimeTreeForVerification(
+	componentID string,
+) (RuntimeTreeManager, catalog.Component, catalog.LockEntry, bool, error) {
+	for _, candidate := range adapter.Environment.Catalog.Components {
+		if candidate.ID != componentID {
+			continue
+		}
+		component, lock, err := adapter.componentAndLock(componentID)
+		if err != nil {
+			return RuntimeTreeManager{}, catalog.Component{}, catalog.LockEntry{}, false, err
+		}
+		manager, ok := adapter.runtimeTree(lock)
+		return manager, component, lock, ok, nil
+	}
+	return RuntimeTreeManager{}, catalog.Component{}, catalog.LockEntry{}, false, nil
+}
+
+func (adapter Adapter) runtimeTree(lock catalog.LockEntry) (RuntimeTreeManager, bool) {
+	key := adapter.Vendor.Platform + "-" + adapter.Vendor.Arch
+	artifactValue, exists := lock.Artifacts[key]
+	if !exists || artifactValue.Tree == nil {
+		return RuntimeTreeManager{}, false
+	}
+	manager := adapter.RuntimeTrees
+	manager.Home = adapter.Home
+	manager.Platform = adapter.Vendor.Platform
+	manager.Arch = adapter.Vendor.Arch
+	if manager.Snapshotter.Client == nil {
+		manager.Snapshotter.Client = adapter.Vendor.Client
+	}
+	return manager, true
+}
+
+func runtimeTreeIsResource(lock catalog.LockEntry, platform, arch string) bool {
+	value, exists := lock.Artifacts[platform+"-"+arch]
+	return exists && value.Tree != nil && value.Tree.Usage == "resource"
+}
+
+func runtimeTreeLauncherMatchesCommand(
+	lock catalog.LockEntry,
+	platform,
+	arch,
+	executable string,
+) bool {
+	value, exists := lock.Artifacts[platform+"-"+arch]
+	return exists && value.Tree != nil &&
+		filepath.Base(filepath.FromSlash(value.Executable)) == executable
 }
 
 func (adapter Adapter) commandWithManagedLauncher(

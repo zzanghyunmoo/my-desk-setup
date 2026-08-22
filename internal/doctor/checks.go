@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/zzanghyunmoo/my-desk-setup/internal/adapters"
+	"github.com/zzanghyunmoo/my-desk-setup/internal/capability"
 	"github.com/zzanghyunmoo/my-desk-setup/internal/planning"
 )
 
@@ -85,6 +86,29 @@ func Run(
 			}
 		}
 		report.Checks = append(report.Checks, check)
+	}
+	components := make([]string, 0, len(plan.Actions))
+	for _, action := range plan.Actions {
+		components = append(components, action.ComponentID)
+	}
+	if expected := capability.ExpectedIDs(components); len(expected) > 0 {
+		if prober, ok := adapter.(adapters.CapabilityProber); ok {
+			receipt := prober.ProbeCapabilities(ctx, plan)
+			report.Capabilities = &receipt
+		} else {
+			checks := make([]capability.CapabilityCheck, 0, len(capability.Expected(components)))
+			for _, specification := range capability.Expected(components) {
+				checks = append(checks, capability.NewCheck(
+					specification.ID, specification.Kind, specification.ComponentID,
+					capability.StatusBlocked, "probe-unavailable", "",
+				))
+			}
+			receipt := capability.Aggregate(expected, checks)
+			report.Capabilities = &receipt
+		}
+		if !capability.MatchesExpected(components, report.Capabilities) {
+			report.Ready = false
+		}
 	}
 	return report, nil
 }

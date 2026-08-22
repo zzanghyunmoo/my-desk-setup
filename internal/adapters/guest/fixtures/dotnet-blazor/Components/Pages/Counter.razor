@@ -1,0 +1,7 @@
+@page "/counter"
+<h1>Count: @count</h1>
+<button @onclick="Increment">Increment</button>
+@code {
+    private int count;
+    private void Increment() => count++;
+}

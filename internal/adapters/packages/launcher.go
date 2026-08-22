@@ -3,18 +3,108 @@ package packages
 import (
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 
 	"github.com/zzanghyunmoo/my-desk-setup/internal/adapters"
 	"github.com/zzanghyunmoo/my-desk-setup/internal/adapters/managedfile"
 	"github.com/zzanghyunmoo/my-desk-setup/internal/catalog"
+	"github.com/zzanghyunmoo/my-desk-setup/internal/durable"
 	"github.com/zzanghyunmoo/my-desk-setup/internal/planning"
 )
 
 type launcherSpec struct {
-	path    string
-	content string
+	path        string
+	content     string
+	legacyOwned func(string) bool
+}
+
+func (adapter Adapter) runtimeTreeLauncherSpecs(
+	action planning.Action,
+	component catalog.Component,
+	lock catalog.LockEntry,
+	manager RuntimeTreeManager,
+	runtimeViewLauncher string,
+) ([]launcherSpec, error) {
+	artifactValue, identity, err := manager.runtimeTreeArtifact(lock)
+	if err != nil {
+		return nil, err
+	}
+	if runtimeTreeUsage(identity) != "direct" || manager.Platform == "windows" {
+		return nil, nil
+	}
+	name := filepath.Base(filepath.FromSlash(artifactValue.Executable))
+	if !adapters.ValidExecutableName(name) {
+		return nil, fmt.Errorf("invalid runtime tree executable %q", name)
+	}
+	publish := false
+	for _, argv := range action.Verification {
+		if len(argv) > 0 && argv[0] == name {
+			publish = true
+			break
+		}
+	}
+	if !publish {
+		return nil, nil
+	}
+	root := manager.destinationFor(component.ID, artifactValue)
+	dynamicContent := runtimeTreeDynamicLauncher(root, artifactValue.Executable)
+	var content string
+	if requiresRuntimeView(component) {
+		if runtimeViewLauncher == "" || !filepath.IsAbs(runtimeViewLauncher) {
+			return nil, errors.New("runtime view launcher is required")
+		}
+		content = strings.Join([]string{
+			"#!/bin/sh",
+			"# Managed by my-desk-setup.",
+			"exec " + adapters.ShellSingleQuote(runtimeViewLauncher) + ` "$@"`,
+			"",
+		}, "\n")
+	} else {
+		content = dynamicContent
+	}
+	spec := launcherSpec{
+		path:    filepath.Join(adapter.Home, ".local", "bin", name),
+		content: content,
+	}
+	if component.ID == "neovim" && name == "nvim" {
+		spec.legacyOwned = func(existing string) bool {
+			return legacyNeovimLauncher(existing, adapter.Home) || existing == dynamicContent
+		}
+	}
+	return []launcherSpec{spec}, nil
+}
+
+func runtimeTreeDynamicLauncher(root, executable string) string {
+	return strings.Join([]string{
+		"#!/bin/sh",
+		"# Managed by my-desk-setup.",
+		"root=" + adapters.ShellSingleQuote(root),
+		`IFS= read -r generation < "$root/.mds-runtime-tree-current" || exit 126`,
+		`case "$generation" in g-[A-Za-z0-9]*) ;; *) exit 126 ;; esac`,
+		`case "$generation" in *[!A-Za-z0-9-]*) exit 126 ;; esac`,
+		`exec "$root/generations/$generation/payload/` + executable + `" "$@"`,
+		"",
+	}, "\n")
+}
+
+func legacyNeovimLauncher(content, home string) bool {
+	prefix := "#!/bin/sh\nexec \"" + filepath.Join(home, ".local", "share", "mds", "neovim") + "/"
+	suffix := "/bin/nvim\" \"$@\"\n"
+	if !strings.HasPrefix(content, prefix) || !strings.HasSuffix(content, suffix) {
+		return false
+	}
+	version := strings.TrimSuffix(strings.TrimPrefix(content, prefix), suffix)
+	if version == "" || strings.ContainsAny(version, "/\\\x00\n\r\"'") {
+		return false
+	}
+	for _, value := range version {
+		if (value < '0' || value > '9') && value != '.' && value != '-' && value != '+' {
+			return false
+		}
+	}
+	return true
 }
 
 func (adapter Adapter) launcherSpecs(
@@ -55,17 +145,48 @@ func (adapter Adapter) launcherSpecs(
 				".local", "share", "mise", "shims", executable,
 			)
 		}
-		specs = append(specs, launcherSpec{
-			path: filepath.Join(adapter.Home, ".local", "bin", executable),
-			content: strings.Join([]string{
-				"#!/bin/sh",
-				"# Managed by my-desk-setup.",
-				"exec " + adapters.ShellSingleQuote(source) + ` "$@"`,
-				"",
-			}, "\n"),
-		})
+		spec := launcherSpec{
+			path:    filepath.Join(adapter.Home, ".local", "bin", executable),
+			content: bunAwareLauncherContent(adapter.Home, component.ID, action.Version, source),
+		}
+		if component.ID == "vscode-html-language-server" {
+			spec.legacyOwned = func(existing string) bool {
+				return legacyHTMLRuntimeLauncher(existing, adapter.Home)
+			}
+		}
+		specs = append(specs, spec)
 	}
 	return specs, nil
+}
+
+func legacyHTMLRuntimeLauncher(content, home string) bool {
+	const identity = "cdd36db14f9e3e891aac10835756f66dbf232d3f9f454314b680e088aed42c54-" +
+		"d6e2d090d09c4b91daa74e9e7462a3d3f244efb96aa5111004cfffa49d6dc9ef"
+	root := filepath.Join(
+		home, ".local", "share", "mds", "runtime-trees",
+		"vscode-html-language-server", identity,
+	)
+	return content == runtimeTreeDynamicLauncher(
+		root,
+		"package/bin/vscode-html-language-server",
+	)
+}
+
+func bunAwareLauncherContent(home, componentID, version, source string) string {
+	arguments := adapters.ShellSingleQuote(source) + ` "$@"`
+	prefix := []string{"#!/bin/sh", "# Managed by my-desk-setup."}
+	if componentID == "vscode-html-language-server" {
+		arguments = adapters.ShellSingleQuote(
+			filepath.Join(home, ".local", "bin", "bun"),
+		) + " " + arguments
+		prefix = append(prefix,
+			`if [ "$#" -eq 1 ] && [ "$1" = "--version" ]; then`,
+			"  printf '%s\\n' "+adapters.ShellSingleQuote(version),
+			"  exit 0",
+			"fi",
+		)
+	}
+	return strings.Join(append(prefix, "exec "+arguments, ""), "\n")
 }
 
 func observeLaunchers(specs []launcherSpec) adapters.Observation {
@@ -75,6 +196,12 @@ func observeLaunchers(specs []launcherSpec) adapters.Observation {
 		case managedfile.StateMissing:
 			return adapters.Observation{State: adapters.StateAbsent}
 		case managedfile.StateConflict:
+			if spec.legacyOwned != nil {
+				content, err := os.ReadFile(spec.path)
+				if err == nil && spec.legacyOwned(string(content)) {
+					return adapters.Observation{State: adapters.StateAbsent}
+				}
+			}
 			return adapters.Observation{
 				State: adapters.StateConflict,
 				Detail: managedLauncherConflictDetail(
@@ -89,6 +216,16 @@ func observeLaunchers(specs []launcherSpec) adapters.Observation {
 
 func publishLaunchers(specs []launcherSpec) error {
 	for _, spec := range specs {
+		inspection := managedfile.Inspect(spec.path, spec.content)
+		if inspection.State == managedfile.StateConflict && spec.legacyOwned != nil {
+			content, err := os.ReadFile(spec.path)
+			if err == nil && spec.legacyOwned(string(content)) {
+				if err := durable.WriteFile(spec.path, []byte(spec.content), 0o700); err != nil {
+					return fmt.Errorf("replace legacy managed launcher: %w", err)
+				}
+				continue
+			}
+		}
 		if err := managedfile.Publish(spec.path, spec.content); err != nil {
 			var conflict *managedfile.ConflictError
 			if errors.As(err, &conflict) {

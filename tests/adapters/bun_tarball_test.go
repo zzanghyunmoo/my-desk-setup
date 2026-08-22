@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -83,6 +84,55 @@ func TestNormalAndUpdateBunAdapterInstallOnlyVerifiedLocalTarball(t *testing.T) 
 				t.Fatalf("commands = %+v", port.commands)
 			}
 		})
+	}
+}
+
+func TestBunAdapterReplacesExistingManagedGlobalDependencyBeforeInstall(t *testing.T) {
+	content := []byte("reviewed npm tarball")
+	server := httptest.NewTLSServer(http.HandlerFunc(func(
+		writer http.ResponseWriter,
+		_ *http.Request,
+	) {
+		_, _ = writer.Write(content)
+	}))
+	defer server.Close()
+
+	home := t.TempDir()
+	manifestPath := filepath.Join(
+		home, ".local", "share", "bun", "install", "global", "package.json",
+	)
+	if err := os.MkdirAll(filepath.Dir(manifestPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(
+		manifestPath,
+		[]byte(`{"dependencies":{"tool":"/tmp/old-tool.tgz"}}`),
+		0o600,
+	); err != nil {
+		t.Fatal(err)
+	}
+	port := &recordingPort{}
+	adapter := packages.Adapter{
+		Home: home,
+		Port: port,
+		Environment: bunFixtureEnvironment(
+			server.URL+"/tool/-/tool-1.2.3.tgz",
+			content,
+		),
+		Vendor: packages.Vendor{Client: server.Client()},
+	}
+	if err := adapter.Apply(context.Background(), bunFixtureAction()); err != nil {
+		t.Fatalf("Apply(): %v", err)
+	}
+	if len(port.commands) != 2 {
+		t.Fatalf("commands = %+v", port.commands)
+	}
+	if got, want := port.commands[0].Arguments, []string{"remove", "--global", "tool"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("remove arguments = %v, want %v", got, want)
+	}
+	if got := port.commands[1].Arguments; len(got) != 3 ||
+		got[0] != "add" || got[1] != "--global" || !filepath.IsAbs(got[2]) {
+		t.Fatalf("add arguments = %v", got)
 	}
 }
 

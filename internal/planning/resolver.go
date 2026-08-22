@@ -3,6 +3,7 @@ package planning
 import (
 	"fmt"
 	"sort"
+	"strings"
 
 	"github.com/zzanghyunmoo/my-desk-setup/internal/catalog"
 	"github.com/zzanghyunmoo/my-desk-setup/internal/target"
@@ -41,8 +42,23 @@ func Build(
 		CatalogRevision: revision,
 		Target:          facts,
 	}
+	resolvedIDs := make([]string, 0, len(resolved))
+	for _, item := range resolved {
+		resolvedIDs = append(resolvedIDs, item.Component.ID)
+	}
+	editorSlices := strings.Join(EditorSlices(resolvedIDs), ",")
+	runtimeInputs := runtimeTreeInputs(environment, resolved, facts)
 	for _, item := range resolved {
 		action := actionFor(environment, facts, item)
+		if bindsEditorSlices(action.ComponentID) {
+			if action.Inputs == nil {
+				action.Inputs = make(map[string]string)
+			}
+			action.Inputs[EditorSlicesInput] = editorSlices
+			for key, value := range runtimeInputs {
+				action.Inputs[key] = value
+			}
+		}
 		plan.Selection = append(plan.Selection, item.Component.ID)
 		plan.Actions = append(plan.Actions, action)
 		if action.Status != ActionPlanned {

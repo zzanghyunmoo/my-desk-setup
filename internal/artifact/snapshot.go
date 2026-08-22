@@ -9,18 +9,94 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net/http"
 	"net/url"
 	"os"
 	"path"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
 )
+
+const TreeManifestSchema = "mds.runtime-tree-manifest/v1"
+
+type TreeManifestEntry struct {
+	Path   string `json:"path"`
+	Type   string `json:"type"`
+	SHA256 string `json:"sha256,omitempty"`
+}
+
+type TreeManifest struct {
+	SchemaVersion string              `json:"schema_version"`
+	Entries       []TreeManifestEntry `json:"entries"`
+}
+
+// BuildTreeManifest describes an already safely materialized tree using only
+// normalized relative paths, path types, and regular-file content digests.
+func BuildTreeManifest(root string) (TreeManifest, []byte, string, error) {
+	manifest := TreeManifest{SchemaVersion: TreeManifestSchema}
+	rootInfo, err := os.Lstat(root)
+	if err != nil || rootInfo.Mode()&os.ModeSymlink != 0 || !rootInfo.IsDir() {
+		return TreeManifest{}, nil, "", errors.New("runtime tree root is not a regular directory")
+	}
+	err = filepath.WalkDir(root, func(current string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if current == root {
+			return nil
+		}
+		relative, err := filepath.Rel(root, current)
+		if err != nil {
+			return err
+		}
+		canonical := filepath.ToSlash(relative)
+		if _, err := safeArchivePath(canonical); err != nil {
+			return err
+		}
+		info, err := os.Lstat(current)
+		if err != nil {
+			return err
+		}
+		item := TreeManifestEntry{Path: canonical}
+		switch {
+		case info.Mode()&os.ModeSymlink != 0:
+			return fmt.Errorf("runtime tree refuses symlink %q", canonical)
+		case info.IsDir():
+			item.Type = "directory"
+		case info.Mode().IsRegular():
+			item.Type = "file"
+			item.SHA256, err = SHA256File(current)
+			if err != nil {
+				return err
+			}
+		default:
+			return fmt.Errorf("runtime tree refuses non-regular path %q", canonical)
+		}
+		manifest.Entries = append(manifest.Entries, item)
+		return nil
+	})
+	if err != nil {
+		return TreeManifest{}, nil, "", err
+	}
+	sort.Slice(manifest.Entries, func(left, right int) bool {
+		return manifest.Entries[left].Path < manifest.Entries[right].Path
+	})
+	encoded, err := json.Marshal(manifest)
+	if err != nil {
+		return TreeManifest{}, nil, "", fmt.Errorf("encode runtime tree manifest: %w", err)
+	}
+	encoded = append(encoded, '\n')
+	sum := sha256.Sum256(encoded)
+	return manifest, encoded, hex.EncodeToString(sum[:]), nil
+}
 
 const (
 	defaultSnapshotEntries         = 20_000
@@ -422,12 +498,17 @@ func safeArchivePath(value string) (string, error) {
 type extractionBudget struct {
 	limits SnapshotLimits
 	seen   map[string]struct{}
+	folded map[string]string
 	count  int
 	total  int64
 }
 
 func newExtractionBudget(limits SnapshotLimits) *extractionBudget {
-	return &extractionBudget{limits: limits, seen: make(map[string]struct{})}
+	return &extractionBudget{
+		limits: limits,
+		seen:   make(map[string]struct{}),
+		folded: make(map[string]string),
+	}
 }
 
 func (budget *extractionBudget) admit(name string, size int64) (string, error) {
@@ -437,6 +518,15 @@ func (budget *extractionBudget) admit(name string, size int64) (string, error) {
 	}
 	if _, duplicate := budget.seen[canonical]; duplicate {
 		return "", fmt.Errorf("duplicate archive path %q", canonical)
+	}
+	parts := strings.Split(canonical, "/")
+	for index := range parts {
+		prefix := strings.Join(parts[:index+1], "/")
+		folded := strings.ToLower(prefix)
+		if prior, collision := budget.folded[folded]; collision && prior != prefix {
+			return "", fmt.Errorf("case-colliding archive paths %q and %q", prior, prefix)
+		}
+		budget.folded[folded] = prefix
 	}
 	budget.seen[canonical] = struct{}{}
 	budget.count++

@@ -537,6 +537,11 @@ func TestUpdateRejectsIncompleteVendorTargetArchitectureMatrix(t *testing.T) {
 					SHA256: strings.Repeat("a", 64),
 					Format: "zip", Executable: "bun",
 				},
+				"linux-arm64": {
+					URL:    "https://example.com/bun-arm64.zip",
+					SHA256: strings.Repeat("b", 64),
+					Format: "zip", Executable: "bun",
+				},
 			},
 		},
 	)

@@ -31,3 +31,15 @@ func BunInstall(
 		Timeout:     15 * time.Minute,
 	}, nil
 }
+
+func BunRemove(
+	packageName string,
+	environment map[string]string,
+) transport.Command {
+	return transport.Command{
+		Executable:  "bun",
+		Arguments:   []string{"remove", "--global", packageName},
+		Environment: environment,
+		Timeout:     15 * time.Minute,
+	}
+}

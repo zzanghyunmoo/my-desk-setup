@@ -17,7 +17,10 @@ import (
 	"github.com/zzanghyunmoo/my-desk-setup/internal/transport"
 )
 
-const pluginRuntimeSchema = "mds.nvim-runtime/v1"
+const (
+	pluginRuntimeSchema  = "mds.nvim-runtime/v1"
+	lazyPluginRepository = "https://github.com/folke/lazy.nvim.git"
+)
 
 var neovimFailurePattern = regexp.MustCompile(
 	`(?i)(error detected while processing|E[0-9]{3,4}:)`,
@@ -48,7 +51,13 @@ func inspectPluginRuntime(
 	if !lazyParentExists {
 		return false, "lazy.nvim checkout parent is missing", nil
 	}
-	ready, detail, err := inspectCheckout(ctx, port, lazyPath, lazyPluginCommit)
+	ready, detail, err := inspectPinnedCheckout(
+		ctx,
+		port,
+		lazyPath,
+		lazyPluginRepository,
+		lazyPluginCommit,
+	)
 	if err != nil || !ready {
 		return false, "lazy.nvim " + detail, err
 	}
@@ -58,11 +67,11 @@ func inspectPluginRuntime(
 		return false, detail, err
 	}
 	for _, pin := range expectedPluginPins(set) {
-		ready, detail, err := inspectCheckout(
+		ready, detail, err := inspectManagedPluginCheckout(
 			ctx,
 			port,
 			filepath.Join(pluginRoot, pin.Name),
-			pin.Commit,
+			pin,
 		)
 		if err != nil || !ready {
 			return false, pin.Name + " " + detail, err
@@ -95,16 +104,8 @@ func preparePluginRuntime(
 		return err
 	}
 	for _, pin := range expectedPluginPins(set) {
-		path := filepath.Join(pluginRoot, pin.Name)
-		ready, _, inspectErr := inspectCheckout(ctx, port, path, pin.Commit)
-		if inspectErr != nil {
-			return inspectErr
-		}
-		if ready {
-			continue
-		}
-		if err := removeManagedCheckout(pluginRoot, path); err != nil {
-			return fmt.Errorf("remove drifted plugin %s: %w", pin.Name, err)
+		if err := ensureExactPluginCheckout(ctx, port, pluginRoot, pin); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -126,10 +127,11 @@ func verifyManagedNeovim(
 	if !exists {
 		return errors.New("managed plugin runtime is missing")
 	}
-	ready, detail, err := inspectCheckout(
+	ready, detail, err := inspectPinnedCheckout(
 		ctx,
 		port,
 		managedLazyPath(root),
+		lazyPluginRepository,
 		lazyPluginCommit,
 	)
 	if err != nil {
@@ -158,7 +160,12 @@ func verifyManagedNeovim(
 		if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
 			return fmt.Errorf("plugin %s is not a regular directory", pin.Name)
 		}
-		ready, detail, err := inspectCheckout(ctx, port, path, pin.Commit)
+		ready, detail, err := inspectManagedPluginCheckout(
+			ctx,
+			port,
+			path,
+			pin,
+		)
 		if err != nil {
 			return err
 		}
@@ -173,7 +180,7 @@ func verifyManagedNeovim(
 	}
 	var verificationOutput strings.Builder
 	for _, arguments := range [][]string{
-		{"--headless", "+Lazy! restore", "+qa"},
+		{"--headless", "+qa"},
 		{"--headless", "+checkhealth", "+qa"},
 	} {
 		result, err := port.Run(ctx, transport.Command{
@@ -281,6 +288,63 @@ func inspectCheckout(
 	return true, "", nil
 }
 
+func inspectPinnedCheckout(
+	ctx context.Context,
+	port transport.Port,
+	path,
+	expectedRepository,
+	expectedCommit string,
+) (bool, string, error) {
+	ready, detail, err := inspectCheckout(ctx, port, path, expectedCommit)
+	if err != nil || !ready {
+		return ready, detail, err
+	}
+	result, err := port.Run(ctx, transport.Command{
+		Executable:  "git",
+		Arguments:   []string{"-C", path, "remote", "get-url", "origin"},
+		Timeout:     time.Minute,
+		OutputLimit: transport.DefaultOutputLimit,
+	})
+	if err != nil {
+		return false, "checkout origin cannot be read", nil
+	}
+	if strings.TrimSpace(result.Stdout) != expectedRepository {
+		return false, "checkout origin differs", nil
+	}
+	return true, "", nil
+}
+
+func inspectManagedPluginCheckout(
+	ctx context.Context,
+	port transport.Port,
+	path string,
+	pin pluginPin,
+) (bool, string, error) {
+	ready, detail, err := inspectPinnedCheckout(
+		ctx,
+		port,
+		path,
+		pin.Repository,
+		pin.Commit,
+	)
+	if err != nil || !ready {
+		return ready, detail, err
+	}
+	result, err := port.Run(ctx, transport.Command{
+		Executable:  "git",
+		Arguments:   []string{"-C", path, "symbolic-ref", "--short", "HEAD"},
+		Timeout:     time.Minute,
+		OutputLimit: transport.DefaultOutputLimit,
+	})
+	if err != nil {
+		return false, "checkout branch cannot be read", nil
+	}
+	if strings.TrimSpace(result.Stdout) != pin.Branch {
+		return false, "checkout branch differs", nil
+	}
+	return true, "", nil
+}
+
 func unexpectedCheckoutStatus(output string) string {
 	var unexpected []string
 	for _, line := range strings.Split(strings.TrimSpace(output), "\n") {
@@ -303,7 +367,13 @@ func ensureLazyCheckout(
 		return err
 	}
 	target := managedLazyPath(runtimeRoot)
-	ready, _, err := inspectCheckout(ctx, port, target, lazyPluginCommit)
+	ready, _, err := inspectPinnedCheckout(
+		ctx,
+		port,
+		target,
+		lazyPluginRepository,
+		lazyPluginCommit,
+	)
 	if err != nil {
 		return err
 	}
@@ -318,7 +388,7 @@ func ensureLazyCheckout(
 	commands := []transport.Command{
 		{Executable: "git", Arguments: []string{"init", staging}},
 		{Executable: "git", Arguments: []string{
-			"-C", staging, "remote", "add", "origin", "https://github.com/folke/lazy.nvim.git",
+			"-C", staging, "remote", "add", "origin", lazyPluginRepository,
 		}},
 		{Executable: "git", Arguments: []string{
 			"-C", staging, "fetch", "--depth", "1", "origin", lazyPluginCommit,
@@ -334,8 +404,85 @@ func ensureLazyCheckout(
 			return fmt.Errorf("prepare exact lazy.nvim checkout: %w", err)
 		}
 	}
+	ready, detail, err := inspectPinnedCheckout(
+		ctx,
+		port,
+		staging,
+		lazyPluginRepository,
+		lazyPluginCommit,
+	)
+	if err != nil {
+		return err
+	}
+	if !ready {
+		return fmt.Errorf("prepared lazy.nvim checkout is not exact: %s", detail)
+	}
 	if err := replaceManagedCheckout(lazyParent, staging, target); err != nil {
 		return fmt.Errorf("publish exact lazy.nvim checkout: %w", err)
+	}
+	return nil
+}
+
+func ensureExactPluginCheckout(
+	ctx context.Context,
+	port transport.Port,
+	pluginRoot string,
+	pin pluginPin,
+) error {
+	target := filepath.Join(pluginRoot, pin.Name)
+	ready, _, err := inspectManagedPluginCheckout(
+		ctx,
+		port,
+		target,
+		pin,
+	)
+	if err != nil {
+		return fmt.Errorf("inspect plugin %s: %w", pin.Name, err)
+	}
+	if ready {
+		return nil
+	}
+	if err := removeManagedCheckout(pluginRoot, target); err != nil {
+		return fmt.Errorf("remove drifted plugin %s: %w", pin.Name, err)
+	}
+	staging, err := os.MkdirTemp(pluginRoot, ".plugin-checkout-*")
+	if err != nil {
+		return fmt.Errorf("create plugin %s staging directory: %w", pin.Name, err)
+	}
+	defer os.RemoveAll(staging)
+	commands := []transport.Command{
+		{Executable: "git", Arguments: []string{"init", staging}},
+		{Executable: "git", Arguments: []string{
+			"-C", staging, "remote", "add", "origin", pin.Repository,
+		}},
+		{Executable: "git", Arguments: []string{
+			"-C", staging, "fetch", "--depth", "1", "origin", pin.Commit,
+		}},
+		{Executable: "git", Arguments: []string{
+			"-C", staging, "checkout", "-B", pin.Branch, "FETCH_HEAD",
+		}},
+	}
+	for _, command := range commands {
+		command.Timeout = 5 * time.Minute
+		command.OutputLimit = transport.DefaultOutputLimit
+		if _, err := port.Run(ctx, command); err != nil {
+			return fmt.Errorf("prepare exact plugin %s checkout: %w", pin.Name, err)
+		}
+	}
+	ready, detail, err := inspectManagedPluginCheckout(
+		ctx,
+		port,
+		staging,
+		pin,
+	)
+	if err != nil {
+		return fmt.Errorf("inspect prepared plugin %s checkout: %w", pin.Name, err)
+	}
+	if !ready {
+		return fmt.Errorf("prepared plugin %s checkout is not exact: %s", pin.Name, detail)
+	}
+	if err := replaceManagedCheckout(pluginRoot, staging, target); err != nil {
+		return fmt.Errorf("publish exact plugin %s checkout: %w", pin.Name, err)
 	}
 	return nil
 }

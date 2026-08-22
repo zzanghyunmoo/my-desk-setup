@@ -83,6 +83,11 @@ func Verify(root string, options VerifyOptions) (Manifest, error) {
 			"manifest component outcomes do not match bounded doctor verification",
 		)
 	}
+	if !reflect.DeepEqual(manifest.Capabilities, snapshot.Capabilities) {
+		return Manifest{}, errors.New(
+			"manifest capability outcomes do not match bounded doctor verification",
+		)
+	}
 	identity, err := targetIdentity(plan.Target)
 	if err != nil {
 		return Manifest{}, err
@@ -131,7 +136,8 @@ func Verify(root string, options VerifyOptions) (Manifest, error) {
 		!manifest.ApplyReceipt.Complete ||
 		manifest.RepeatReceipt == nil ||
 		!snapshot.Ready ||
-		!targetIdentityComplete(plan.Target) {
+		!targetIdentityComplete(plan.Target) ||
+		!capabilitiesReady(plan, snapshot.Capabilities) {
 		expectedStatus = StatusBlocked
 	}
 	if manifest.Status != expectedStatus {

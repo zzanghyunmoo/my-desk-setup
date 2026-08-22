@@ -34,6 +34,31 @@ func normalize(environment Environment) Environment {
 		component.Verification.Command = append([]string(nil), component.Verification.Command...)
 		component.Verification.Functional = append([]string(nil), component.Verification.Functional...)
 	}
+	if environment.Lock.CompatibilityEpochs != nil {
+		normalized.Lock.CompatibilityEpochs = make(
+			map[string]CompatibilityEpoch,
+			len(environment.Lock.CompatibilityEpochs),
+		)
+		for id, epoch := range environment.Lock.CompatibilityEpochs {
+			epoch.Members = sorted(epoch.Members)
+			normalized.Lock.CompatibilityEpochs[id] = epoch
+		}
+	}
+	normalized.Lock.Versions = make(map[string]LockEntry, len(environment.Lock.Versions))
+	for key, entry := range environment.Lock.Versions {
+		if entry.Artifacts != nil {
+			entry.Artifacts = make(map[string]Artifact, len(entry.Artifacts))
+			for platform, artifact := range environment.Lock.Versions[key].Artifacts {
+				if artifact.Tree != nil {
+					tree := *artifact.Tree
+					tree.RequiredPaths = sorted(tree.RequiredPaths)
+					artifact.Tree = &tree
+				}
+				entry.Artifacts[platform] = artifact
+			}
+		}
+		normalized.Lock.Versions[key] = entry
+	}
 
 	normalized.Profiles = make(map[string]Profile, len(environment.Profiles))
 	for id, profile := range environment.Profiles {

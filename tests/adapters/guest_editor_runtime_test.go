@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -253,8 +254,8 @@ func TestEditorVerifyRestoresInitiallyMissingPluginCheckouts(t *testing.T) {
 	home := t.TempDir()
 	port := &recordingPort{}
 	port.result = func(command transport.Command) transport.Result {
-		if filepath.Base(command.Executable) == "nvim" && len(command.Arguments) >= 2 &&
-			command.Arguments[1] == "+Lazy! restore" {
+		if filepath.Base(command.Executable) == "nvim" && len(command.Arguments) >= 1 &&
+			command.Arguments[0] == "--headless" {
 			materializeManagedPluginPaths(t, home, false)
 		}
 		return managedEditorCommandResult(t, home, nvchadAction().Version, command)
@@ -267,6 +268,15 @@ func TestEditorVerifyRestoresInitiallyMissingPluginCheckouts(t *testing.T) {
 		t.Fatalf("Apply(): %v", err)
 	}
 	materializeManagedNeovimLauncher(t, home)
+	pluginPaths, err := filepath.Glob(filepath.Join(
+		home, ".local", "share", "mds", "nvim", "p", "*", "NvChad",
+	))
+	if err != nil || len(pluginPaths) != 1 {
+		t.Fatalf("locate managed NvChad checkout: paths=%v err=%v", pluginPaths, err)
+	}
+	if err := os.RemoveAll(pluginPaths[0]); err != nil {
+		t.Fatalf("remove managed NvChad checkout: %v", err)
+	}
 	observation, err := editor.Observe(context.Background(), nvchadAction())
 	if err != nil || observation.State != adapters.StateAbsent {
 		t.Fatalf("Observe(before restore) = %+v, err=%v, want absent", observation, err)
@@ -417,7 +427,7 @@ func TestExplicitAdoptionBacksUpUserOwnedEditorConfiguration(t *testing.T) {
 	commands := recordedArgv(port.commands)
 	for _, expected := range []string{
 		"git -C " + filepath.Join(home, ".local", "share", "mds", "nvim", "p"),
-		filepath.Join(home, ".local", "bin", "nvim") + " --headless +Lazy! restore +qa",
+		filepath.Join(home, ".local", "bin", "nvim") + " --headless +qa",
 		filepath.Join(home, ".local", "bin", "nvim") + " --headless +checkhealth +qa",
 	} {
 		if !strings.Contains(commands, expected) {
@@ -624,6 +634,93 @@ func TestNvChadAloneDoesNotPublishIDEConfiguration(t *testing.T) {
 	}
 }
 
+func TestFullSliceActionsRenderIdenticalManagedEditorBytes(t *testing.T) {
+	home := t.TempDir()
+	port := &recordingPort{result: func(command transport.Command) transport.Result {
+		return managedEditorCommandResult(t, home, nvchadAction().Version, command)
+	}}
+	inputs := exactEditorRuntimeInputs(t, "dotnet,jvm,legacy")
+	base := nvchadAction()
+	base.Inputs = inputs
+	editor := guestadapter.Editor{Home: home, Port: port, Now: time.Now}
+	if err := editor.Apply(context.Background(), base); err != nil {
+		t.Fatalf("Editor Apply(full): %v", err)
+	}
+	root := filepath.Join(home, ".config", "nvim")
+	before := managedEditorFileBytes(t, root)
+
+	ide := guestadapter.IDE{Home: home, Port: port, ConfigOnly: true}
+	for _, componentID := range []string{"nvim-dotnet", "nvim-jvm"} {
+		action := planning.Action{
+			ID: "lima-guest:mds/" + componentID, ComponentID: componentID,
+			Version: "exact", Inputs: inputs,
+		}
+		if err := ide.Apply(context.Background(), action); err != nil {
+			t.Fatalf("IDE Apply(%s): %v", componentID, err)
+		}
+		if after := managedEditorFileBytes(t, root); !reflect.DeepEqual(after, before) {
+			t.Fatalf("%s rendered different final editor bytes", componentID)
+		}
+	}
+}
+
+func exactEditorRuntimeInputs(t *testing.T, slices string) map[string]string {
+	t.Helper()
+	inputs := map[string]string{planning.EditorSlicesInput: slices}
+	for componentID, executable := range map[string]string{
+		"java-debug-server":            "extension/server/debug.jar",
+		"java-test-server":             "extension/server/test.jar",
+		"jdt-language-server":          "bin/jdtls",
+		"kotlin-debug-adapter":         "adapter/bin/kotlin-debug-adapter",
+		"kotlin-language-server":       "extension/server/bin/intellij-server",
+		"netcoredbg":                   "netcoredbg/netcoredbg",
+		"roslyn-language-server":       "tools/net10.0/linux-arm64/roslyn-language-server",
+		"spring-tools-language-server": "extension/language-server/spring.jar",
+	} {
+		identity := map[string]any{
+			"component_id":    componentID,
+			"archive_sha256":  strings.Repeat("a", 64),
+			"manifest_sha256": strings.Repeat("b", 64),
+			"executable":      executable,
+			"launcher_sha256": strings.Repeat("c", 64),
+			"required_paths":  []string{executable},
+		}
+		if componentID == "roslyn-language-server" {
+			identity["required_paths"] = []string{
+				executable,
+				"tools/net10.0/linux-arm64/roslyn-language-server.dll",
+			}
+		}
+		encoded, err := json.Marshal(identity)
+		if err != nil {
+			t.Fatal(err)
+		}
+		inputs[planning.RuntimeTreeInputPrefix+componentID] = string(encoded)
+	}
+	return inputs
+}
+
+func managedEditorFileBytes(t *testing.T, root string) map[string]string {
+	t.Helper()
+	result := make(map[string]string)
+	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+		if err != nil || info.IsDir() || filepath.Base(path) == ".mds-managed.json" {
+			return err
+		}
+		content, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		relative, _ := filepath.Rel(root, path)
+		result[filepath.ToSlash(relative)] = string(content)
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return result
+}
+
 func TestIDERejectsAndRepairsDriftedManagedPluginCheckout(t *testing.T) {
 	home := t.TempDir()
 	drifted := false
@@ -667,8 +764,13 @@ func TestIDERejectsAndRepairsDriftedManagedPluginCheckout(t *testing.T) {
 	paths, err := filepath.Glob(filepath.Join(
 		home, ".local", "share", "mds", "nvim", "p", "*", "NvChad",
 	))
-	if err != nil || len(paths) != 0 {
-		t.Fatalf("drifted NvChad checkout was not removed safely: paths=%v err=%v", paths, err)
+	if err != nil || len(paths) != 1 {
+		t.Fatalf("drifted NvChad checkout was not republished safely: paths=%v err=%v", paths, err)
+	}
+	drifted = false
+	observation, err = ide.Observe(context.Background(), ideAction())
+	if err != nil || observation.State != adapters.StateReady {
+		t.Fatalf("IDE Observe(after repair) = %+v, err=%v, want ready", observation, err)
 	}
 }
 
@@ -756,8 +858,8 @@ func assertPinnedIDEPluginGraph(t *testing.T, home, root string) {
 	if err := json.Unmarshal(content, &entries); err != nil {
 		t.Fatalf("decode lazy lock: %v", err)
 	}
-	if len(entries) != 31 {
-		t.Fatalf("lazy lock entries = %d, want 31", len(entries))
+	if len(entries) != 33 {
+		t.Fatalf("lazy lock entries = %d, want 33", len(entries))
 	}
 	for name, entry := range entries {
 		decoded, err := hex.DecodeString(entry.Commit)
@@ -770,6 +872,14 @@ func assertPinnedIDEPluginGraph(t *testing.T, home, root string) {
 	}
 	if got, want := entries["NvChad"].Commit, "add44b952d631981614bbb8cfc6f7002f296dfe6"; got != want {
 		t.Fatalf("NvChad commit = %s, want %s", got, want)
+	}
+	for name, want := range map[string]string{
+		"nvim-jdtls":  "6e9d953f0b82bccdb834cfde0e893f3119c22592",
+		"roslyn.nvim": "de9a98d61ed3fd01b5016eea5fe9e32f1a4c7cfb",
+	} {
+		if got := entries[name].Commit; got != want {
+			t.Fatalf("%s commit = %s, want %s", name, got, want)
+		}
 	}
 	initContent, err := os.ReadFile(filepath.Join(root, "init.lua"))
 	if err != nil {
@@ -844,6 +954,8 @@ func managedEditorCommandResult(
 			return transport.Result{Stdout: entry.Commit + "\n"}
 		}
 		return transport.Result{Stdout: starterRevision + "\n"}
+	case "symbolic-ref":
+		return transport.Result{}
 	default:
 		return transport.Result{}
 	}

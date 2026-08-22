@@ -608,9 +608,14 @@ func TestGuestRuntimeRejectsOwnedGuestWithDifferentImageIdentity(t *testing.T) {
 }
 
 type recordingPort struct {
-	commands []transport.Command
-	result   func(transport.Command) transport.Result
-	err      func(transport.Command) error
+	commands         []transport.Command
+	result           func(transport.Command) transport.Result
+	err              func(transport.Command) error
+	remotes          map[string]string
+	remoteByRevision map[string]string
+	revisionByPath   map[string]string
+	fetchedByPath    map[string]string
+	branchByRevision map[string]string
 }
 
 func (port *recordingPort) Run(
@@ -618,15 +623,103 @@ func (port *recordingPort) Run(
 	command transport.Command,
 ) (transport.Result, error) {
 	port.commands = append(port.commands, command)
+	port.recordGitMetadata(command)
 	if port.err != nil {
 		if err := port.err(command); err != nil {
 			return transport.Result{}, err
 		}
 	}
-	if port.result != nil {
-		return port.result(command), nil
+	if result, ok := port.preparedGitResult(command); ok {
+		return port.completeGitMetadata(command, result), nil
 	}
-	return transport.Result{}, nil
+	if port.result != nil {
+		result := port.result(command)
+		return port.completeGitMetadata(command, result), nil
+	}
+	return port.completeGitMetadata(command, transport.Result{}), nil
+}
+
+func (port *recordingPort) preparedGitResult(
+	command transport.Command,
+) (transport.Result, bool) {
+	if command.Executable != "git" || len(command.Arguments) < 3 ||
+		command.Arguments[0] != "-C" || command.Arguments[2] != "rev-parse" {
+		return transport.Result{}, false
+	}
+	revision := port.fetchedByPath[command.Arguments[1]]
+	if revision == "" {
+		return transport.Result{}, false
+	}
+	return transport.Result{Stdout: revision + "\n"}, true
+}
+
+func (port *recordingPort) recordGitMetadata(command transport.Command) {
+	if command.Executable != "git" || len(command.Arguments) < 3 || command.Arguments[0] != "-C" {
+		return
+	}
+	path := command.Arguments[1]
+	if len(command.Arguments) == 6 && command.Arguments[2] == "remote" &&
+		command.Arguments[3] == "add" && command.Arguments[4] == "origin" {
+		if port.remotes == nil {
+			port.remotes = make(map[string]string)
+		}
+		port.remotes[path] = command.Arguments[5]
+		return
+	}
+	if len(command.Arguments) == 7 && command.Arguments[2] == "fetch" &&
+		command.Arguments[3] == "--depth" && command.Arguments[4] == "1" {
+		if port.remoteByRevision == nil {
+			port.remoteByRevision = make(map[string]string)
+		}
+		revision := command.Arguments[6]
+		port.remoteByRevision[revision] = port.remotes[path]
+		if port.fetchedByPath == nil {
+			port.fetchedByPath = make(map[string]string)
+		}
+		port.fetchedByPath[path] = revision
+		return
+	}
+	if len(command.Arguments) == 6 && command.Arguments[2] == "checkout" &&
+		command.Arguments[3] == "-B" {
+		if port.branchByRevision == nil {
+			port.branchByRevision = make(map[string]string)
+		}
+		port.branchByRevision[port.fetchedByPath[path]] = command.Arguments[4]
+	}
+}
+
+func (port *recordingPort) completeGitMetadata(
+	command transport.Command,
+	result transport.Result,
+) transport.Result {
+	if command.Executable != "git" || len(command.Arguments) < 3 || command.Arguments[0] != "-C" {
+		return result
+	}
+	path := command.Arguments[1]
+	if command.Arguments[2] == "rev-parse" && strings.TrimSpace(result.Stdout) != "" {
+		if port.revisionByPath == nil {
+			port.revisionByPath = make(map[string]string)
+		}
+		port.revisionByPath[path] = strings.TrimSpace(result.Stdout)
+	}
+	if len(command.Arguments) == 5 && command.Arguments[2] == "remote" &&
+		command.Arguments[3] == "get-url" && command.Arguments[4] == "origin" &&
+		strings.TrimSpace(result.Stdout) == "" {
+		remote := port.remotes[path]
+		if remote == "" {
+			remote = port.remoteByRevision[port.revisionByPath[path]]
+		}
+		if remote != "" {
+			result.Stdout = remote + "\n"
+		}
+	}
+	if command.Arguments[2] == "symbolic-ref" && strings.TrimSpace(result.Stdout) == "" {
+		branch := port.branchByRevision[port.revisionByPath[path]]
+		if branch != "" {
+			result.Stdout = branch + "\n"
+		}
+	}
+	return result
 }
 
 type readyComponent struct {

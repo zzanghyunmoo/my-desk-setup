@@ -1,0 +1,5 @@
+schema_version: 1
+id: nvim-dotnet
+description: Reproducible C#, ASP.NET, Razor, and Blazor NvChad IDE for Lima.
+selection:
+  - nvim-dotnet
