@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"github.com/zzanghyunmoo/my-desk-setup/internal/adapters"
@@ -88,7 +89,8 @@ func (manager RuntimeTreeManager) ObserveRuntimeView(
 	}
 	launcher := filepath.Join(payload, filepath.FromSlash(artifactValue.Executable))
 	launcherInfo, err := os.Lstat(launcher)
-	if err != nil || !launcherInfo.Mode().IsRegular() || launcherInfo.Mode().Perm()&0o111 == 0 {
+	if err != nil || !launcherInfo.Mode().IsRegular() ||
+		(runtime.GOOS != "windows" && launcherInfo.Mode().Perm()&0o111 == 0) {
 		return runtimeTreeConflict("runtime view launcher differs")
 	}
 	return adapters.Observation{State: adapters.StateReady, InstalledVersion: lock.Version}, launcher, nil

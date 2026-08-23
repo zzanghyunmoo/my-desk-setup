@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -30,9 +31,11 @@ func TestRuntimeTreeLauncherTracksTheCurrentExactGeneration(t *testing.T) {
 	if observation := observeLaunchers(specs); observation.State != adapters.StateReady {
 		t.Fatalf("observeLaunchers() = %+v, want ready", observation)
 	}
-	output, err := exec.Command(specs[0].path).CombinedOutput()
-	if err != nil || strings.TrimSpace(string(output)) != "exact" {
-		t.Fatalf("stable runtime launcher output = %q, %v", output, err)
+	if runtime.GOOS != "windows" {
+		output, err := exec.Command(specs[0].path).CombinedOutput()
+		if err != nil || strings.TrimSpace(string(output)) != "exact" {
+			t.Fatalf("stable runtime launcher output = %q, %v", output, err)
+		}
 	}
 }
 

@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -179,9 +180,13 @@ func TestRuntimeTreePreservesOnlyReviewedHelperExecutables(t *testing.T) {
 	}
 	for _, relative := range tree.ExecutablePaths {
 		info, err := os.Stat(filepath.Join(root, filepath.FromSlash(relative)))
-		if err != nil || info.Mode().Perm() != 0o555 {
-			t.Fatalf("executable %s mode = %v, %v; want 0555", relative, info, err)
+		if err != nil || info.Mode().Perm()&0o222 != 0 ||
+			(runtime.GOOS != "windows" && info.Mode().Perm() != 0o555) {
+			t.Fatalf("executable %s mode = %v, %v; want read-only executable", relative, info, err)
 		}
+	}
+	if runtime.GOOS == "windows" {
+		return
 	}
 	if err := os.Chmod(filepath.Join(root, "package/lib/data"), 0o555); err != nil {
 		t.Fatal(err)

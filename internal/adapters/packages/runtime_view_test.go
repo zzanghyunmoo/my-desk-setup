@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -27,9 +28,11 @@ func TestRuntimeViewPublishesShortImmutableNeovimTree(t *testing.T) {
 	if strings.Contains(launcher, "runtime-trees") {
 		t.Fatalf("runtime view launcher retained the long identity path: %s", launcher)
 	}
-	output, err := exec.Command(launcher).CombinedOutput()
-	if err != nil || strings.TrimSpace(string(output)) != "exact" {
-		t.Fatalf("runtime view launcher output = %q, %v", output, err)
+	if runtime.GOOS != "windows" {
+		output, err := exec.Command(launcher).CombinedOutput()
+		if err != nil || strings.TrimSpace(string(output)) != "exact" {
+			t.Fatalf("runtime view launcher output = %q, %v", output, err)
+		}
 	}
 	if info, err := os.Stat(launcher); err != nil || info.Mode().Perm()&0o222 != 0 {
 		t.Fatalf("runtime view launcher mode = %v, %v; want read-only", info, err)
