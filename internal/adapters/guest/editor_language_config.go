@@ -113,6 +113,24 @@ function M.is_trusted(root)
   return trusted
 end
 
+function M.untrust(root)
+  root = canonical(root)
+  if not root then return false end
+  local records = load()
+  local digest = vim.fn.sha256(root)
+  if records[digest] ~= true then return false end
+  records[digest] = nil
+  save(records)
+  warned[root] = nil
+  for _, client in ipairs(vim.lsp.get_clients()) do
+    if canonical(client.root_dir) == root then pcall(client.stop, client, true) end
+  end
+  vim.api.nvim_exec_autocmds("User", {
+    pattern = "MdsWorkspaceUntrusted", data = { root = root },
+  })
+  return true
+end
+
 function M.runtime(component, identity, executable)
   local root = vim.fn.expand("~/.local/share/mds/runtime-trees/") .. component .. "/" .. identity
   local handle = assert(io.open(root .. "/.mds-runtime-tree-current", "rb"))
@@ -139,6 +157,22 @@ vim.api.nvim_create_user_command("MdsTrustWorkspace", function()
   end
   if #roots == 1 then trust(roots[1]); return end
   vim.ui.select(roots, { prompt = "Trust which MDS project root?" }, trust)
+end, {})
+
+vim.api.nvim_create_user_command("MdsUntrustWorkspace", function()
+  local roots = M.roots(0)
+  if #roots == 0 then vim.notify("No project root found", vim.log.levels.ERROR); return end
+  local function untrust(root)
+    if not root then return end
+    if vim.fn.confirm("Revoke trust and stop project processes for " .. root .. "?", "&Revoke\n&Cancel", 2) ~= 1 then return end
+    if M.untrust(root) then
+      vim.notify("Revoked workspace trust: " .. root)
+    else
+      vim.notify("Workspace was not trusted: " .. root, vim.log.levels.WARN)
+    end
+  end
+  if #roots == 1 then untrust(roots[1]); return end
+  vim.ui.select(roots, { prompt = "Revoke trust for which MDS project root?" }, untrust)
 end, {})
 
 return M
@@ -259,18 +293,66 @@ function M.setup()
 		return target
 	end
 
+	local function binding_environment_key(key)
+		if type(key) ~= "string" then return false end
+		local canonical = key:upper()
+		while true do
+			local stripped = canonical:gsub("^ASPNETCORE_", ""):gsub("^DOTNET_", "")
+			if stripped == canonical then break end
+			canonical = stripped
+		end
+		return canonical == "URLS" or canonical == "HTTP_PORTS" or canonical == "HTTPS_PORTS" or
+			canonical:match "^KESTREL__ENDPOINTS__" ~= nil
+	end
+
 	local function launch_environment()
-		local result = vim.deepcopy(vim.g.mds_dotnet_environment or {})
-		local urls = vim.g.mds_dotnet_urls
-		if urls and urls ~= "" then result.ASPNETCORE_URLS = urls end
-		result.DOTNET_WATCH_SUPPRESS_LAUNCH_BROWSER = "1"
+		local result = {}
+		for key, value in pairs(vim.g.mds_dotnet_environment or {}) do
+			if type(key) == "string" and type(value) == "string" and not binding_environment_key(key) then
+				result[key] = value
+			end
+		end
+		if vim.g.mds_dotnet_launch_profile then
+			result.ASPNETCORE_URLS = "http://127.0.0.1:0"
+			result.DOTNET_WATCH_SUPPRESS_LAUNCH_BROWSER = "1"
+		end
 		return result
 	end
 
+	local function launch_arguments()
+		if not vim.g.mds_dotnet_launch_profile then return {} end
+		return { "--urls", "http://127.0.0.1:0" }
+	end
+
 	local test_task
+	local test_root
+	local test_stopping = {}
+	local function launch_valid(launch)
+		return launch and launch.valid == true and launch.root == test_root and
+			require("configs.trust").is_trusted(launch.root)
+	end
+	function M.stop(root)
+		if test_task and test_root == root then
+			local task = test_task
+			test_task = nil
+			test_root = nil
+			test_stopping[task] = true
+			if task.pid then pcall(vim.uv.kill, -task.pid, 15) end
+			pcall(task.kill, task, 15)
+			vim.defer_fn(function()
+				if not test_stopping[task] then return end
+				test_stopping[task] = nil
+				if task.pid then pcall(vim.uv.kill, -task.pid, 9) end
+				pcall(task.kill, task, 9)
+			end, 2000)
+		end
+	end
 	local function test_process_id()
 		local project = project_file(vim.g.mds_dotnet_project)
 		if not project then error("no .NET test project selected") end
+		test_root = vim.g.mds_dotnet_root
+		local launch = vim.g.mds_dotnet_launch
+		if not launch_valid(launch) then error(".NET test debug launch was cancelled or untrusted") end
 		local process_id, output, finished = nil, "", false
 		local function capture(_, data)
 			if not data or data == "" then return end
@@ -278,7 +360,8 @@ function M.setup()
 			local matched = output:match "[Pp]rocess [Ii][Dd]:?%%s*(%%d+)" or output:match "[Pp]rocess [Ii]d%%s+(%%d+)"
 			if matched then process_id = tonumber(matched) end
 		end
-		test_task = vim.system({ dotnet, "test", project }, {
+		local task
+		task = vim.system({ "setsid", dotnet, "test", project }, {
 			cwd = vim.fs.dirname(project), clear_env = true,
 			env = {
 				HOME = vim.fn.expand "~", PATH = vim.env.PATH,
@@ -286,12 +369,19 @@ function M.setup()
 			},
 			text = true,
 			stdout = capture, stderr = capture,
-		}, function() finished = true end)
+		}, function()
+			finished = true
+		end)
+		test_task = task
 		if not vim.wait(30000, function()
-			return process_id ~= nil or finished
+			return process_id ~= nil or finished or not launch_valid(launch)
 		end, 50) or process_id == nil then
-			pcall(test_task.kill, test_task, 15)
+			M.stop(test_root)
 			error(".NET testhost exited or timed out before debugger attach")
+		end
+		if not launch_valid(launch) then
+			M.stop(test_root)
+			error(".NET test debug launch was cancelled or untrusted")
 		end
 		return process_id
 	end
@@ -299,6 +389,7 @@ function M.setup()
 	dap.configurations.cs = {{
     type = "coreclr", name = "Launch .NET assembly", request = "launch",
 		program = target_path,
+		args = launch_arguments,
 		cwd = function()
 			local project = project_file(vim.g.mds_dotnet_project)
 			return project and vim.fs.dirname(project) or vim.fn.getcwd()
@@ -333,7 +424,9 @@ func renderProjectActions(set pluginSet) string {
 
 local trust = require "configs.trust"
 local active = {}
-local debug_sessions = {}
+local stopping = {}
+local generations = {}
+local debug_root
 local max_output = 262144
 local families = { java = %t, dotnet = %t }
 
@@ -349,11 +442,39 @@ end
 
 local function loopback_urls(value)
   if not value or value == "" then return true end
+  if type(value) ~= "string" then return false end
   for url in value:gmatch "[^;]+" do
-    local host = url:match "^https?://([^/:]+)"
+    local host = url:match "^https?://(%%[[^%%]]+%%])" or url:match "^https?://([^/:]+)"
     if host ~= "127.0.0.1" and host ~= "localhost" and host ~= "[::1]" then return false end
   end
   return true
+end
+
+local function binding_environment_name(key)
+	if type(key) ~= "string" then return nil end
+	local canonical = key:upper()
+	while true do
+		local stripped = canonical:gsub("^ASPNETCORE_", ""):gsub("^DOTNET_", "")
+		if stripped == canonical then break end
+		canonical = stripped
+	end
+	if canonical == "URLS" or canonical == "HTTP_PORTS" or canonical == "HTTPS_PORTS" or
+		canonical:match "^KESTREL__ENDPOINTS__" then return canonical end
+	return nil
+end
+
+local function binding_environment_key(key)
+	return binding_environment_name(key) ~= nil
+end
+
+local function profile_loopback_urls(environment)
+	for key, value in pairs(environment or {}) do
+		local name = binding_environment_name(key)
+		if name == "URLS" and not loopback_urls(value) then
+			return false
+		end
+	end
+	return true
 end
 
 local function dotnet_projects(root)
@@ -362,6 +483,17 @@ local function dotnet_projects(root)
   })
   table.sort(result)
   return result
+end
+
+local function dotnet_web_project(project)
+	if not project or not vim.endswith(project, ".csproj") then return false end
+	local stat = vim.uv.fs_stat(project)
+	if not stat or stat.type ~= "file" or stat.size > 262144 then return false end
+	local handle = io.open(project, "rb")
+	local content = handle and handle:read "*a" or ""
+	if handle then handle:close() end
+	return content:match('Sdk%%s*=%%s*["\']Microsoft%%.NET%%.Sdk%%.Web["\']') ~= nil or
+		content:match('<ProjectCapability%%s+Include%%s*=%%s*["\']AspNetCore["\']') ~= nil
 end
 
 local function launch_profiles(root)
@@ -375,17 +507,23 @@ local function launch_profiles(root)
       local content = handle and handle:read "*a" or nil
       if handle then handle:close() end
       local ok, document = pcall(vim.json.decode, content or "")
-      if ok and type(document.profiles) == "table" then
-        for name, profile in pairs(document.profiles) do
-          if type(profile) == "table" and profile.commandName == "Project" then
-			local project_root = vim.fs.dirname(vim.fs.dirname(path))
-			local projects = dotnet_projects(project_root)
-            table.insert(result, {
-              label = vim.fs.relpath(root, path) .. ":" .. name,
-              name = name,
-			project = projects[1] or project_root,
-			urls = profile.applicationUrl,
-			environment = type(profile.environmentVariables) == "table" and profile.environmentVariables or {},
+		  if ok and type(document.profiles) == "table" then
+			for name, profile in pairs(document.profiles) do
+			  if type(profile) == "table" and profile.commandName == "Project" then
+				local project_root = vim.fs.dirname(vim.fs.dirname(path))
+				local projects = dotnet_projects(project_root)
+				local direct_projects = {}
+				for _, project in ipairs(projects) do
+				  if vim.fs.dirname(project) == project_root then table.insert(direct_projects, project) end
+				end
+				local candidates = #direct_projects > 0 and direct_projects or projects
+				table.insert(result, {
+				  label = vim.fs.relpath(root, path) .. ":" .. name,
+				  name = name,
+				project = #direct_projects == 1 and direct_projects[1] or nil,
+				project_candidates = candidates,
+				urls = profile.applicationUrl,
+				environment = type(profile.environmentVariables) == "table" and profile.environmentVariables or {},
             })
           end
         end
@@ -407,44 +545,46 @@ local function select_launch_profile(root, spec, callback)
   select_one(labels, "ASP.NET launch profile", function(label)
     if not label then return end
     local profile = indexed[label]
-    if not loopback_urls(profile.urls) then
+    if not loopback_urls(profile.urls) or not profile_loopback_urls(profile.environment) then
       vim.notify("MDS rejected a non-loopback ASP.NET launch profile", vim.log.levels.ERROR)
       return
     end
-    local resolved = vim.deepcopy(spec)
-    resolved.project = profile.project
+	local resolved = vim.deepcopy(spec)
+	resolved.project = profile.project
+	resolved.project_candidates = profile.project_candidates
 		resolved.profile = profile.name
     resolved.urls = profile.urls
-		resolved.environment = profile.environment
-    if not resolved.dap then
+		resolved.environment = vim.deepcopy(profile.environment)
+		resolved.environment.ASPNETCORE_URLS = nil
+	if not resolved.dap then
 		local index = resolved.argv[2] == "watch" and 4 or 3
-		table.insert(resolved.argv, index, "--project")
-		table.insert(resolved.argv, index + 1, profile.project)
-		table.insert(resolved.argv, index + 2, "--launch-profile")
-		table.insert(resolved.argv, index + 3, profile.name)
-    end
+		table.insert(resolved.argv, index, "--launch-profile")
+		table.insert(resolved.argv, index + 1, profile.name)
+	end
     callback(resolved)
   end)
 end
 
 local function select_dotnet_project(root, spec, callback)
-  if spec.project and vim.endswith(spec.project, ".csproj") then callback(spec); return end
-  local projects = dotnet_projects(root)
-  select_one(projects, ".NET project", function(project)
-    if not project then return end
-    local resolved = vim.deepcopy(spec)
-    resolved.project = project
-    if not resolved.dap then
-      if resolved.argv[2] == "build" or resolved.argv[2] == "test" then
+	local function select_project(project)
+	if not project then return end
+	local resolved = vim.deepcopy(spec)
+	resolved.project = project
+		resolved.project_candidates = nil
+	if not resolved.dap then
+	  if resolved.argv[2] == "build" or resolved.argv[2] == "test" then
         table.insert(resolved.argv, 3, project)
       else
 		local index = resolved.argv[2] == "watch" and 4 or 3
 		table.insert(resolved.argv, index, "--project")
 		table.insert(resolved.argv, index + 1, project)
-      end
-    end
-    callback(resolved)
-  end)
+	  end
+	end
+	callback(resolved)
+	end
+	if spec.project and vim.endswith(spec.project, ".csproj") then select_project(spec.project); return end
+	local projects = spec.project_candidates or dotnet_projects(root)
+	select_one(projects, ".NET project", select_project)
 end
 
 local function family(root)
@@ -476,7 +616,7 @@ local function specs(kind, root)
       run = { argv = { gradle, "--no-daemon", "bootRun" }, long = true },
       watch = { argv = { gradle, "--no-daemon", "bootRun", "--continuous" }, long = true },
       ["debug-app"] = { argv = { gradle, "--no-daemon", "bootRun", "--debug-jvm" }, long = true, java_debug = true },
-      ["debug-test"] = { argv = { gradle, "--no-daemon", "test", "--debug-jvm" }, long = true, java_debug = true },
+      ["debug-test"] = { argv = { gradle, "--no-daemon", "test", "--debug-jvm", "--rerun" }, long = true, java_debug = true },
     }
   end
   local dotnet = trust.managed_executable "dotnet"
@@ -490,28 +630,95 @@ local function specs(kind, root)
   }
 end
 
+local function stop_debug(root)
+	if not root then return end
+	if debug_root == root then debug_root = nil end
+	pcall(function() require("configs.dotnet").stop(root) end)
+	pcall(function()
+		local dap = require "dap"
+		local previous = dap.session()
+		local targets = {}
+		for _, session in pairs(dap.sessions()) do
+			if session.config and session.config.mds_root == root then table.insert(targets, session) end
+		end
+		for _, session in ipairs(targets) do
+			dap.set_session(session)
+			dap.terminate({ hierarchy = true })
+		end
+		if previous and not previous.closed and previous.config and previous.config.mds_root ~= root then
+			dap.set_session(previous)
+		end
+	end)
+end
+
+local function invalidate(root)
+	generations[root] = (generations[root] or 0) + 1
+	local launch = vim.g.mds_dotnet_launch
+	if launch and launch.root == root then launch.valid = false end
+end
+
+local function launch_valid(root, generation)
+	return generations[root] == generation and trust.is_trusted(root)
+end
+
 local function stop(root)
+	invalidate(root)
   local task = active[root]
-  if not task then return end
-  if task.pid then pcall(vim.uv.kill, -task.pid, 15) end
-  pcall(task.kill, task, 15)
-  active[root] = nil
-	if debug_sessions[root] then
-		debug_sessions[root] = nil
-		pcall(function() require("dap").terminate() end)
+		if task then
+		active[root] = nil
+		stopping[task] = root
+		if task.pid then pcall(vim.uv.kill, -task.pid, 15) end
+		pcall(task.kill, task, 15)
+		vim.defer_fn(function()
+			if stopping[task] ~= root then return end
+			stopping[task] = nil
+			if task.pid then pcall(vim.uv.kill, -task.pid, 9) end
+			pcall(task.kill, task, 9)
+		end, 2000)
 	end
+	stop_debug(root)
+end
+
+local function action_environment(spec)
+	local result = {}
+	for key, value in pairs(spec.environment or {}) do
+		if type(key) == "string" and type(value) == "string" and not binding_environment_key(key) then
+			result[key] = value
+		end
+	end
+	result.HOME = vim.fn.expand "~"
+	result.PATH = vim.env.PATH
+	result.TMPDIR = vim.env.TMPDIR or "/tmp"
+	result.ASPNETCORE_URLS = "http://127.0.0.1:0"
+	result.DOTNET_WATCH_SUPPRESS_LAUNCH_BROWSER = "1"
+	return result
 end
 
 local function run(root, name, spec)
   if not trust.is_trusted(root) then return end
+	if spec.launch_profile and dotnet_web_project(spec.project) and not spec.profile then
+		vim.notify("MDS requires a valid Project launch profile for ASP.NET actions", vim.log.levels.ERROR)
+		return
+	end
+	if (spec.dap or spec.java_debug) and debug_root and debug_root ~= root then stop(debug_root) end
   if spec.dap then
+		stop(root)
+		local generation = generations[root]
+		local launch = { root = root, generation = generation, valid = true }
+		vim.g.mds_dotnet_launch = launch
 		vim.g.mds_dotnet_project = spec.project or root
+		vim.g.mds_dotnet_root = root
 		vim.g.mds_dotnet_launch_profile = spec.profile
 		vim.g.mds_dotnet_urls = spec.urls
 		vim.g.mds_dotnet_environment = spec.environment
 		local dap = require "dap"
 		local index = spec.debug_kind == "test" and 2 or 1
-		dap.run(dap.configurations.cs[index])
+		local configuration = vim.deepcopy(dap.configurations.cs[index])
+		configuration.mds_root = root
+		configuration.mds_generation = generation
+		debug_root = root
+		if not launch_valid(root, generation) or not launch.valid then return end
+		dap.run(configuration, { new = true })
     return
   end
 	if spec.java_debug then
@@ -524,6 +731,7 @@ local function run(root, name, spec)
 		end
 	end
   stop(root)
+	local generation = generations[root]
 	local debug_adapter = vim.bo.filetype == "kotlin" and "kotlin" or "java"
   local buffer = vim.api.nvim_create_buf(false, true)
   vim.api.nvim_set_current_buf(buffer)
@@ -538,12 +746,14 @@ local function run(root, name, spec)
 			if debug_output:match "Listening for transport dt_socket at address: 5005" then
 				debug_started = true
 				vim.schedule(function()
+					if not launch_valid(root, generation) then stop(root); return end
 					require("dap").run {
 						type = debug_adapter,
 						request = "attach", name = "Attach Gradle JVM",
-						hostName = "127.0.0.1", port = 5005,
+						hostName = "127.0.0.1", port = 5005, mds_root = root,
+						mds_generation = generation,
 					}
-					debug_sessions[root] = true
+					debug_root = root
 				end)
 			end
 		end
@@ -555,17 +765,18 @@ local function run(root, name, spec)
       end
     end)
   end
-  local argv = spec.long and vim.list_extend({ "setsid" }, vim.deepcopy(spec.argv)) or spec.argv
+	local argv = vim.list_extend({ "setsid" }, vim.deepcopy(spec.argv))
   local task
   task = vim.system(argv, {
     cwd = root, clear_env = true,
-    env = { HOME = vim.fn.expand "~", PATH = vim.env.PATH, TMPDIR = vim.env.TMPDIR or "/tmp", ASPNETCORE_URLS = "http://127.0.0.1:0", DOTNET_WATCH_SUPPRESS_LAUNCH_BROWSER = "1" },
+		env = action_environment(spec),
     text = true, stdout = append, stderr = append,
   }, function(result)
     vim.schedule(function()
+		if stopping[task] == root then return end
       if active[root] ~= task then return end
       active[root] = nil
-		debug_sessions[root] = nil
+		if debug_root == root then debug_root = nil end
       local status
       if result.code == 0 then
         status = "succeeded"
@@ -614,6 +825,27 @@ function M.setup()
       select_one(vim.tbl_keys(active), "Cancel MDS task", function(root) if root then stop(root) end end)
     end, {})
     vim.keymap.set("n", "<leader>pa", M.open, { desc = "Project actions" })
+		vim.api.nvim_create_autocmd("User", {
+			pattern = "MdsWorkspaceUntrusted",
+			callback = function(args)
+				local root = args.data and args.data.root or nil
+				if root then stop(root) end
+			end,
+		})
+		local ok, dap = pcall(require, "dap")
+		if ok and dap.listeners and dap.listeners.before then
+			dap.listeners.before.event_initialized.mds_trust_guard = function(session)
+				local config = session and session.config or nil
+				if not config or not config.mds_root or not config.mds_generation or
+					launch_valid(config.mds_root, config.mds_generation) then return end
+				vim.schedule(function()
+					local previous = dap.session()
+					dap.set_session(session)
+					dap.terminate({ hierarchy = true })
+					if previous and previous ~= session and not previous.closed then dap.set_session(previous) end
+				end)
+			end
+		end
   end
 end
 

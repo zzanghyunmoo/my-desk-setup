@@ -7,5 +7,6 @@ fun main() {
 }
 
 private fun printResult(value: String) {
-    println(value)
+    val rendered = value.uppercase()
+    println(rendered)
 }

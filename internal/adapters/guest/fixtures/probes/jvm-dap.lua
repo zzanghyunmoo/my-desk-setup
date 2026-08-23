@@ -2,10 +2,12 @@ local dap = require "dap"
 
 local adapter_type = assert(vim.env.MDS_DAP_TYPE)
 local adapter = vim.env.MDS_DAP_ADAPTER
+local mode = assert(vim.env.MDS_DAP_MODE)
 local root = assert(vim.env.MDS_DAP_ROOT)
 local source = assert(vim.env.MDS_DAP_SOURCE)
 local line = assert(tonumber(vim.env.MDS_DAP_LINE))
 local known_variable = assert(vim.env.MDS_DAP_VARIABLE)
+local test_selector = vim.env.MDS_DAP_TEST_SELECTOR
 
 local result = {
   breakpoint_verified = false,
@@ -20,6 +22,9 @@ local result = {
 }
 local stops = 0
 local inspecting = false
+local test_task
+local test_result
+local test_stopping = false
 
 local trust_root = assert(vim.uv.fs_realpath(assert(vim.env.MDS_TRUST_ROOT)))
 local state_dir = vim.fn.stdpath "state" .. "/mds"
@@ -30,9 +35,21 @@ handle:write(vim.json.encode({ [vim.fn.sha256(trust_root)] = true }) .. "\n")
 handle:close()
 assert(vim.uv.fs_chmod(state_file, 384))
 
+local function stop_test_task()
+  if not test_task or test_stopping then return end
+  test_stopping = true
+  if test_task.pid then pcall(vim.uv.kill, -test_task.pid, 15) end
+  pcall(test_task.kill, test_task, 15)
+  vim.defer_fn(function()
+    if test_task.pid then pcall(vim.uv.kill, -test_task.pid, 9) end
+    pcall(test_task.kill, test_task, 9)
+  end, 2000)
+end
+
 local function fail(message)
   result.error = message
   result.terminated = true
+  stop_test_task()
 end
 
 local function inspect_stop(session, body, done)
@@ -110,15 +127,29 @@ dap.listeners.after.event_exited.mds_probe = function() result.terminated = true
 local configuration
 if adapter_type == "kotlin" then
   dap.adapters.kotlin = { type = "executable", command = assert(adapter) }
-  configuration = {
-    type = "kotlin", request = "launch", name = "MDS Kotlin probe",
-    projectRoot = root, mainClass = assert(vim.env.MDS_DAP_MAIN),
-  }
+  if mode == "test" then
+    configuration = {
+      type = "kotlin", request = "attach", name = "MDS Kotlin test probe",
+      projectRoot = root, hostName = "127.0.0.1", port = 5005, timeout = 30000,
+    }
+  else
+    configuration = {
+      type = "kotlin", request = "launch", name = "MDS Kotlin probe",
+      projectRoot = root, mainClass = assert(vim.env.MDS_DAP_MAIN),
+    }
+  end
 elseif adapter_type == "java" then
-  configuration = {
-    type = "java", request = "launch", name = "MDS Java probe",
-    cwd = root, mainClass = assert(vim.env.MDS_DAP_MAIN),
-  }
+  if mode == "test" then
+    configuration = {
+      type = "java", request = "attach", name = "MDS Java test probe",
+      hostName = "127.0.0.1", port = 5005,
+    }
+  else
+    configuration = {
+      type = "java", request = "launch", name = "MDS Java probe",
+      cwd = root, mainClass = assert(vim.env.MDS_DAP_MAIN),
+    }
+  end
   if vim.env.MDS_DAP_PROJECT and vim.env.MDS_DAP_PROJECT ~= "" then
     configuration.projectName = vim.env.MDS_DAP_PROJECT
   end
@@ -140,17 +171,57 @@ end
 vim.api.nvim_win_set_cursor(0, { line, 0 })
 if not result.terminated then
   dap.set_breakpoint()
-  dap.run(configuration)
+  if mode == "test" then
+    local output = ""
+    local listening = false
+    local function capture(_, data)
+      if not data or data == "" then return end
+      output = (output .. data):sub(-8192)
+      if output:match "Listening for transport dt_socket at address: 5005" then
+        listening = true
+      end
+    end
+    test_task = vim.system({ "setsid", root .. "/gradlew", "--no-daemon", "test", "--tests", assert(test_selector), "--debug-jvm", "--rerun" }, {
+      cwd = root, clear_env = true,
+      env = { HOME = vim.fn.expand "~", PATH = vim.env.PATH, TMPDIR = vim.env.TMPDIR or "/tmp" },
+      text = true, stdout = capture, stderr = capture,
+    }, function(result) test_result = result end)
+    vim.wait(90000, function() return listening or test_result ~= nil end, 50)
+    if listening then
+      dap.run(configuration)
+    elseif test_result then
+      fail("Gradle test JVM exited before opening the debug socket")
+    else
+      fail "Gradle test JVM timed out before opening the debug socket"
+    end
+  else
+    dap.run(configuration)
+  end
 end
 
 if not vim.wait(120000, function() return result.terminated end, 50) then
   result.error = "debug probe timed out"
   pcall(dap.terminate)
 end
+if test_task then
+  local completed = test_result
+  if not completed then
+    vim.wait(60000, function() return test_result ~= nil end, 50)
+    completed = test_result
+  end
+  if not completed then
+    result.error = "Gradle test task timed out after debugging"
+  elseif completed.code ~= 0 then
+    result.error = "Gradle test task failed after debugging with exit code " .. tostring(completed.code)
+  end
+  if result.error then
+    stop_test_task()
+  end
+end
 io.stdout:write("MDS_DAP_RESULT=" .. vim.json.encode(result) .. "\n")
 if not (result.breakpoint_verified and result.stopped_at_source and result.stack_observed and
     result.scopes_observed and result.known_variable_present and result.continued and
-    result.stepped_in and result.stepped_over and result.terminated) then
+    result.stepped_in and result.stepped_over and result.terminated and not result.error) then
   vim.cmd "cquit 1"
 end
 vim.cmd "qa!"

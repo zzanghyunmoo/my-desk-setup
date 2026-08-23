@@ -72,27 +72,84 @@ func TestPrepareCapabilityFixturesCopiesMutableIsolatedSources(t *testing.T) {
 func TestDotNetDAPProbeRequiresAdapterReportedStructuralResult(t *testing.T) {
 	port := &capabilityProbePort{result: transport.Result{Stdout: `MDS_DAP_RESULT={"breakpoint_verified":true,"stopped_at_source":true,"stack_observed":true,"scopes_observed":true,"known_variable_present":true,"continued":true,"stepped_in":true,"stepped_over":true,"terminated":true}` + "\n"}}
 	probe := CapabilityProbe{Home: t.TempDir(), Port: port}
+	fixtureRoot := t.TempDir()
+	source := filepath.Join(fixtureRoot, "Probe.cs")
+	project := filepath.Join(fixtureRoot, "App.csproj")
 	outcome := probe.probeDotNetDAP(
-		context.Background(), "app", "/fixture/Probe.cs", "/fixture/Probe.dll",
-		"/fixture/App.csproj", "inspected", "fixture.dotnet.app", 6,
+		context.Background(), "app", source, filepath.Join(fixtureRoot, "Probe.dll"),
+		project, "inspected", "fixture.dotnet.app", 6,
 	)
 	if outcome.status != capability.StatusPass || outcome.dap == nil ||
 		outcome.dap.StoppedSourceID != "fixture.dotnet.app" || outcome.dap.StoppedLine != 6 {
 		t.Fatalf("probeDotNetDAP() = %+v, want exact structural pass", outcome)
 	}
-	if port.command.Environment["MDS_DAP_SOURCE"] != "/fixture/Probe.cs" ||
+	if port.command.Environment["MDS_DAP_SOURCE"] != source ||
 		port.command.Environment["MDS_DAP_LINE"] != "6" ||
 		port.command.Environment["MDS_DAP_VARIABLE"] != "inspected" {
 		t.Fatalf("DAP probe environment = %+v, want exact source contract", port.command.Environment)
 	}
 
+	outcome = probe.probeDotNetDAP(
+		context.Background(), "server", filepath.Join(fixtureRoot, "Program.cs"), filepath.Join(fixtureRoot, "WebApi.dll"),
+		filepath.Join(fixtureRoot, "WebApi.csproj"), "builder", "fixture.dotnet.server", 2,
+	)
+	if outcome.status != capability.StatusPass || port.command.Environment["MDS_DAP_MODE"] != "server" {
+		t.Fatalf("server DAP probe = %+v, environment = %+v", outcome, port.command.Environment)
+	}
+	for _, token := range []string{
+		`configuration.args = { "--urls", "http://127.0.0.1:0" }`,
+		`MDS_CAPABILITY_PROBE = "1"`,
+		`ASPNETCORE_URLS = "http://127.0.0.1:0"`,
+		`cwd = vim.fs.dirname(assert(vim.env.MDS_DAP_PROJECT))`,
+	} {
+		if !strings.Contains(dotNetDAPProbeLua, token) {
+			t.Fatalf("server DAP probe script omits %q", token)
+		}
+	}
+
 	port.result.Stdout = `MDS_DAP_RESULT={"breakpoint_verified":true,"stopped_at_source":false,"stack_observed":true,"scopes_observed":true,"known_variable_present":true,"continued":true,"stepped_in":true,"stepped_over":true,"terminated":true}` + "\n"
 	outcome = probe.probeDotNetDAP(
-		context.Background(), "app", "/fixture/Probe.cs", "/fixture/Probe.dll",
-		"/fixture/App.csproj", "inspected", "fixture.dotnet.app", 6,
+		context.Background(), "app", source, filepath.Join(fixtureRoot, "Probe.dll"),
+		project, "inspected", "fixture.dotnet.app", 6,
 	)
 	if outcome.status == capability.StatusPass {
 		t.Fatalf("DAP result with mismatched source passed: %+v", outcome)
+	}
+}
+
+func TestJVMDAPTestProbeRerunsOnlyTheSelectedTestTask(t *testing.T) {
+	script, err := ideFixtures.ReadFile("fixtures/probes/jvm-dap.lua")
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := string(script)
+	for _, token := range []string{
+		`"--debug-jvm", "--rerun"`,
+		`vim.system({ "setsid", root .. "/gradlew"`,
+		`pcall(vim.uv.kill, -test_task.pid, 15)`,
+		`pcall(vim.uv.kill, -test_task.pid, 9)`,
+		`return listening or test_result ~= nil`,
+		`vim.wait(60000, function() return test_result ~= nil end, 50)`,
+		`Gradle test JVM exited before opening the debug socket`,
+		`Gradle test task failed after debugging with exit code`,
+		`result.terminated and not result.error`,
+	} {
+		if !strings.Contains(content, token) {
+			t.Fatalf("JVM DAP test probe omits %q", token)
+		}
+	}
+	if strings.Contains(content, `"--rerun-tasks"`) {
+		t.Fatal("JVM DAP test probe reruns compilation tasks before opening the debug socket")
+	}
+}
+
+func TestDotNetServerDAPFixtureIncludesProjectRelativeResource(t *testing.T) {
+	content, err := ideFixtures.ReadFile("fixtures/dotnet-webapi/probe-resource.txt")
+	if err != nil {
+		t.Fatalf("read ASP.NET DAP fixture resource: %v", err)
+	}
+	if strings.TrimSpace(string(content)) != "hello-api" {
+		t.Fatalf("ASP.NET DAP fixture resource = %q", content)
 	}
 }
 

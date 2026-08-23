@@ -1,6 +1,7 @@
 var builder = WebApplication.CreateBuilder(args);
+var probeResource = File.ReadAllText("probe-resource.txt").Trim();
 var app = builder.Build();
-app.MapGet("/greeting", () => new { message = "hello-api" });
+app.MapGet("/greeting", () => new { message = probeResource });
 if (Environment.GetEnvironmentVariable("MDS_CAPABILITY_PROBE") == "1")
 {
     await app.StartAsync();

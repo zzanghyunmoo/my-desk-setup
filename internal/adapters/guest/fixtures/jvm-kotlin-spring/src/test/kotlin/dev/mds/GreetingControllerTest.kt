@@ -8,4 +8,10 @@ class GreetingControllerTest {
     fun returnsConfiguredGreeting() {
         assertEquals("hello-kotlin", GreetingController("hello-kotlin").greeting())
     }
+
+    @Test
+    fun breakpointProbe() {
+        val controller = GreetingController("debug-kotlin-test")
+        assertEquals("debug-kotlin-test", controller.greeting())
+    }
 }

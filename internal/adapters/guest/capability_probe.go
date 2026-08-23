@@ -375,24 +375,39 @@ func (probe CapabilityProbe) probeJVM(
 				outcomes[id] = failed("runtime-identity-invalid", err)
 			}
 		}
-		outcomes["dap.java"] = probe.probeJVMDAP(
-			ctx, "java", "",
+		outcomes["dap.java.app"] = probe.probeJVMDAP(
+			ctx, "java", "", "app", "",
 			javaRoot,
 			filepath.Join(javaRoot, "src", "main", "java", "dev", "mds", "DebugProbe.java"),
 			"dev.mds.DebugProbe", "", "controller",
 			"fixture.java", 10,
 		)
+		outcomes["dap.java.test"] = probe.probeJVMDAP(
+			ctx, "java", "", "test", "dev.mds.GreetingControllerTest.breakpointProbe",
+			javaRoot,
+			filepath.Join(javaRoot, "src", "test", "java", "dev", "mds", "GreetingControllerTest.java"),
+			"", "", "controller",
+			"fixture.java.test", 22,
+		)
 		kotlinDebug := references["kotlin-debug-adapter"]
 		if adapter, pathErr := probe.runtimePayloadPath(kotlinDebug, kotlinDebug.Executable); pathErr == nil {
-			outcomes["dap.kotlin"] = probe.probeJVMDAP(
-				ctx, "kotlin", adapter,
+			outcomes["dap.kotlin.app"] = probe.probeJVMDAP(
+				ctx, "kotlin", adapter, "app", "",
 				kotlinRoot,
 				filepath.Join(kotlinRoot, "src", "main", "kotlin", "dev", "mds", "DebugProbe.kt"),
 				"dev.mds.DebugProbeKt", "", "controller",
 				"fixture.kotlin", 5,
 			)
+			outcomes["dap.kotlin.test"] = probe.probeJVMDAP(
+				ctx, "kotlin", adapter, "test", "dev.mds.GreetingControllerTest.breakpointProbe",
+				kotlinRoot,
+				filepath.Join(kotlinRoot, "src", "test", "kotlin", "dev", "mds", "GreetingControllerTest.kt"),
+				"", "", "controller",
+				"fixture.kotlin.test", 15,
+			)
 		} else {
-			outcomes["dap.kotlin"] = failed("dap-launcher-invalid", pathErr)
+			outcomes["dap.kotlin.app"] = failed("dap-launcher-invalid", pathErr)
+			outcomes["dap.kotlin.test"] = failed("dap-launcher-invalid", pathErr)
 		}
 	}
 }
@@ -455,6 +470,13 @@ func (probe CapabilityProbe) probeDotNet(
 		filepath.Join(consoleRoot, "tests", "Mds.Console.Tests.csproj"),
 		"name", "fixture.dotnet.test", 6,
 	)
+	outcomes["dap.dotnet.server"] = probe.probeDotNetDAP(
+		ctx, "server",
+		filepath.Join(webRoot, "Program.cs"),
+		filepath.Join(webRoot, "bin", "Debug", "net10.0", "Mds.WebApi.dll"),
+		webProject,
+		"builder", "fixture.dotnet.server", 2,
+	)
 
 	if _, err := runtimeTreeReferences(action); err != nil {
 		outcomes["lsp.csharp"] = failed("runtime-identity-invalid", err)
@@ -478,7 +500,7 @@ func (probe CapabilityProbe) probeDotNet(
 
 func (probe CapabilityProbe) probeJVMDAP(
 	ctx context.Context,
-	adapterType, adapter, root, source, mainClass, projectName, knownVariable,
+	adapterType, adapter, mode, testSelector, root, source, mainClass, projectName, knownVariable,
 	sourceID string,
 	line int,
 ) probeOutcome {
@@ -506,6 +528,8 @@ func (probe CapabilityProbe) probeJVMDAP(
 	command.Environment["MDS_TRUST_ROOT"] = root
 	command.Environment["MDS_DAP_TYPE"] = adapterType
 	command.Environment["MDS_DAP_ADAPTER"] = adapter
+	command.Environment["MDS_DAP_MODE"] = mode
+	command.Environment["MDS_DAP_TEST_SELECTOR"] = testSelector
 	command.Environment["MDS_DAP_ROOT"] = root
 	command.Environment["MDS_DAP_SOURCE"] = source
 	command.Environment["MDS_DAP_LINE"] = strconv.Itoa(line)
@@ -559,6 +583,26 @@ func (probe CapabilityProbe) probeDotNetDAP(
 		return failed("dap-isolation-failed", err)
 	}
 	defer os.RemoveAll(isolation)
+	canonicalRoot, err := filepath.EvalSymlinks(filepath.Dir(project))
+	if err != nil {
+		return failed("dap-trust-root-invalid", err)
+	}
+	trustDirectory := filepath.Join(isolation, "state", "nvim", "mds")
+	if err := os.MkdirAll(trustDirectory, 0o700); err != nil {
+		return failed("dap-trust-state-failed", err)
+	}
+	rootDigest := fmt.Sprintf("%x", sha256.Sum256([]byte(canonicalRoot)))
+	trustBytes, err := json.Marshal(map[string]bool{rootDigest: true})
+	if err != nil {
+		return failed("dap-trust-state-failed", err)
+	}
+	if err := os.WriteFile(
+		filepath.Join(trustDirectory, "workspace-trust.json"),
+		append(trustBytes, '\n'),
+		0o600,
+	); err != nil {
+		return failed("dap-trust-state-failed", err)
+	}
 	scriptPath := filepath.Join(isolation, "probe.lua")
 	if err := os.WriteFile(scriptPath, []byte(dotNetDAPProbeLua), 0o600); err != nil {
 		return failed("dap-script-failed", err)
@@ -718,12 +762,23 @@ vim.defer_fn(function()
   dap.set_breakpoint()
   if mode == "test" then
     vim.g.mds_dotnet_project = assert(vim.env.MDS_DAP_PROJECT)
+		vim.g.mds_dotnet_root = assert(vim.uv.fs_realpath(vim.fs.dirname(vim.g.mds_dotnet_project)))
+		vim.g.mds_dotnet_launch = { root = vim.g.mds_dotnet_root, valid = true }
     dap.run(assert(dap.configurations.cs and dap.configurations.cs[2]))
   else
-    dap.run {
+    local configuration = {
       type = "coreclr", request = "launch", name = "MDS .NET probe",
-      program = assert(vim.env.MDS_DAP_PROGRAM), cwd = vim.fs.dirname(vim.env.MDS_DAP_PROGRAM),
+      program = assert(vim.env.MDS_DAP_PROGRAM), cwd = vim.fs.dirname(assert(vim.env.MDS_DAP_PROJECT)),
     }
+    if mode == "server" then
+      configuration.args = { "--urls", "http://127.0.0.1:0" }
+      configuration.env = {
+        MDS_CAPABILITY_PROBE = "1",
+        ASPNETCORE_URLS = "http://127.0.0.1:0",
+        DOTNET_WATCH_SUPPRESS_LAUNCH_BROWSER = "1",
+      }
+    end
+    dap.run(configuration)
   end
 end, 1000)
 vim.defer_fn(function()
