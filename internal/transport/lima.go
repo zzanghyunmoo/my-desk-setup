@@ -27,6 +27,9 @@ func NewLima(instance string) (Lima, error) {
 }
 
 func (lima Lima) Run(ctx context.Context, command Command) (Result, error) {
+	if err := ValidateCommand(command); err != nil {
+		return Result{}, err
+	}
 	executable, arguments := LimaArgv(lima.Instance, command)
 	return lima.executor.Run(
 		ctx,

@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/zzanghyunmoo/my-desk-setup/internal/adapters"
+	"github.com/zzanghyunmoo/my-desk-setup/internal/capability"
 	"github.com/zzanghyunmoo/my-desk-setup/internal/catalog"
 	"github.com/zzanghyunmoo/my-desk-setup/internal/cli"
 	"github.com/zzanghyunmoo/my-desk-setup/internal/doctor"
@@ -237,6 +238,65 @@ func TestCertifyBlocksFunctionalVerificationFailure(t *testing.T) {
 	}
 }
 
+func TestCertifyRequiresCapabilitiesForSelectedIDE(t *testing.T) {
+	readyReceipt := readyCapabilityReceipt([]string{"nvim-jvm"})
+
+	for _, test := range []struct {
+		name    string
+		receipt *capability.Receipt
+		want    Status
+	}{
+		{name: "missing", want: StatusBlocked},
+		{name: "ready", receipt: &readyReceipt, want: StatusVerified},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			bundle := certifyFixtureWithTransforms(
+				t,
+				true,
+				func(plan *planning.Plan) {
+					plan.Selection = []string{"nvim-jvm"}
+					plan.Actions[0].ComponentID = "nvim-jvm"
+				},
+				func(_ planning.Plan, report doctor.Report) doctor.Report {
+					report.Checks[0].ComponentID = "nvim-jvm"
+					report.Capabilities = test.receipt
+					return report
+				},
+			)
+			manifest, err := Verify(bundle, VerifyOptions{})
+			if err != nil {
+				t.Fatalf("Verify(): %v", err)
+			}
+			if manifest.Status != test.want {
+				t.Fatalf("status = %q, want %q", manifest.Status, test.want)
+			}
+		})
+	}
+}
+
+func TestVerifyRejectsCapabilityReceiptTampering(t *testing.T) {
+	readyReceipt := readyCapabilityReceipt([]string{"nvim-jvm"})
+	bundle := certifyFixtureWithTransforms(
+		t,
+		true,
+		func(plan *planning.Plan) {
+			plan.Selection = []string{"nvim-jvm"}
+			plan.Actions[0].ComponentID = "nvim-jvm"
+		},
+		func(_ planning.Plan, report doctor.Report) doctor.Report {
+			report.Checks[0].ComponentID = "nvim-jvm"
+			report.Capabilities = &readyReceipt
+			return report
+		},
+	)
+	rewriteManifest(t, bundle, func(manifest *Manifest) {
+		manifest.Capabilities.Checks[0].Status = capability.StatusFailed
+	})
+
+	_, err := Verify(bundle, VerifyOptions{})
+	assertErrorContains(t, err, "capability outcomes")
+}
+
 func TestParseCLIIdentityRequiresCanonicalProductionRelease(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -269,6 +329,34 @@ func TestParseCLIIdentityRequiresCanonicalProductionRelease(t *testing.T) {
 			assertErrorContains(t, err, "production")
 		})
 	}
+}
+
+func readyCapabilityReceipt(components []string) capability.Receipt {
+	specifications := capability.Expected(components)
+	checks := make([]capability.CapabilityCheck, 0, len(specifications))
+	for _, specification := range specifications {
+		if specification.Kind == capability.KindDAP {
+			checks = append(checks, capability.NewDAPCheck(
+				specification.ID,
+				specification.ComponentID,
+				capability.StatusPass,
+				"ready",
+				capability.DAPOutcome{
+					BreakpointVerified: true, StoppedAtSource: true,
+					StoppedSourceID: "fixture", StoppedLine: 1,
+					StackObserved: true, ScopesObserved: true,
+					KnownVariablePresent: true, Continued: true,
+					SteppedIn: true, SteppedOver: true, Terminated: true,
+				},
+			))
+			continue
+		}
+		checks = append(checks, capability.NewCheck(
+			specification.ID, specification.Kind, specification.ComponentID,
+			capability.StatusPass, "ready", "",
+		))
+	}
+	return capability.Aggregate(capability.ExpectedIDs(components), checks)
 }
 
 func TestVerifyRejectsBlockedEvidencePromotedToVerified(t *testing.T) {
@@ -684,6 +772,15 @@ func certifyFixtureWithReport(
 	ready bool,
 	transform func(planning.Plan, doctor.Report) doctor.Report,
 ) string {
+	return certifyFixtureWithTransforms(t, ready, nil, transform)
+}
+
+func certifyFixtureWithTransforms(
+	t *testing.T,
+	ready bool,
+	transformPlan func(*planning.Plan),
+	transform func(planning.Plan, doctor.Report) doctor.Report,
+) string {
 	t.Helper()
 	if runtime.GOOS == "windows" {
 		t.Skip("the focused fake binary fixture uses a POSIX executable")
@@ -720,6 +817,9 @@ func certifyFixtureWithReport(
 			},
 		},
 		Blockers: []planning.Blocker{},
+	}
+	if transformPlan != nil {
+		transformPlan(&plan)
 	}
 	plan.Digest, err = planning.Digest(plan)
 	if err != nil {
@@ -831,7 +931,7 @@ esac
 		t.Fatalf("Certify(): %v", err)
 	}
 	expectedStatus := StatusVerified
-	if !report.Ready {
+	if !report.Ready || !capabilitiesReady(plan, report.Capabilities) {
 		expectedStatus = StatusBlocked
 	}
 	if manifest.Status != expectedStatus {

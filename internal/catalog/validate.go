@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"path"
 	"reflect"
 	"regexp"
 	"sort"
@@ -221,6 +222,7 @@ func Validate(environment Environment) error {
 			problems = append(problems, fmt.Sprintf("lock contains unused key %q", key))
 		}
 	}
+	problems = append(problems, validateCompatibilityEpochs(environment.Lock)...)
 	problems = append(problems, validateMiseFiles(environment)...)
 	problems = append(problems, findCredentialMaterial(reflect.ValueOf(environment), "environment")...)
 
@@ -364,6 +366,9 @@ func validateVersionPolicy(
 				fmt.Sprintf("lock key %q requires version, source, and provenance", key),
 			}
 		}
+		if floatingIdentity(entry.Version) {
+			return []string{fmt.Sprintf("lock key %q has floating version %q", key, entry.Version)}
+		}
 		if err := validateReviewedHTTPS(entry.Provenance); err != nil {
 			return []string{
 				fmt.Sprintf("lock key %q provenance %v", key, err),
@@ -457,6 +462,45 @@ func validateVersionPolicy(
 					),
 				}
 			}
+			if artifact.Tree != nil {
+				problems := validateRuntimeTree(key, platform, artifact)
+				if len(problems) > 0 {
+					return problems
+				}
+			}
+		}
+		lima := component.Targets[TargetLimaGuest]
+		if lima.Status == StatusSupported && lima.Installer == "vendor" {
+			if _, exists := entry.Artifacts["linux-arm64"]; !exists {
+				return []string{fmt.Sprintf(
+					"lock key %q Lima vendor component requires a reviewed linux-arm64 artifact",
+					key,
+				)}
+			}
+		}
+		if entry.FixtureCache != nil {
+			cache := entry.FixtureCache
+			if exactartifact.ValidateSHA256(cache.DependencyGraphSHA256) != nil ||
+				exactartifact.ValidateSHA256(cache.ReadOnlyManifestSHA256) != nil ||
+				exactartifact.ValidateSHA256(cache.ProducerSHA256) != nil {
+				return []string{fmt.Sprintf(
+					"lock key %q fixture cache requires dependency graph, read-only manifest, and producer SHA-256",
+					key,
+				)}
+			}
+			if len(entry.Artifacts) == 0 {
+				return []string{fmt.Sprintf("lock key %q fixture cache requires a reviewed archive artifact", key)}
+			}
+			producerMatched := false
+			for _, artifact := range entry.Artifacts {
+				producerMatched = producerMatched || artifact.SHA256 == cache.ProducerSHA256
+			}
+			if !producerMatched {
+				return []string{fmt.Sprintf(
+					"lock key %q fixture cache producer SHA-256 must match a reviewed archive artifact",
+					key,
+				)}
+			}
 		}
 	case "manager", "manual":
 		if component.VersionPolicy.LockKey != "" {
@@ -470,6 +514,148 @@ func validateVersionPolicy(
 		}
 	}
 	return nil
+}
+
+func floatingIdentity(value string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(value))
+	if normalized == "latest" || normalized == "nightly" ||
+		normalized == "head" || normalized == "main" || normalized == "master" {
+		return true
+	}
+	return strings.Contains(normalized, "snapshot") ||
+		strings.Contains(normalized, ".x") ||
+		strings.ContainsAny(normalized, "*^~<>|")
+}
+
+func validateRuntimeTree(key, platform string, artifact Artifact) []string {
+	tree := artifact.Tree
+	if exactartifact.ValidateSHA256(tree.ManifestSHA256) != nil ||
+		exactartifact.ValidateSHA256(tree.LauncherSHA256) != nil ||
+		len(tree.RequiredPaths) == 0 {
+		return []string{fmt.Sprintf(
+			"lock key %q artifact %q runtime tree requires manifest SHA-256, launcher SHA-256, and required paths",
+			key,
+			platform,
+		)}
+	}
+	if tree.Usage != "" && tree.Usage != "direct" && tree.Usage != "resource" {
+		return []string{fmt.Sprintf(
+			"lock key %q artifact %q runtime tree usage %q is invalid",
+			key,
+			platform,
+			tree.Usage,
+		)}
+	}
+	if (tree.MaxTotalBytes == 0) != (tree.MaxEntries == 0) {
+		return []string{fmt.Sprintf(
+			"lock key %q artifact %q runtime tree must declare both max_total_bytes and max_entries",
+			key,
+			platform,
+		)}
+	}
+	if tree.MaxTotalBytes < 0 || tree.MaxEntries < 0 {
+		return []string{fmt.Sprintf(
+			"lock key %q artifact %q runtime tree extraction bounds must be positive",
+			key,
+			platform,
+		)}
+	}
+	launcherPresent := false
+	seen := make(map[string]bool, len(tree.RequiredPaths))
+	for _, required := range tree.RequiredPaths {
+		cleaned := path.Clean(required)
+		if required == "" || cleaned != required || cleaned == "." ||
+			strings.HasPrefix(cleaned, "../") || path.IsAbs(cleaned) ||
+			strings.Contains(required, `\`) {
+			return []string{fmt.Sprintf(
+				"lock key %q artifact %q runtime tree has unsafe required path %q",
+				key,
+				platform,
+				required,
+			)}
+		}
+		if seen[required] {
+			return []string{fmt.Sprintf(
+				"lock key %q artifact %q runtime tree has duplicate required path %q",
+				key,
+				platform,
+				required,
+			)}
+		}
+		seen[required] = true
+		launcherPresent = launcherPresent || required == artifact.Executable
+	}
+	if !launcherPresent {
+		return []string{fmt.Sprintf(
+			"lock key %q artifact %q runtime tree required paths omit launcher %q",
+			key,
+			platform,
+			artifact.Executable,
+		)}
+	}
+	executables := make(map[string]bool, len(tree.ExecutablePaths))
+	for _, executable := range tree.ExecutablePaths {
+		if executable == "" || executables[executable] || !seen[executable] {
+			return []string{fmt.Sprintf(
+				"lock key %q artifact %q runtime tree executable path %q must be unique and required",
+				key,
+				platform,
+				executable,
+			)}
+		}
+		executables[executable] = true
+	}
+	if tree.Usage != "resource" && len(tree.ExecutablePaths) > 0 &&
+		!executables[artifact.Executable] {
+		return []string{fmt.Sprintf(
+			"lock key %q artifact %q runtime tree executable paths omit launcher %q",
+			key,
+			platform,
+			artifact.Executable,
+		)}
+	}
+	return nil
+}
+
+func validateCompatibilityEpochs(lock VersionLock) []string {
+	var problems []string
+	membership := make(map[string]string)
+	for id, epoch := range lock.CompatibilityEpochs {
+		if !catalogIdentifierPattern.MatchString(id) {
+			problems = append(problems, fmt.Sprintf("compatibility epoch %q has an invalid identifier", id))
+		}
+		if len(epoch.Members) < 2 {
+			problems = append(problems, fmt.Sprintf("compatibility epoch %q requires at least two members", id))
+		}
+		problems = append(problems, duplicateValues("compatibility epoch "+id+" members", epoch.Members)...)
+		for _, key := range epoch.Members {
+			entry, exists := lock.Versions[key]
+			if !exists {
+				problems = append(problems, fmt.Sprintf("compatibility epoch %q references missing lock key %q", id, key))
+				continue
+			}
+			if owner, exists := membership[key]; exists && owner != id {
+				problems = append(problems, fmt.Sprintf("lock key %q belongs to compatibility epochs %q and %q", key, owner, id))
+			}
+			membership[key] = id
+			if entry.CompatibilityEpoch != id {
+				problems = append(problems, fmt.Sprintf("lock key %q must declare compatibility epoch %q", key, id))
+			}
+		}
+	}
+	for key, entry := range lock.Versions {
+		if entry.CompatibilityEpoch == "" {
+			continue
+		}
+		if _, exists := lock.CompatibilityEpochs[entry.CompatibilityEpoch]; !exists {
+			problems = append(problems, fmt.Sprintf("lock key %q references unknown compatibility epoch %q", key, entry.CompatibilityEpoch))
+			continue
+		}
+		if membership[key] != entry.CompatibilityEpoch {
+			problems = append(problems, fmt.Sprintf("compatibility epoch %q omits lock key %q", entry.CompatibilityEpoch, key))
+		}
+	}
+	return problems
 }
 
 func componentBunPackage(component Component) (string, bool, string) {

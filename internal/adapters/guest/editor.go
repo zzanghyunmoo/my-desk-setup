@@ -34,6 +34,10 @@ func (editor Editor) Observe(
 	ctx context.Context,
 	action planning.Action,
 ) (adapters.Observation, error) {
+	set, sliceErr := pluginSetForAction(action)
+	if sliceErr != nil {
+		return adapters.Observation{State: adapters.StateConflict, Detail: sliceErr.Error()}, nil
+	}
 	configDirectory := filepath.Join(editor.Home, ".config")
 	exists, err := inspectDirectoryBelow(editor.Home, configDirectory)
 	if err != nil {
@@ -97,7 +101,13 @@ func (editor Editor) Observe(
 			Detail: "managed Neovim config revision differs; use explicit update",
 		}, nil
 	}
-	_, ready, detail, err := inspectEditorConfiguration(root)
+	var ready bool
+	var detail string
+	if action.Inputs[planning.EditorSlicesInput] != "" {
+		ready, detail, err = inspectActionConfiguration(editor.Home, action)
+	} else {
+		_, ready, detail, err = inspectEditorConfiguration(root)
+	}
 	if err != nil {
 		return adapters.Observation{}, err
 	}
@@ -108,7 +118,7 @@ func (editor Editor) Observe(
 			Detail:           detail,
 		}, nil
 	}
-	ready, detail, err = inspectPluginRuntime(ctx, editor.Home, editor.Port, basePluginSet)
+	ready, detail, err = inspectPluginRuntime(ctx, editor.Home, editor.Port, set)
 	if err != nil {
 		return adapters.Observation{}, err
 	}
@@ -130,6 +140,10 @@ func (editor Editor) Apply(
 ) (returnErr error) {
 	if editor.Home == "" || editor.Port == nil || editor.Now == nil {
 		return errors.New("editor adapter requires home, port, and clock")
+	}
+	set, err := pluginSetForAction(action)
+	if err != nil {
+		return err
 	}
 	configDirectory := filepath.Join(editor.Home, ".config")
 	if err := ensureDirectoryBelow(editor.Home, configDirectory); err != nil {
@@ -166,10 +180,16 @@ func (editor Editor) Apply(
 			return errors.New("existing ~/.config/nvim is not mds-managed")
 		}
 		if marker.Revision == action.Version {
-			if err := repairEditorConfiguration(target); err != nil {
-				return err
+			var repairErr error
+			if action.Inputs[planning.EditorSlicesInput] == "" {
+				repairErr = repairEditorConfiguration(target)
+			} else {
+				repairErr = writeActionConfiguration(target, action)
 			}
-			return preparePluginRuntime(ctx, editor.Home, editor.Port, basePluginSet)
+			if repairErr != nil {
+				return repairErr
+			}
+			return preparePluginRuntime(ctx, editor.Home, editor.Port, set)
 		}
 		if !editor.AllowReplace {
 			return errors.New("managed ~/.config/nvim requires explicit update")
@@ -248,10 +268,10 @@ func (editor Editor) Apply(
 	); err != nil {
 		return fmt.Errorf("write Neovim ownership marker: %w", err)
 	}
-	if err := writeEditorConfiguration(temporary); err != nil {
+	if err := writeActionConfiguration(temporary, action); err != nil {
 		return err
 	}
-	if err := preparePluginRuntime(ctx, editor.Home, editor.Port, basePluginSet); err != nil {
+	if err := preparePluginRuntime(ctx, editor.Home, editor.Port, set); err != nil {
 		return err
 	}
 	if !replaceExisting {
@@ -294,6 +314,10 @@ func (editor Editor) Verify(
 	ctx context.Context,
 	action planning.Action,
 ) error {
+	set, err := pluginSetForAction(action)
+	if err != nil {
+		return err
+	}
 	observation, err := editor.Observe(ctx, action)
 	if err != nil {
 		return err
@@ -307,6 +331,10 @@ func (editor Editor) Verify(
 		return err
 	}
 	includeIDE, ready, detail, err := inspectEditorConfiguration(root)
+	if action.Inputs[planning.EditorSlicesInput] != "" {
+		ready, detail, err = inspectActionConfiguration(editor.Home, action)
+		includeIDE = set != basePluginSet
+	}
 	if err != nil {
 		return err
 	}
@@ -314,10 +342,7 @@ func (editor Editor) Verify(
 		return fmt.Errorf("managed editor configuration is not ready: %s", detail)
 	}
 	if includeIDE {
-		if observation.State != adapters.StateReady {
-			return fmt.Errorf("managed base plugin runtime is not ready: %s", observation.Detail)
-		}
-		return nil
+		return verifyManagedNeovim(ctx, editor.Home, editor.Port, set)
 	}
 	return verifyManagedNeovim(ctx, editor.Home, editor.Port, basePluginSet)
 }

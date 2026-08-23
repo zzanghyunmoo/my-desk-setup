@@ -4,8 +4,13 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/zzanghyunmoo/my-desk-setup/internal/capability"
 	"github.com/zzanghyunmoo/my-desk-setup/internal/planning"
 )
+
+type CapabilityProber interface {
+	ProbeCapabilities(context.Context, planning.Plan) capability.Receipt
+}
 
 type ActionRequiredError struct {
 	Reason string

@@ -39,6 +39,9 @@ func New(
 		},
 	}
 	return adapters.Router{
+		CapabilityDelegate: CapabilityProbe{
+			Home: home, Port: port, Target: facts,
+		},
 		Default: packageAdapter,
 		ByID: map[string]adapters.Component{
 			"claude-code": Agent{Home: home, Delegate: packageAdapter},
@@ -49,6 +52,8 @@ func New(
 				AllowReplace: options.AllowReplace, AllowAdopt: options.AllowAdopt,
 			},
 			"nvim-ide-tools": IDE{Home: home, Port: port, Delegate: packageAdapter},
+			"nvim-jvm":       IDE{Home: home, Port: port, ConfigOnly: true},
+			"nvim-dotnet":    IDE{Home: home, Port: port, ConfigOnly: true},
 			"docker-engine": Docker{
 				Facts: facts, Port: port, Delegate: packageAdapter, Client: client,
 			},

@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"slices"
+	"sort"
 	"strings"
 	"testing"
 
@@ -52,6 +54,236 @@ func TestCatalogLoadsAndRevisionIsCanonical(t *testing.T) {
 	if !strings.HasPrefix(first, "sha256:") {
 		t.Fatalf("revision = %q, want sha256 prefix", first)
 	}
+}
+
+func TestLimaIDECohortIsExactAndComplete(t *testing.T) {
+	environment := loadCatalog(t)
+	want := map[string]struct {
+		version  string
+		archive  string
+		manifest string
+		launcher string
+		usage    string
+	}{
+		"jdt-language-server":          {"1.60.0+202606262232", "e94c303d8198f977930803582738771fd18c52c5492878410bf222b1aa81ef1d", "84747fbc6e7c28c1ce432d4dc618034adf0331f9b4c2f5f7800d694c6763681d", "ed0980ea2da080b79566b24b67f94f510d5001eeb401c7ed316748c0b03fbfee", "direct"},
+		"kotlin-debug-adapter":         {"0.4.4", "3874cbaded0fdb8229a381167895b0a6caf88b7adffabc690fcf5a6fb65d11b6", "a0389be2cd2a45f851a20788a982966de9656025c7d676dc957220f0c560f86e", "9b059a1d98ca34cd34fa6552d3efef3748d98bf3e51ba719c4d0eb1ff061e6b9", "direct"},
+		"kotlin-language-server":       {"262.9593.0", "c9c11d98194c72fd1056ca58d1434e9ce708b9f524e9c6b356ca3085c6db60fa", "5be1b270bc47a438ea197d9b16960de68b835e1297836ab306b44aac218c9b61", "a40d9d0315588cd99b0b05a86f06530e565af1195b065a04f5f3b4f56dcc1c9c", "direct"},
+		"spring-tools-language-server": {"5.2.0.RELEASE", "70943c4e434d469090f8cee54dacf1de10ec1161f92685581dc2ef6164971bb3", "b8bd2f537de94a3ca188a9826c093dad6ea0e132803cbdcf2016e4a1009a2207", "ec922c593895331943ee1eccda434461da034bb87ac20f406fd7fb5e211bc8e1", "resource"},
+		"roslyn-language-server":       {"5.11.0-1.26380.4", "541ab1dc23848a77053e248c58ec2398c84cabb432a01a90bfab0843f1e218a0", "2b711088879509fa450a5a3f6177cdfb30fa014f0d2338eda27c3499defcc446", "4888faba7578ae77fe60f5b6c20e175ed8864f7bf49619c763e386d96c6d7969", "direct"},
+		"netcoredbg":                   {"3.2.0-1092", "065ff49badec8a695dbea2de6ab6a330c774a191e426a217ab8cc05250627ccb", "150314a56915277e9cec2683a85c1aa95b068d02d1cd560b59e46563a57939ea", "d2ea6a92951c1e7db6554568000c43017f4e5328cbb1157e92d7e9fef7ae198e", "direct"},
+		"java-debug-server":            {"0.53.2", "87627e24dbb5b01137decc0265f043cb08adad22af3c195f1ba39898dafb1588", "79674f0c92dfe4693bee14db50eb28ade6ad98b35648967512713ca5c7b44cd3", "69128bebd6c46d3a9daeeb77a3bbe877423c2f66eb773fd1ae5375658ce0c9bf", "resource"},
+		"java-test-server":             {"0.46.0", "56c1e14dc73a30e9574c47042106fa52893bf8325b580f47c14ace07d5eef255", "adee0a1fc322436e1f0144e3af4f00f9a19dfe5f70e030b6e6bd6d1868dcbe0d", "e01cc491d866f996499e8ee55d0c3d8ba4f6ec44053975b791e3d0d2c76044e6", "resource"},
+	}
+	for key, expected := range want {
+		entry, exists := environment.Lock.Versions[key]
+		if !exists {
+			t.Fatalf("missing exact cohort lock %q", key)
+		}
+		artifactValue, exists := entry.Artifacts["linux-arm64"]
+		if !exists || artifactValue.Tree == nil {
+			t.Fatalf("lock %q has no linux-arm64 runtime tree", key)
+		}
+		if entry.Version != expected.version || artifactValue.SHA256 != expected.archive ||
+			artifactValue.Tree.ManifestSHA256 != expected.manifest ||
+			artifactValue.Tree.LauncherSHA256 != expected.launcher ||
+			artifactValue.Tree.Usage != expected.usage {
+			t.Fatalf("lock %q identity = %+v / %+v, want %+v", key, entry, artifactValue, expected)
+		}
+	}
+
+	debug := environment.Lock.Versions["java-debug-server"]
+	if !strings.Contains(debug.Artifacts["linux-arm64"].URL, "/0.59.0/") {
+		t.Fatal("java debug carrier VSIX 0.59.0 is not recorded separately from server 0.53.2")
+	}
+	dotnet := environment.Lock.Versions["dotnet-sdk"]
+	if dotnet.Version != "10.0.400" ||
+		dotnet.Artifacts["linux-arm64"].SHA256 != "13c219bfd1ff00a886c1523a9c7027c4f24c1e730e653376d2b81f1435da5a59" {
+		t.Fatalf("dotnet SDK identity = %+v", dotnet)
+	}
+	kotlinTree := environment.Lock.Versions["kotlin-language-server"].Artifacts["linux-arm64"].Tree
+	if kotlinTree == nil ||
+		!slices.Contains(kotlinTree.RequiredPaths, "extension/server/jbr/lib/jspawnhelper") ||
+		!slices.Contains(kotlinTree.ExecutablePaths, "extension/server/jbr/lib/jspawnhelper") {
+		t.Fatal("Kotlin runtime tree does not preserve the bundled JBR jspawnhelper executable")
+	}
+	html := environment.Lock.Versions["vscode-html-language-server"]
+	if html.Version != "4.10.0" || html.NPM == nil ||
+		html.NPM.SHA256 != "d6e2d090d09c4b91daa74e9e7462a3d3f244efb96aa5111004cfffa49d6dc9ef" {
+		t.Fatalf("HTML language server identity = %+v", html)
+	}
+	epoch := environment.Lock.CompatibilityEpochs["neovim-razor-2026-08"]
+	wantEpoch := []string{"neovim", "nvchad", "nvim-dotnet", "roslyn-language-server", "vscode-html-language-server"}
+	if !reflect.DeepEqual(epoch.Members, wantEpoch) {
+		t.Fatalf("Neovim/Razor epoch = %v, want %v", epoch.Members, wantEpoch)
+	}
+	for _, id := range []string{"nvim-jvm", "nvim-dotnet"} {
+		component := catalogComponentByID(t, environment, id)
+		if component.Targets[catalog.TargetLimaGuest].Status != catalog.StatusSupported {
+			t.Fatalf("%s is not Lima-supported", id)
+		}
+	}
+	for _, id := range []string{
+		"java-debug-server", "java-test-server", "jdt-language-server",
+		"kotlin-debug-adapter", "kotlin-language-server", "netcoredbg",
+		"roslyn-language-server", "spring-tools-language-server",
+	} {
+		component := catalogComponentByID(t, environment, id)
+		if got := component.Targets[catalog.TargetLimaGuest].Package; got != id {
+			t.Fatalf("%s Lima package = %q, want exact component package", id, got)
+		}
+	}
+}
+
+func TestLimaIDEProfilesComposeExactIndependentSlices(t *testing.T) {
+	environment := loadCatalog(t)
+	wantJVM := []string{
+		"base-cli", "gradle", "java", "java-debug-server", "java-test-server",
+		"jdt-language-server", "kotlin", "kotlin-debug-adapter", "kotlin-language-server", "mise", "neovim",
+		"nvchad", "nvim-jvm", "spring-tools-language-server",
+	}
+	wantDotNet := []string{
+		"base-cli", "bun", "dotnet-sdk", "mise", "neovim", "netcoredbg", "nvchad",
+		"nvim-dotnet", "roslyn-language-server", "vscode-html-language-server",
+	}
+	wantLegacy := []string{
+		"base-cli", "bun", "c-toolchain", "go", "mise", "neovim", "nvchad",
+		"nvim-ide-tools", "pyright", "python",
+	}
+	for profile, want := range map[string][]string{
+		"nvim-jvm":    wantJVM,
+		"nvim-dotnet": wantDotNet,
+		"nvim-ide":    wantLegacy,
+	} {
+		resolved, err := catalog.ResolveProfile(environment, profile, catalog.TargetLimaGuest)
+		if err != nil {
+			t.Fatalf("ResolveProfile(%s): %v", profile, err)
+		}
+		got := resolvedIDList(resolved)
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("%s closure = %v, want %v", profile, got, want)
+		}
+	}
+	resolved, err := catalog.ResolveProfile(environment, "nvim-full", catalog.TargetLimaGuest)
+	if err != nil {
+		t.Fatalf("ResolveProfile(nvim-full): %v", err)
+	}
+	wantFull := uniqueSorted(append(append(append([]string{}, wantJVM...), wantDotNet...), wantLegacy...))
+	if got := resolvedIDList(resolved); !reflect.DeepEqual(got, wantFull) {
+		t.Fatalf("nvim-full closure = %v, want exact union %v", got, wantFull)
+	}
+
+	candidates := map[string]bool{}
+	for _, component := range catalog.SelectionCandidates(environment) {
+		candidates[component.ID] = true
+	}
+	for _, internal := range []string{
+		"dotnet-sdk", "jdt-language-server", "java-debug-server", "java-test-server",
+		"kotlin-debug-adapter", "kotlin-language-server", "netcoredbg", "roslyn-language-server",
+		"spring-tools-language-server", "vscode-html-language-server",
+	} {
+		if candidates[internal] {
+			t.Fatalf("dependency-only cohort member %q leaked into direct candidates", internal)
+		}
+	}
+}
+
+func TestLimaVendorCohortRejectsMissingArm64Artifact(t *testing.T) {
+	environment := loadCatalog(t)
+	entry := environment.Lock.Versions["roslyn-language-server"]
+	entry.Artifacts = map[string]catalog.Artifact{}
+	environment.Lock.Versions["roslyn-language-server"] = entry
+	assertValidationError(
+		t,
+		environment,
+		`lock key "roslyn-language-server" Lima vendor component requires a reviewed linux-arm64 artifact`,
+	)
+}
+
+func TestLimaEditorActionsBindOneNormalizedSliceIdentity(t *testing.T) {
+	environment := loadCatalog(t)
+	facts := certificationFacts(t, target.KindLimaGuest, "mds", "linux", "arm64")
+	for profileID, want := range map[string]string{
+		"nvim-ide": "legacy", "nvim-jvm": "jvm", "nvim-dotnet": "dotnet",
+		"nvim-full": "dotnet,jvm,legacy",
+	} {
+		selection, err := planning.Profile(profileID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		plan, err := planning.Build(environment, facts, selection)
+		if err != nil {
+			t.Fatalf("Build(%s): %v", profileID, err)
+		}
+		count := 0
+		for _, action := range plan.Actions {
+			switch action.ComponentID {
+			case "nvchad", "nvim-ide-tools", "nvim-jvm", "nvim-dotnet":
+				count++
+				if got := action.Inputs[planning.EditorSlicesInput]; got != want {
+					t.Fatalf("%s action %s slices = %q, want %q", profileID, action.ComponentID, got, want)
+				}
+				for _, componentID := range requiredRuntimeTreesForSlices(want) {
+					key := planning.RuntimeTreeInputPrefix + componentID
+					var identity struct {
+						ComponentID    string `json:"component_id"`
+						ArchiveSHA256  string `json:"archive_sha256"`
+						ManifestSHA256 string `json:"manifest_sha256"`
+						LauncherSHA256 string `json:"launcher_sha256"`
+					}
+					if err := json.Unmarshal([]byte(action.Inputs[key]), &identity); err != nil ||
+						identity.ComponentID != componentID {
+						t.Fatalf("%s action %s runtime identity %s = %+v, %v", profileID, action.ComponentID, key, identity, err)
+					}
+					entry := environment.Lock.Versions[componentID]
+					artifact := entry.Artifacts["linux-arm64"]
+					if artifact.Tree == nil || identity.ArchiveSHA256 != artifact.SHA256 ||
+						identity.ManifestSHA256 != artifact.Tree.ManifestSHA256 ||
+						identity.LauncherSHA256 != artifact.Tree.LauncherSHA256 {
+						t.Fatalf("%s action %s runtime identity %s does not match production lock", profileID, action.ComponentID, key)
+					}
+				}
+			}
+		}
+		if count < 2 {
+			t.Fatalf("%s bound only %d editor actions", profileID, count)
+		}
+	}
+}
+
+func requiredRuntimeTreesForSlices(slices string) []string {
+	var result []string
+	if strings.Contains(slices, "jvm") {
+		result = append(result, "java-debug-server", "java-test-server", "jdt-language-server", "kotlin-debug-adapter", "kotlin-language-server", "spring-tools-language-server")
+	}
+	if strings.Contains(slices, "dotnet") {
+		result = append(result, "netcoredbg", "roslyn-language-server")
+	}
+	sort.Strings(result)
+	return result
+}
+
+func TestRuntimeTreeResourceUsageAndExtractionBoundsAreStrict(t *testing.T) {
+	environment := validEnvironment()
+	entry := environment.Lock.Versions["fixture"]
+	artifactValue := catalog.Artifact{
+		URL: "https://example.com/fixture.zip", SHA256: strings.Repeat("c", 64),
+		Format: "zip", Executable: "bin/fixture",
+	}
+	artifactValue.Tree = &catalog.RuntimeTreeIdentity{
+		ManifestSHA256: strings.Repeat("a", 64),
+		LauncherSHA256: strings.Repeat("b", 64),
+		RequiredPaths:  []string{artifactValue.Executable},
+		Usage:          "floating",
+	}
+	entry.Artifacts = map[string]catalog.Artifact{"linux-arm64": artifactValue}
+	environment.Lock.Versions["fixture"] = entry
+	assertValidationError(t, environment, `runtime tree usage "floating"`)
+
+	artifactValue.Tree.Usage = "resource"
+	artifactValue.Tree.MaxTotalBytes = 2 << 30
+	entry.Artifacts["linux-arm64"] = artifactValue
+	environment.Lock.Versions["fixture"] = entry
+	assertValidationError(t, environment, "must declare both max_total_bytes and max_entries")
 }
 
 func TestCatalogVerificationCommandsStayInsideNonPrivilegedProbeAllowlist(
@@ -245,6 +477,137 @@ func TestValidationRejectsReviewedURLQuery(t *testing.T) {
 	environment.Lock.Versions["fixture"] = entry
 
 	assertValidationError(t, environment, "without a query or fragment")
+}
+
+func TestCompatibilityEpochRequiresEveryExactMember(t *testing.T) {
+	environment := validEnvironment()
+	environment.Lock.CompatibilityEpochs = map[string]catalog.CompatibilityEpoch{
+		"editor": {Members: []string{"fixture", "missing"}},
+	}
+	entry := environment.Lock.Versions["fixture"]
+	entry.CompatibilityEpoch = "editor"
+	environment.Lock.Versions["fixture"] = entry
+
+	assertValidationError(t, environment, `compatibility epoch "editor" references missing lock key "missing"`)
+}
+
+func TestCompatibilityEpochRejectsPartialMembership(t *testing.T) {
+	environment := validEnvironment()
+	environment.Lock.CompatibilityEpochs = map[string]catalog.CompatibilityEpoch{
+		"editor": {Members: []string{"fixture"}},
+	}
+
+	assertValidationError(t, environment, `lock key "fixture" must declare compatibility epoch "editor"`)
+}
+
+func TestCompatibilityEpochRequiresMultipleMembers(t *testing.T) {
+	environment := validEnvironment()
+	environment.Lock.CompatibilityEpochs = map[string]catalog.CompatibilityEpoch{
+		"editor": {Members: []string{"fixture"}},
+	}
+	entry := environment.Lock.Versions["fixture"]
+	entry.CompatibilityEpoch = "editor"
+	environment.Lock.Versions["fixture"] = entry
+
+	assertValidationError(t, environment, `compatibility epoch "editor" requires at least two members`)
+}
+
+func TestValidationRejectsFloatingReviewedIdentity(t *testing.T) {
+	for _, version := range []string{
+		"latest",
+		"nightly",
+		"1.0.0-SNAPSHOT",
+		"^1.2.3",
+		"~1.2.3",
+		">=1.2.3",
+		"1.x",
+		"1.2.3 || 2.0.0",
+	} {
+		t.Run(version, func(t *testing.T) {
+			environment := validEnvironment()
+			entry := environment.Lock.Versions["fixture"]
+			entry.Version = version
+			environment.Lock.Versions["fixture"] = entry
+			assertValidationError(t, environment, `lock key "fixture" has floating version`)
+		})
+	}
+}
+
+func TestRuntimeTreeRequiresCompleteImmutableLayout(t *testing.T) {
+	environment := validEnvironment()
+	entry := environment.Lock.Versions["fixture"]
+	entry.Artifacts = map[string]catalog.Artifact{
+		"linux-arm64": {
+			URL:        "https://example.com/fixture.tar.gz",
+			SHA256:     strings.Repeat("a", 64),
+			Format:     "tar.gz",
+			Executable: "bin/fixture",
+			Tree:       &catalog.RuntimeTreeIdentity{},
+		},
+	}
+	environment.Lock.Versions["fixture"] = entry
+
+	assertValidationError(t, environment, `runtime tree requires manifest SHA-256, launcher SHA-256, and required paths`)
+}
+
+func TestFixtureCacheRequiresDependencyGraphAndReadOnlyManifest(t *testing.T) {
+	environment := validEnvironment()
+	entry := environment.Lock.Versions["fixture"]
+	entry.FixtureCache = &catalog.FixtureCacheIdentity{}
+	environment.Lock.Versions["fixture"] = entry
+
+	assertValidationError(t, environment, `fixture cache requires dependency graph, read-only manifest, and producer SHA-256`)
+}
+
+func TestFixtureCacheProducerDigestMustMatchReviewedArtifact(t *testing.T) {
+	environment := validEnvironment()
+	entry := environment.Lock.Versions["fixture"]
+	entry.Artifacts = map[string]catalog.Artifact{
+		"linux-arm64": {
+			URL:        "https://example.com/fixture.tar.gz",
+			SHA256:     strings.Repeat("a", 64),
+			Format:     "tar.gz",
+			Executable: "bin/fixture",
+		},
+	}
+	entry.FixtureCache = &catalog.FixtureCacheIdentity{
+		DependencyGraphSHA256:  strings.Repeat("b", 64),
+		ReadOnlyManifestSHA256: strings.Repeat("c", 64),
+		ProducerSHA256:         strings.Repeat("d", 64),
+	}
+	environment.Lock.Versions["fixture"] = entry
+
+	assertValidationError(t, environment, `fixture cache producer SHA-256 must match a reviewed archive artifact`)
+}
+
+func TestCompatibilityEpochCanonicalOrdering(t *testing.T) {
+	environment := validEnvironment()
+	second := fixtureComponent("second", "second-capability", "second")
+	environment.Catalog.Components = append(environment.Catalog.Components, second)
+	environment.Lock.Versions["second"] = catalog.LockEntry{
+		Version: "2.0.0", Source: "fixture", Provenance: "https://example.com/second",
+		CompatibilityEpoch: "editor",
+	}
+	entry := environment.Lock.Versions["fixture"]
+	entry.CompatibilityEpoch = "editor"
+	environment.Lock.Versions["fixture"] = entry
+	environment.Lock.CompatibilityEpochs = map[string]catalog.CompatibilityEpoch{
+		"editor": {Members: []string{"fixture", "second"}},
+	}
+	first, err := catalog.Revision(environment)
+	if err != nil {
+		t.Fatalf("Revision(first): %v", err)
+	}
+	epoch := environment.Lock.CompatibilityEpochs["editor"]
+	epoch.Members = []string{"second", "fixture"}
+	environment.Lock.CompatibilityEpochs["editor"] = epoch
+	secondRevision, err := catalog.Revision(environment)
+	if err != nil {
+		t.Fatalf("Revision(second): %v", err)
+	}
+	if first != secondRevision {
+		t.Fatalf("epoch member order changed revision: %s != %s", first, secondRevision)
+	}
 }
 
 func TestPublishedSchemasAndSemanticValidationRejectSameCoreDrift(t *testing.T) {
@@ -511,8 +874,12 @@ func TestWorkstationProfilesKeepHostAndGuestResponsibilitiesSeparate(t *testing.
 		},
 		{
 			profile: "lima-guest", target: catalog.TargetLimaGuest,
-			want:   []string{"go", "c-toolchain", "python", "uv", "neovim", "nvchad", "notion-cli", "linear-cli", "gh", "docker-engine"},
-			forbid: []string{"claude-code", "opencode", "codex", "herdr", "typescript", "java", "kotlin", "flutter", "gradle"},
+			want: []string{
+				"go", "c-toolchain", "python", "uv", "neovim", "nvchad", "nvim-ide-tools",
+				"java", "kotlin", "gradle", "nvim-jvm", "dotnet-sdk", "nvim-dotnet",
+				"notion-cli", "linear-cli", "gh", "docker-engine",
+			},
+			forbid: []string{"claude-code", "opencode", "codex", "herdr", "typescript", "flutter"},
 		},
 	}
 
@@ -960,6 +1327,21 @@ func resolvedIDs(resolved []catalog.ResolvedComponent) map[string]bool {
 		ids[item.Component.ID] = true
 	}
 	return ids
+}
+
+func resolvedIDList(resolved []catalog.ResolvedComponent) []string {
+	ids := make([]string, 0, len(resolved))
+	for _, item := range resolved {
+		ids = append(ids, item.Component.ID)
+	}
+	sort.Strings(ids)
+	return ids
+}
+
+func uniqueSorted(values []string) []string {
+	result := append([]string(nil), values...)
+	sort.Strings(result)
+	return slices.Compact(result)
 }
 
 func certificationFacts(

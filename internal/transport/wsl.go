@@ -20,6 +20,9 @@ func NewWSL(distribution string) (WSL, error) {
 }
 
 func (wsl WSL) Run(ctx context.Context, command Command) (Result, error) {
+	if err := ValidateCommand(command); err != nil {
+		return Result{}, err
+	}
 	executable, arguments := WSLArgv(wsl.Distribution, command)
 	return wsl.executor.Run(
 		ctx,

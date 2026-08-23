@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/zzanghyunmoo/my-desk-setup/internal/capability"
 	"github.com/zzanghyunmoo/my-desk-setup/internal/planning"
 )
 
@@ -49,8 +50,39 @@ func cleanupAll(cleanups []func() error) func() error {
 }
 
 type Router struct {
-	Default Component
-	ByID    map[string]Component
+	Default            Component
+	ByID               map[string]Component
+	CapabilityDelegate CapabilityProber
+}
+
+// ProbeCapabilities keeps plan routing and functional verification on the same
+// production adapter. A router without a delegate remains deliberately
+// fail-closed; doctor must never turn an absent target probe into a green
+// receipt merely because all component-level version checks passed.
+func (router Router) ProbeCapabilities(
+	ctx context.Context,
+	plan planning.Plan,
+) capability.Receipt {
+	if router.CapabilityDelegate != nil {
+		return router.CapabilityDelegate.ProbeCapabilities(ctx, plan)
+	}
+	components := make([]string, 0, len(plan.Actions))
+	for _, action := range plan.Actions {
+		components = append(components, action.ComponentID)
+	}
+	expected := capability.Expected(components)
+	checks := make([]capability.CapabilityCheck, 0, len(expected))
+	for _, specification := range expected {
+		checks = append(checks, capability.NewCheck(
+			specification.ID,
+			specification.Kind,
+			specification.ComponentID,
+			capability.StatusBlocked,
+			"probe-unavailable",
+			"",
+		))
+	}
+	return capability.Aggregate(capability.ExpectedIDs(components), checks)
 }
 
 func (router Router) Observe(

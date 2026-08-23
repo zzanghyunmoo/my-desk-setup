@@ -54,6 +54,30 @@ type Port interface {
 	Run(context.Context, Command) (Result, error)
 }
 
+func ValidateCommand(specification Command) error {
+	if strings.TrimSpace(specification.Executable) == "" {
+		return errors.New("executable is required")
+	}
+	if strings.ContainsRune(specification.Executable, '\x00') {
+		return errors.New("executable contains NUL")
+	}
+	for _, argument := range specification.Arguments {
+		if strings.ContainsRune(argument, '\x00') {
+			return errors.New("command argument contains NUL")
+		}
+	}
+	if strings.ContainsRune(specification.WorkingDirectory, '\x00') {
+		return errors.New("working directory contains NUL")
+	}
+	if _, err := commandEnvironmentFor(
+		specification.Environment,
+		specification.EnvironmentMode,
+	); err != nil {
+		return fmt.Errorf("prepare command environment: %w", err)
+	}
+	return nil
+}
+
 type Executor struct{}
 
 func (Executor) Run(
@@ -243,6 +267,13 @@ func validateEnvironmentEntry(key, value string) error {
 	if strings.ContainsRune(value, '\x00') {
 		return fmt.Errorf("environment value for %q contains NUL", key)
 	}
+	if credentialAssignmentPattern.MatchString(value) ||
+		credentialTokenPattern.MatchString(value) {
+		return fmt.Errorf(
+			"credential-shaped environment value for %q is not allowed",
+			key,
+		)
+	}
 	normalized := strings.ToUpper(key)
 	normalized = strings.Map(func(character rune) rune {
 		switch {
@@ -276,7 +307,8 @@ func validateEnvironmentEntry(key, value string) error {
 }
 
 func guestArgv(command Command) (string, []string) {
-	if len(command.Environment) == 0 {
+	if len(command.Environment) == 0 &&
+		command.EnvironmentMode != EnvironmentReplace {
 		return command.Executable, append([]string(nil), command.Arguments...)
 	}
 	keys := make([]string, 0, len(command.Environment))
@@ -284,7 +316,10 @@ func guestArgv(command Command) (string, []string) {
 		keys = append(keys, key)
 	}
 	sort.Strings(keys)
-	arguments := make([]string, 0, len(keys)+1+len(command.Arguments))
+	arguments := make([]string, 0, len(keys)+2+len(command.Arguments))
+	if command.EnvironmentMode == EnvironmentReplace {
+		arguments = append(arguments, "-i")
+	}
 	for _, key := range keys {
 		arguments = append(arguments, key+"="+command.Environment[key])
 	}

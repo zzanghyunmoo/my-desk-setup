@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"time"
 
+	"github.com/zzanghyunmoo/my-desk-setup/internal/capability"
 	"github.com/zzanghyunmoo/my-desk-setup/internal/state"
 	"github.com/zzanghyunmoo/my-desk-setup/internal/target"
 )
@@ -28,19 +29,20 @@ const (
 )
 
 type Manifest struct {
-	SchemaVersion   string           `json:"schema_version"`
-	CaptureKind     string           `json:"capture_kind"`
-	Status          Status           `json:"status"`
-	Cohort          string           `json:"cohort"`
-	CapturedAtUnix  json.Number      `json:"captured_at_unix"`
-	Target          TargetIdentity   `json:"target"`
-	CLI             CLIIdentity      `json:"cli"`
-	BinarySHA256    string           `json:"binary_sha256"`
-	CatalogRevision string           `json:"catalog_revision"`
-	PlanDigest      string           `json:"plan_digest"`
-	Components      []ComponentCheck `json:"components"`
-	ApplyReceipt    *state.Receipt   `json:"apply_receipt,omitempty"`
-	RepeatReceipt   *state.Receipt   `json:"repeat_receipt,omitempty"`
+	SchemaVersion   string              `json:"schema_version"`
+	CaptureKind     string              `json:"capture_kind"`
+	Status          Status              `json:"status"`
+	Cohort          string              `json:"cohort"`
+	CapturedAtUnix  json.Number         `json:"captured_at_unix"`
+	Target          TargetIdentity      `json:"target"`
+	CLI             CLIIdentity         `json:"cli"`
+	BinarySHA256    string              `json:"binary_sha256"`
+	CatalogRevision string              `json:"catalog_revision"`
+	PlanDigest      string              `json:"plan_digest"`
+	Components      []ComponentCheck    `json:"components"`
+	ApplyReceipt    *state.Receipt      `json:"apply_receipt,omitempty"`
+	RepeatReceipt   *state.Receipt      `json:"repeat_receipt,omitempty"`
+	Capabilities    *capability.Receipt `json:"capabilities,omitempty"`
 }
 
 type TargetIdentity struct {
@@ -79,12 +81,13 @@ type ComponentCheck struct {
 // DoctorSnapshot is intentionally bounded. It omits free-form reason and
 // recovery text because those fields can contain machine-local paths.
 type DoctorSnapshot struct {
-	SchemaVersion   string           `json:"schema_version"`
-	CatalogRevision string           `json:"catalog_revision"`
-	Target          TargetIdentity   `json:"target"`
-	CLIRevision     string           `json:"cli_revision"`
-	Ready           bool             `json:"ready"`
-	Checks          []ComponentCheck `json:"checks"`
+	SchemaVersion   string              `json:"schema_version"`
+	CatalogRevision string              `json:"catalog_revision"`
+	Target          TargetIdentity      `json:"target"`
+	CLIRevision     string              `json:"cli_revision"`
+	Ready           bool                `json:"ready"`
+	Checks          []ComponentCheck    `json:"checks"`
+	Capabilities    *capability.Receipt `json:"capabilities,omitempty"`
 }
 
 type CertifyRequest struct {

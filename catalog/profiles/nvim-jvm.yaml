@@ -1,0 +1,5 @@
+schema_version: 1
+id: nvim-jvm
+description: Reproducible Java, Kotlin, Gradle, and Spring Boot NvChad IDE for Lima.
+selection:
+  - nvim-jvm

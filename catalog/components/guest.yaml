@@ -100,10 +100,11 @@ components:
         reason: Primary language toolchains belong to the Linux guest.
       wsl-guest:
         status: unsupported
-        reason: WSL and Lima guests are limited to Go, C/C++, and Python.
+        reason: JVM application development in this product is enabled only for the Lima guest.
       lima-guest:
-        status: unsupported
-        reason: WSL and Lima guests are limited to Go, C/C++, and Python.
+        status: supported
+        installer: mise
+        package: java
 
   - id: kotlin
     name: Kotlin
@@ -124,10 +125,11 @@ components:
         reason: Primary language toolchains belong to the Linux guest.
       wsl-guest:
         status: unsupported
-        reason: WSL and Lima guests are limited to Go, C/C++, and Python.
+        reason: JVM application development in this product is enabled only for the Lima guest.
       lima-guest:
-        status: unsupported
-        reason: WSL and Lima guests are limited to Go, C/C++, and Python.
+        status: supported
+        installer: mise
+        package: kotlin
 
   - id: go
     name: Go
@@ -281,10 +283,11 @@ components:
         reason: Build tools belong to the Linux guest.
       wsl-guest:
         status: unsupported
-        reason: WSL and Lima guests are limited to Go, C/C++, and Python.
+        reason: JVM application development in this product is enabled only for the Lima guest.
       lima-guest:
-        status: unsupported
-        reason: WSL and Lima guests are limited to Go, C/C++, and Python.
+        status: supported
+        installer: mise
+        package: gradle
 
   - id: uv
     name: uv
@@ -390,6 +393,262 @@ components:
         status: supported
         installer: apt
         package: clangd clang-format clang-tidy lldb gopls delve python3-ruff python3-debugpy
+
+  - id: dotnet-sdk
+    name: .NET SDK
+    kind: language
+    selection_policy: dependency-only
+    provides: [dotnet, dotnet-sdk]
+    dependencies: [base-cli, mise]
+    version_policy:
+      mode: pinned
+      lock_key: dotnet-sdk
+    verification:
+      command: [dotnet, --version]
+      functional: [dotnet, --list-sdks]
+    targets:
+      macos-host:
+        status: unsupported
+        reason: The managed .NET SDK belongs to the Linux guest.
+      windows-host:
+        status: unsupported
+        reason: The managed .NET SDK belongs to the Linux guest.
+      wsl-guest:
+        status: unsupported
+        reason: This .NET IDE cohort is certified only for the Apple Silicon Lima guest.
+      lima-guest:
+        status: supported
+        installer: mise
+        package: http:dotnet
+
+  - id: jdt-language-server
+    name: Eclipse JDT Language Server
+    kind: editor
+    selection_policy: dependency-only
+    provides: [java-lsp, jdtls]
+    dependencies: [java]
+    version_policy:
+      mode: pinned
+      lock_key: jdt-language-server
+    verification:
+      command: [java, --version]
+    targets:
+      <<: &lima_vendor_unsupported
+        macos-host:
+          status: unsupported
+          reason: The managed language server belongs to the Linux guest.
+        windows-host:
+          status: unsupported
+          reason: The managed language server belongs to the Linux guest.
+        wsl-guest:
+          status: unsupported
+          reason: This IDE cohort is certified only for the Apple Silicon Lima guest.
+      lima-guest:
+        status: supported
+        installer: vendor
+        package: jdt-language-server
+
+  - id: java-debug-server
+    name: Java Debug Server
+    kind: editor
+    selection_policy: dependency-only
+    provides: [java-dap, java-debug-server]
+    dependencies: [jdt-language-server]
+    version_policy:
+      mode: pinned
+      lock_key: java-debug-server
+    verification:
+      command: [java, --version]
+    targets:
+      <<: *lima_vendor_unsupported
+      lima-guest:
+        status: supported
+        installer: vendor
+        package: java-debug-server
+
+  - id: java-test-server
+    name: Java Test Server
+    kind: editor
+    selection_policy: dependency-only
+    provides: [java-test, java-test-server]
+    dependencies: [jdt-language-server]
+    version_policy:
+      mode: pinned
+      lock_key: java-test-server
+    verification:
+      command: [java, --version]
+    targets:
+      <<: *lima_vendor_unsupported
+      lima-guest:
+        status: supported
+        installer: vendor
+        package: java-test-server
+
+  - id: spring-tools-language-server
+    name: Spring Tools Language Server
+    kind: editor
+    selection_policy: dependency-only
+    provides: [spring-lsp, spring-tools-language-server]
+    dependencies: [java]
+    version_policy:
+      mode: pinned
+      lock_key: spring-tools-language-server
+    verification:
+      command: [java, --version]
+    targets:
+      <<: *lima_vendor_unsupported
+      lima-guest:
+        status: supported
+        installer: vendor
+        package: spring-tools-language-server
+
+  - id: kotlin-language-server
+    name: Kotlin Language Server
+    kind: editor
+    selection_policy: dependency-only
+    provides: [kotlin-lsp, kotlin-language-server]
+    dependencies: [java]
+    version_policy:
+      mode: pinned
+      lock_key: kotlin-language-server
+    verification:
+      command: [java, --version]
+    targets:
+      <<: *lima_vendor_unsupported
+      lima-guest:
+        status: supported
+        installer: vendor
+        package: kotlin-language-server
+
+  - id: kotlin-debug-adapter
+    name: Kotlin Debug Adapter
+    kind: editor
+    selection_policy: dependency-only
+    provides: [kotlin-dap, kotlin-debug-adapter]
+    dependencies: [java]
+    version_policy:
+      mode: pinned
+      lock_key: kotlin-debug-adapter
+    verification:
+      command: [kotlin-debug-adapter]
+    targets:
+      <<: *lima_vendor_unsupported
+      lima-guest:
+        status: supported
+        installer: vendor
+        package: kotlin-debug-adapter
+
+  - id: roslyn-language-server
+    name: Roslyn and Razor Language Server
+    kind: editor
+    selection_policy: dependency-only
+    provides: [csharp-lsp, razor-lsp, roslyn-language-server]
+    dependencies: [dotnet-sdk]
+    version_policy:
+      mode: pinned
+      lock_key: roslyn-language-server
+    verification:
+      command: [dotnet, --version]
+    targets:
+      <<: *lima_vendor_unsupported
+      lima-guest:
+        status: supported
+        installer: vendor
+        package: roslyn-language-server
+
+  - id: vscode-html-language-server
+    name: VS Code HTML Language Server
+    kind: editor
+    selection_policy: dependency-only
+    provides: [html-lsp, vscode-html-language-server]
+    dependencies: [bun]
+    version_policy:
+      mode: pinned
+      lock_key: vscode-html-language-server
+    verification:
+      command: [vscode-html-language-server, --version]
+    targets:
+      macos-host:
+        status: unsupported
+        reason: The managed IDE belongs to the Linux guest.
+      windows-host:
+        status: unsupported
+        reason: The managed IDE belongs to the Linux guest.
+      wsl-guest:
+        status: unsupported
+        reason: Razor co-hosting is certified only for the Apple Silicon Lima guest.
+      lima-guest:
+        status: supported
+        installer: bun
+        package: vscode-langservers-extracted
+
+  - id: netcoredbg
+    name: NetCoreDbg
+    kind: editor
+    selection_policy: dependency-only
+    provides: [csharp-dap, netcoredbg]
+    dependencies: [dotnet-sdk]
+    version_policy:
+      mode: pinned
+      lock_key: netcoredbg
+    verification:
+      command: [dotnet, --version]
+    targets:
+      <<: *lima_vendor_unsupported
+      lima-guest:
+        status: supported
+        installer: vendor
+        package: netcoredbg
+
+  - id: nvim-jvm
+    name: Java Kotlin Spring NvChad IDE
+    kind: editor
+    provides: [nvim-jvm, spring-boot-ide]
+    dependencies: [gradle, java-debug-server, java-test-server, kotlin, kotlin-debug-adapter, kotlin-language-server, nvchad, spring-tools-language-server]
+    version_policy:
+      mode: pinned
+      lock_key: nvim-jvm
+    verification:
+      command: [nvim, --headless, "+checkhealth", "+quit"]
+    targets:
+      macos-host:
+        status: unsupported
+        reason: The managed IDE belongs to the Linux guest.
+      windows-host:
+        status: unsupported
+        reason: The managed IDE belongs to the Linux guest.
+      wsl-guest:
+        status: unsupported
+        reason: This JVM IDE cohort is certified only for the Apple Silicon Lima guest.
+      lima-guest:
+        status: supported
+        installer: script
+        package: nvim-jvm
+
+  - id: nvim-dotnet
+    name: C# ASP.NET Razor Blazor NvChad IDE
+    kind: editor
+    provides: [nvim-dotnet, aspnet-ide, blazor-ide, razor-ide]
+    dependencies: [netcoredbg, nvchad, roslyn-language-server, vscode-html-language-server]
+    version_policy:
+      mode: pinned
+      lock_key: nvim-dotnet
+    verification:
+      command: [nvim, --headless, "+checkhealth", "+quit"]
+    targets:
+      macos-host:
+        status: unsupported
+        reason: The managed IDE belongs to the Linux guest.
+      windows-host:
+        status: unsupported
+        reason: The managed IDE belongs to the Linux guest.
+      wsl-guest:
+        status: unsupported
+        reason: This .NET IDE cohort is certified only for the Apple Silicon Lima guest.
+      lima-guest:
+        status: supported
+        installer: script
+        package: nvim-dotnet
 
   - id: pyright
     name: Pyright Python Language Server

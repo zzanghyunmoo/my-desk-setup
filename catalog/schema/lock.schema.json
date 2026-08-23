@@ -9,6 +9,28 @@
     "schema_version": {
       "const": 1
     },
+    "compatibility_epochs": {
+      "type": "object",
+      "propertyNames": {
+        "pattern": "^[a-z0-9][a-z0-9-]*$"
+      },
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["members"],
+        "properties": {
+          "members": {
+            "type": "array",
+            "minItems": 2,
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9-]*$"
+            }
+          }
+        }
+      }
+    },
     "versions": {
       "type": "object",
       "propertyNames": {
@@ -35,6 +57,33 @@
           "install_ref": {
             "type": "string",
             "minLength": 1
+          },
+          "compatibility_epoch": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9-]*$"
+          },
+          "fixture_cache": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "dependency_graph_sha256",
+              "read_only_manifest_sha256",
+              "producer_sha256"
+            ],
+            "properties": {
+              "dependency_graph_sha256": {
+                "type": "string",
+                "pattern": "^[a-f0-9]{64}$"
+              },
+              "read_only_manifest_sha256": {
+                "type": "string",
+                "pattern": "^[a-f0-9]{64}$"
+              },
+              "producer_sha256": {
+                "type": "string",
+                "pattern": "^[a-f0-9]{64}$"
+              }
+            }
           },
           "npm": {
             "type": "object",
@@ -85,6 +134,50 @@
                 "executable_sha256": {
                   "type": "string",
                   "pattern": "^[a-f0-9]{64}$"
+                },
+                "tree": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["manifest_sha256", "launcher_sha256", "required_paths"],
+                  "properties": {
+                    "manifest_sha256": {
+                      "type": "string",
+                      "pattern": "^[a-f0-9]{64}$"
+                    },
+                    "launcher_sha256": {
+                      "type": "string",
+                      "pattern": "^[a-f0-9]{64}$"
+                    },
+                    "required_paths": {
+                      "type": "array",
+                      "minItems": 1,
+                      "uniqueItems": true,
+                      "items": {
+                        "type": "string",
+                        "minLength": 1
+                      }
+                    },
+                    "executable_paths": {
+                      "type": "array",
+                      "minItems": 1,
+                      "uniqueItems": true,
+                      "items": {
+                        "type": "string",
+                        "minLength": 1
+                      }
+                    },
+                    "usage": {
+                      "enum": ["direct", "resource"]
+                    },
+                    "max_total_bytes": {
+                      "type": "integer",
+                      "minimum": 1
+                    },
+                    "max_entries": {
+                      "type": "integer",
+                      "minimum": 1
+                    }
+                  }
                 }
               }
             }

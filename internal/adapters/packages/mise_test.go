@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	catalogdata "github.com/zzanghyunmoo/my-desk-setup/catalog"
@@ -134,6 +135,69 @@ func TestPublishMiseConfigUsesReviewedEnvironmentBytes(t *testing.T) {
 		}
 		if string(got) != want {
 			t.Fatalf("%s differs from reviewed environment bytes", path)
+		}
+	}
+	marker, err := os.ReadFile(filepath.Join(home, ".config", "mise", miseOwnershipFile))
+	if err != nil || !strings.Contains(string(marker), miseOwnershipSchema) {
+		t.Fatalf("managed mise ownership marker = %q, %v", marker, err)
+	}
+	if err := PublishMiseConfig(home, environment.Mise); err != nil {
+		t.Fatalf("repeat PublishMiseConfig(): %v", err)
+	}
+}
+
+func TestPublishMiseConfigUpgradesOwnedAndLegacyPairs(t *testing.T) {
+	old := catalog.MiseFiles{
+		Config: "[tools]\ngo = \"1.0.0\"\n",
+		Lock:   "[[tools.go]]\nversion = \"1.0.0\"\n",
+	}
+	updated := catalog.MiseFiles{
+		Config: "[tools]\ngo = \"2.0.0\"\n",
+		Lock:   "[[tools.go]]\nversion = \"2.0.0\"\n",
+	}
+
+	t.Run("owned marker", func(t *testing.T) {
+		home := t.TempDir()
+		if err := PublishMiseConfig(home, old); err != nil {
+			t.Fatal(err)
+		}
+		if err := PublishMiseConfig(home, updated); err != nil {
+			t.Fatalf("upgrade owned pair: %v", err)
+		}
+		assertMiseFileContent(t, home, updated)
+	})
+
+	t.Run("legacy exact pair", func(t *testing.T) {
+		home := t.TempDir()
+		directory := filepath.Join(home, ".config", "mise")
+		if err := os.MkdirAll(directory, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(directory, "config.toml"), []byte(old.Config), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(directory, "mise.lock"), []byte(old.Lock), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		key := miseContentSHA256(old.Config) + ":" + miseContentSHA256(old.Lock)
+		legacyManagedMisePairs[key] = true
+		t.Cleanup(func() { delete(legacyManagedMisePairs, key) })
+		if err := PublishMiseConfig(home, updated); err != nil {
+			t.Fatalf("migrate legacy pair: %v", err)
+		}
+		assertMiseFileContent(t, home, updated)
+	})
+}
+
+func assertMiseFileContent(t *testing.T, home string, want catalog.MiseFiles) {
+	t.Helper()
+	for relative, expected := range map[string]string{
+		"config.toml": want.Config,
+		"mise.lock":   want.Lock,
+	} {
+		content, err := os.ReadFile(filepath.Join(home, ".config", "mise", relative))
+		if err != nil || string(content) != expected {
+			t.Fatalf("managed mise %s = %q, %v", relative, content, err)
 		}
 	}
 }

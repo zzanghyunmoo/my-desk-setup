@@ -1,15 +1,19 @@
 package doctor
 
-import "github.com/zzanghyunmoo/my-desk-setup/internal/target"
+import (
+	"github.com/zzanghyunmoo/my-desk-setup/internal/capability"
+	"github.com/zzanghyunmoo/my-desk-setup/internal/target"
+)
 
 const SchemaVersion = "mds.doctor/v2"
 
 type Report struct {
-	SchemaVersion   string       `json:"schema_version"`
-	CatalogRevision string       `json:"catalog_revision"`
-	Target          target.Facts `json:"target"`
-	Ready           bool         `json:"ready"`
-	Checks          []Check      `json:"checks"`
+	SchemaVersion   string              `json:"schema_version"`
+	CatalogRevision string              `json:"catalog_revision"`
+	Target          target.Facts        `json:"target"`
+	Ready           bool                `json:"ready"`
+	Checks          []Check             `json:"checks"`
+	Capabilities    *capability.Receipt `json:"capabilities,omitempty"`
 }
 
 type Check struct {
