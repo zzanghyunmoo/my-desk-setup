@@ -64,9 +64,13 @@ func TestJVMPluginLoadsDAPSetupForKotlinBuffers(t *testing.T) {
 	}
 }
 
-func TestManagedInitOpensProjectTreeForDirectoryFirstSessions(t *testing.T) {
+func TestManagedInitSupportsDirectoryFirstSessions(t *testing.T) {
 	init := renderManagedInit()
 	for _, token := range []string{
+		`vim.api.nvim_create_autocmd({ "BufReadPost", "BufNewFile" }`,
+		`vim.filetype.match { filename = event.file }`,
+		`vim.schedule(function()`,
+		`cmd = "setfiletype"`,
 		`vim.api.nvim_create_autocmd("VimEnter"`,
 		`vim.fn.argc()`,
 		`vim.fn.isdirectory(argument)`,

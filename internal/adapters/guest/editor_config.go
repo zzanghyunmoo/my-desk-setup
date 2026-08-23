@@ -343,6 +343,26 @@ require "options"
 require "autocmds"
 vim.schedule(function() require "mappings" end)
 
+vim.api.nvim_create_autocmd({ "BufReadPost", "BufNewFile" }, {
+  group = vim.api.nvim_create_augroup("mds-directory-filetype", { clear = true }),
+  callback = function(event)
+    if vim.bo[event.buf].filetype ~= "" then return end
+    local detected_filetype = vim.filetype.match { filename = event.file }
+    if not detected_filetype then return end
+
+    vim.schedule(function()
+      if not vim.api.nvim_buf_is_valid(event.buf) or
+          not vim.api.nvim_buf_is_loaded(event.buf) or
+          vim.bo[event.buf].filetype ~= "" then
+        return
+      end
+      vim.api.nvim_buf_call(event.buf, function()
+        vim.api.nvim_cmd({ cmd = "setfiletype", args = { detected_filetype } }, {})
+      end)
+    end)
+  end,
+})
+
 vim.api.nvim_create_autocmd("VimEnter", {
   once = true,
   callback = function()
