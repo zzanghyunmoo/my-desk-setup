@@ -342,6 +342,29 @@ dofile(vim.g.base46_cache .. "statusline")
 require "options"
 require "autocmds"
 vim.schedule(function() require "mappings" end)
+
+vim.api.nvim_create_autocmd("VimEnter", {
+  once = true,
+  callback = function()
+    if #vim.api.nvim_list_uis() == 0 then return end
+
+    local argument_count = vim.fn.argc()
+    if argument_count > 1 then return end
+
+    local project_directory
+    if argument_count == 0 then
+      if vim.api.nvim_buf_get_name(0) ~= "" then return end
+      project_directory = vim.fn.getcwd()
+    else
+      local argument = vim.fn.argv(0)
+      if vim.fn.isdirectory(argument) ~= 1 then return end
+      project_directory = vim.fn.fnamemodify(argument, ":p")
+    end
+
+    vim.api.nvim_set_current_dir(project_directory)
+    vim.schedule(function() vim.cmd "NvimTreeFocus" end)
+  end,
+})
 `, lazyPluginCommit[:12], managedPluginGraphID)
 }
 

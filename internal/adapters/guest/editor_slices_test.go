@@ -64,6 +64,21 @@ func TestJVMPluginLoadsDAPSetupForKotlinBuffers(t *testing.T) {
 	}
 }
 
+func TestManagedInitOpensProjectTreeForDirectoryFirstSessions(t *testing.T) {
+	init := renderManagedInit()
+	for _, token := range []string{
+		`vim.api.nvim_create_autocmd("VimEnter"`,
+		`vim.fn.argc()`,
+		`vim.fn.isdirectory(argument)`,
+		`vim.api.nvim_set_current_dir(project_directory)`,
+		`vim.cmd "NvimTreeFocus"`,
+	} {
+		if !strings.Contains(init, token) {
+			t.Fatalf("managed init omits directory-first project explorer behavior %q", token)
+		}
+	}
+}
+
 func TestExpectedPluginPinsAreExactSliceUnion(t *testing.T) {
 	names := func(set pluginSet) []string {
 		pins := expectedPluginPins(set)
