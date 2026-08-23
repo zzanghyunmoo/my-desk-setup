@@ -271,7 +271,7 @@ func renderPluginSpec(set pluginSet) string {
 		)
 	}
 	if set&jvmPluginSet != 0 {
-		lines = append(lines, `  { "mfussenegger/nvim-jdtls", ft = { "java" }, config = function() require("configs.jvm").setup() end },`)
+		lines = append(lines, `  { "mfussenegger/nvim-jdtls", ft = { "java", "kotlin" }, config = function() require("configs.jvm").setup() end },`)
 	}
 	if set&dotnetPluginSet != 0 {
 		lines = append(lines, `  { "seblyng/roslyn.nvim", event = { "BufReadPre", "BufNewFile" },

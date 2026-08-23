@@ -57,6 +57,13 @@ func TestSliceConfigurationFullIsExactUnion(t *testing.T) {
 	}
 }
 
+func TestJVMPluginLoadsDAPSetupForKotlinBuffers(t *testing.T) {
+	pluginSpec := renderPluginSpec(jvmPluginSet)
+	if !strings.Contains(pluginSpec, `ft = { "java", "kotlin" }`) {
+		t.Fatal("managed JVM plugin must load its DAP setup for Kotlin-only projects")
+	}
+}
+
 func TestExpectedPluginPinsAreExactSliceUnion(t *testing.T) {
 	names := func(set pluginSet) []string {
 		pins := expectedPluginPins(set)
