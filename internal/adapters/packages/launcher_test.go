@@ -77,6 +77,20 @@ func TestRuntimeTreeLauncherMigratesOnlyExactLegacyNeovimWrapper(t *testing.T) {
 	if err := os.WriteFile(path, []byte(legacy), 0o700); err != nil {
 		t.Fatal(err)
 	}
+	outside := "#!/bin/sh\nexec \"" +
+		filepath.Join(home, ".local", "share", "mds", "bin", "nvim") +
+		"\" \"$@\"\n"
+	if legacyNeovimLauncher(outside, home) {
+		t.Fatal("launcher outside the versioned Neovim root was treated as managed")
+	}
+	separator := string(os.PathSeparator)
+	normalized := "#!/bin/sh\nexec \"" +
+		filepath.Join(home, ".local", "share", "mds", "neovim") +
+		separator + "link" + separator + ".." + separator + "1" +
+		separator + "bin" + separator + "nvim\" \"$@\"\n"
+	if legacyNeovimLauncher(normalized, home) {
+		t.Fatal("lexically normalized launcher was treated as exact managed content")
+	}
 	spec := launcherSpec{
 		path: path, content: "#!/bin/sh\n# Managed by my-desk-setup.\nexit 0\n",
 		legacyOwned: func(content string) bool { return legacyNeovimLauncher(content, home) },

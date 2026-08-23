@@ -90,21 +90,35 @@ func runtimeTreeDynamicLauncher(root, executable string) string {
 }
 
 func legacyNeovimLauncher(content, home string) bool {
-	prefix := "#!/bin/sh\nexec \"" + filepath.Join(home, ".local", "share", "mds", "neovim") + "/"
-	suffix := "/bin/nvim\" \"$@\"\n"
+	const prefix = "#!/bin/sh\nexec \""
+	const suffix = "\" \"$@\"\n"
 	if !strings.HasPrefix(content, prefix) || !strings.HasSuffix(content, suffix) {
 		return false
 	}
-	version := strings.TrimSuffix(strings.TrimPrefix(content, prefix), suffix)
+	executable := strings.TrimSuffix(strings.TrimPrefix(content, prefix), suffix)
+	root := filepath.Join(home, ".local", "share", "mds", "neovim")
+	separator := string(os.PathSeparator)
+	pathPrefix := root + separator
+	pathSuffix := separator + "bin" + separator + "nvim"
+	if !strings.HasPrefix(executable, pathPrefix) ||
+		!strings.HasSuffix(executable, pathSuffix) {
+		return false
+	}
+	version := strings.TrimSuffix(strings.TrimPrefix(executable, pathPrefix), pathSuffix)
 	if version == "" || strings.ContainsAny(version, "/\\\x00\n\r\"'") {
 		return false
 	}
+	hasDigit := false
 	for _, value := range version {
-		if (value < '0' || value > '9') && value != '.' && value != '-' && value != '+' {
+		if value >= '0' && value <= '9' {
+			hasDigit = true
+			continue
+		}
+		if value != '.' && value != '-' && value != '+' {
 			return false
 		}
 	}
-	return true
+	return hasDigit && executable == filepath.Join(root, version, "bin", "nvim")
 }
 
 func (adapter Adapter) launcherSpecs(

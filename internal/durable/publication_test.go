@@ -134,3 +134,25 @@ func TestSyncTreeRejectsSymlinks(t *testing.T) {
 		t.Fatal("SyncTree() accepted a symlink")
 	}
 }
+
+func TestSyncTreePreservesReadOnlyFiles(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "immutable.json")
+	if err := os.WriteFile(path, []byte("{}\n"), 0o444); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = os.Chmod(path, 0o600)
+	})
+
+	if err := SyncTree(root); err != nil {
+		t.Fatalf("SyncTree(read-only): %v", err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm()&0o222 != 0 {
+		t.Fatalf("read-only file mode changed: %v", info.Mode())
+	}
+}
