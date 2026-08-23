@@ -41,7 +41,11 @@ function M.roots(source)
   local start = type(source) == "number" and vim.api.nvim_buf_get_name(source) or source
   if not start or start == "" then start = vim.uv.cwd() end
   local stat = vim.uv.fs_stat(start)
-  if stat and stat.type ~= "directory" then start = vim.fs.dirname(start) end
+  if not stat then
+    start = vim.uv.cwd()
+  elseif stat.type ~= "directory" then
+    start = vim.fs.dirname(start)
+  end
   local result = {}
   local cursor = canonical(start)
   while cursor do

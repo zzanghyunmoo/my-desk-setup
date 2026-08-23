@@ -259,7 +259,7 @@ func renderPluginSpec(set pluginSet) string {
 		return basePluginSpec
 	}
 	lines := []string{
-		`  { "neovim/nvim-lspconfig", event = { "BufReadPost", "BufNewFile" }, config = function() require "configs.lspconfig" end },`,
+		`  { "neovim/nvim-lspconfig", event = { "VimEnter", "BufReadPost", "BufNewFile" }, config = function() require "configs.lspconfig" end },`,
 		`  { "mfussenegger/nvim-dap" },`,
 		`  { "rcarriga/nvim-dap-ui", event = "VeryLazy", dependencies = { "mfussenegger/nvim-dap", "nvim-neotest/nvim-nio" }, config = function() require "configs.dap" end },`,
 		`  { "theHamsta/nvim-dap-virtual-text", opts = {} },`,

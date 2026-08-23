@@ -64,6 +64,13 @@ func TestJVMPluginLoadsDAPSetupForKotlinBuffers(t *testing.T) {
 	}
 }
 
+func TestTrustCommandsLoadBeforeFirstProjectFile(t *testing.T) {
+	pluginSpec := renderPluginSpec(jvmPluginSet)
+	if !strings.Contains(pluginSpec, `event = { "VimEnter", "BufReadPost", "BufNewFile" }`) {
+		t.Fatal("managed LSP configuration must expose workspace trust commands at startup")
+	}
+}
+
 func TestManagedInitSupportsDirectoryFirstSessions(t *testing.T) {
 	init := renderManagedInit()
 	for _, token := range []string{
@@ -507,6 +514,51 @@ func TestWorkspaceTrustRevocationIsRootScoped(t *testing.T) {
 	if captured.RootATrusted || !captured.RootBTrusted || captured.LSPStopped != rootA ||
 		captured.DAPTerminated != rootA || captured.DAPFocused != rootB || captured.DotNetStopped != rootA {
 		t.Fatalf("root-scoped revocation = %#v", captured)
+	}
+}
+
+func TestWorkspaceTrustUsesCWDForVirtualProjectBuffers(t *testing.T) {
+	nvim, err := exec.LookPath("nvim")
+	if err != nil {
+		t.Skip("headless Neovim is unavailable")
+	}
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "Test.csproj"), []byte("<Project />\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	root, err = filepath.EvalSymlinks(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixtureRoot := t.TempDir()
+	trustPath := filepath.Join(fixtureRoot, "trust.lua")
+	harnessPath := filepath.Join(fixtureRoot, "harness.lua")
+	for path, content := range map[string]string{
+		trustPath: workspaceTrustLua,
+		harnessPath: `local root = assert(vim.env.MDS_TEST_ROOT)
+vim.api.nvim_set_current_dir(root)
+vim.api.nvim_buf_set_name(0, root .. "/NvimTree_1")
+local trust = dofile(assert(vim.env.MDS_TEST_TRUST))
+local roots = trust.roots(0)
+assert(#roots == 1 and roots[1] == root, vim.inspect(roots))
+assert(vim.fn.exists(":MdsTrustWorkspace") == 2)
+vim.cmd "qa!"
+`,
+	} {
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	command := exec.Command(nvim, "--clean", "--headless", "-u", "NONE",
+		"-c", "luafile "+harnessPath, "-c", "cquit")
+	command.Env = append(os.Environ(),
+		"MDS_TEST_ROOT="+root,
+		"MDS_TEST_TRUST="+trustPath,
+		"XDG_STATE_HOME="+filepath.Join(fixtureRoot, "state"),
+		"NVIM_LOG_FILE="+filepath.Join(fixtureRoot, "nvim.log"),
+	)
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("headless virtual project buffer trust harness: %v\n%s", err, output)
 	}
 }
 
