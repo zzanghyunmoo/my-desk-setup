@@ -469,6 +469,8 @@ func renderProjectActions(set pluginSet) string {
 local trust = require "configs.trust"
 local active = {}
 local stopping = {}
+local pending = {}
+local next_preparation = 0
 local generations = {}
 local debug_root
 local max_output = 262144
@@ -707,6 +709,7 @@ end
 
 local function stop(root)
 	invalidate(root)
+	pending[root] = nil
   local task = active[root]
 		if task then
 		active[root] = nil
@@ -739,8 +742,10 @@ local function action_environment(spec)
 end
 
 local ignored_source_directories = {
-	[".git"] = true, [".gradle"] = true, [".idea"] = true,
-	build = true, target = true, node_modules = true,
+	[".cache"] = true, [".direnv"] = true, [".git"] = true,
+	[".gradle"] = true, [".idea"] = true, [".venv"] = true,
+	build = true, dist = true, node_modules = true, out = true,
+	target = true, vendor = true,
 }
 
 local function first_source(directory, extension)
@@ -769,19 +774,26 @@ end
 
 local function jvm_sources(root)
 	local modules = { root }
-	local scan, scan_error = vim.uv.fs_scandir(root)
-	if not scan then return nil, "cannot inspect project root: " .. tostring(scan_error) end
+	local pending_modules = { { path = root, depth = 0 } }
 	local inspected = 0
-	while true do
-		local name, kind = vim.uv.fs_scandir_next(scan)
-		if not name then break end
-		inspected = inspected + 1
-		if inspected > 256 then return nil, "project module scan limit exceeded" end
-		if kind == "directory" and not ignored_source_directories[name] then
-			local candidate = root .. "/" .. name
-			if vim.uv.fs_stat(candidate .. "/build.gradle") or
-				vim.uv.fs_stat(candidate .. "/build.gradle.kts") or vim.uv.fs_stat(candidate .. "/pom.xml") then
-				table.insert(modules, candidate)
+	while #pending_modules > 0 do
+		local current = table.remove(pending_modules)
+		local scan, scan_error = vim.uv.fs_scandir(current.path)
+		if not scan then return nil, "cannot inspect project modules: " .. tostring(scan_error) end
+		while true do
+			local name, kind = vim.uv.fs_scandir_next(scan)
+			if not name then break end
+			if kind == "directory" and name ~= "src" and not ignored_source_directories[name] then
+				inspected = inspected + 1
+				if inspected > 256 then return nil, "project module scan limit exceeded" end
+				local candidate = current.path .. "/" .. name
+				if vim.uv.fs_stat(candidate .. "/build.gradle") or
+					vim.uv.fs_stat(candidate .. "/build.gradle.kts") or vim.uv.fs_stat(candidate .. "/pom.xml") then
+					table.insert(modules, candidate)
+				end
+				if current.depth < 3 then
+					table.insert(pending_modules, { path = candidate, depth = current.depth + 1 })
+				end
 			end
 		end
 	end
@@ -835,13 +847,19 @@ local function select_jvm_debug(root, callback)
 end
 
 local function prepare_jvm_debug(root, spec, callback)
+	if not trust.is_trusted(root) then return end
 	select_jvm_debug(root, function(adapter, source)
 		local ok, jvm = pcall(require, "configs.jvm")
 		if not ok or type(jvm.prepare_debug) ~= "function" then
 			vim.notify("MDS JVM debug setup is unavailable", vim.log.levels.ERROR)
 			return
 		end
-		jvm.prepare_debug(adapter, source, function(ready)
+		next_preparation = next_preparation + 1
+		local preparation = next_preparation
+		pending[root] = preparation
+		local prepared, prepare_error = pcall(jvm.prepare_debug, adapter, source, function(ready)
+			if pending[root] ~= preparation then return end
+			pending[root] = nil
 			local dap = require "dap"
 			if not ready or not dap.adapters or not dap.adapters[adapter] then
 				vim.notify("MDS " .. adapter .. " debug adapter is unavailable", vim.log.levels.ERROR)
@@ -851,7 +869,18 @@ local function prepare_jvm_debug(root, spec, callback)
 			resolved.debug_adapter = adapter
 			callback(resolved)
 		end)
+		if not prepared and pending[root] == preparation then
+			pending[root] = nil
+			vim.notify("MDS could not prepare JVM debugging: " .. tostring(prepare_error), vim.log.levels.ERROR)
+		end
 	end)
+end
+
+local function stoppable_roots()
+	local result = {}
+	for root in pairs(active) do result[root] = true end
+	for root in pairs(pending) do result[root] = true end
+	return vim.tbl_keys(result)
 end
 
 local function run(root, name, spec)
@@ -982,9 +1011,9 @@ end
 
 function M.setup()
   if vim.fn.exists(":MdsProjectAction") == 0 then
-    vim.api.nvim_create_user_command("MdsProjectAction", M.open, {})
-    vim.api.nvim_create_user_command("MdsProjectCancel", function()
-      select_one(vim.tbl_keys(active), "Cancel MDS task", function(root) if root then stop(root) end end)
+		vim.api.nvim_create_user_command("MdsProjectAction", M.open, {})
+		vim.api.nvim_create_user_command("MdsProjectCancel", function()
+			select_one(stoppable_roots(), "Cancel MDS task", function(root) if root then stop(root) end end)
     end, {})
     vim.keymap.set("n", "<leader>pa", M.open, { desc = "Project actions" })
 		vim.api.nvim_create_autocmd("User", {
