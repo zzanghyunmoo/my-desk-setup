@@ -264,6 +264,14 @@ local recover_filetype = assert(vim.api.nvim_get_autocmds({
   event = "BufNewFile", group = "mds-directory-filetype",
 })[1].callback)
 
+local existing_path = project_root .. "/existing.cpp"
+vim.fn.writefile({ "int main() { return 0; }" }, existing_path)
+local existing = vim.api.nvim_create_buf(true, false)
+vim.api.nvim_buf_set_name(existing, existing_path)
+vim.api.nvim_exec_autocmds("BufReadPost", { buffer = existing })
+vim.wait(20)
+assert(vim.bo[existing].filetype == "cpp", vim.bo[existing].filetype)
+
 for extension, expected in pairs({
   cpp = "cpp",
   go = "go",
