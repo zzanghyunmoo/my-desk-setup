@@ -78,7 +78,7 @@ func TestNormalAndUpdateBunAdapterInstallOnlyVerifiedLocalTarball(t *testing.T) 
 				t.Fatalf("Apply(): %v", err)
 			}
 			if len(port.commands) != 1 ||
-				port.commands[0].Executable != "bun" ||
+				port.commands[0].Executable != filepath.Join(adapter.Home, ".local", "bin", "bun") ||
 				port.commands[0].Arguments[0] != "add" ||
 				port.commands[0].Arguments[1] != "--global" {
 				t.Fatalf("commands = %+v", port.commands)

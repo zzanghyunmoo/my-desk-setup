@@ -159,7 +159,6 @@ var functionalScenarios = map[string]functionalScenario{
 			functionalStep("clang-tidy", "--version"),
 			functionalStep("lldb-dap", "--version"),
 			functionalStep("dlv", "version"),
-			functionalStep("ruff", "--version"),
 			functionalOutput("ok", "/usr/bin/python3", "-c", "import debugpy; print('ok')"),
 		},
 	},

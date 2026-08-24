@@ -681,40 +681,6 @@ func TestUpdateDiscoveryRateLimitAndUnsupportedProviderMutateNothing(t *testing.
 	}
 }
 
-func TestUpdateDiscoveryEscapesScopedNPMPackage(t *testing.T) {
-	environment, err := catalog.LoadFS(catalogdata.FS)
-	if err != nil {
-		t.Fatalf("LoadFS(): %v", err)
-	}
-	content := []byte("reviewed scoped package")
-	server := newNPMRegistry(
-		t,
-		"@schpet/linear-cli",
-		"99.0.0",
-		content,
-		fixtureSRI(content),
-		"",
-	)
-	defer server.Close()
-	candidate, err := updateflow.Discover(
-		context.Background(),
-		environment,
-		catalog.TargetMacOSHost,
-		"linear-cli",
-		server.Client(),
-		server.URL,
-	)
-	if err != nil {
-		t.Fatalf("Discover(): %v", err)
-	}
-	if candidate.Version != "99.0.0" ||
-		!strings.Contains(candidate.Provenance, "/@schpet/linear-cli/v/99.0.0") ||
-		candidate.NPM == nil ||
-		!strings.Contains(candidate.NPM.Tarball, "/@schpet/linear-cli/-/") {
-		t.Fatalf("candidate = %+v", candidate)
-	}
-}
-
 func fixtureNPMArtifact(
 	packageName,
 	version string,

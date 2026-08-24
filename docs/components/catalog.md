@@ -37,7 +37,7 @@ Flutter Linux arm64처럼 공식 artifact가 없는 cell은 비공식 mirror로 
 ```sh
 mds plan --all
 mds plan --profile owner
-mds plan --component notion-cli --component linear-cli
+mds plan --component gh
 mds plan --interactive
 mds catalog --format json
 ```
@@ -53,8 +53,7 @@ mds catalog --format json
 - `--interactive`: UI에서 고른 ID를 `--component`와 같은 Selection으로
   정규화한다.
 
-예를 들어 `notion-cli`만 선택하면 guest의 Notion `ntn`과 dependency만
-계획한다. `notion-desktop` action은 추가하지 않는다.
+선택한 guest component ID 또는 capability와 필요한 dependency만 계획한다.
 
 ## Target ownership
 
@@ -65,16 +64,14 @@ mds catalog --format json
 | guest runtime | `lima`, `wsl` | 각각 macOS/Windows host |
 | iOS 예외 | `xcode` | macOS host, manual |
 | base CLI | `base-cli` | WSL/Lima guest |
-| language | `java`, `kotlin`, `go`, `python`, `typescript`, `c-toolchain`, `flutter` | guest |
-| build/runtime | `mise`, `bun`, `gradle`, `uv` | guest 중심 |
+| language | `java`, `kotlin`, `go`, `python`, `typescript`, `c-toolchain`, `rust` | guest |
+| build/runtime | `mise`, `bun`, `gradle`, `uv`, `xmake` | guest 중심 |
 | editor/terminal | `neovim`, `nvchad`, `herdr` | guest |
 | coding agents | `claude-code`, `opencode`, `codex` | host와 guest |
-| collaboration CLI | `atlassian-cli`, `notion-cli`, `linear-cli`, `gh`, `glab` | guest |
+| repository CLI | `gh` | guest |
 | containers | `docker-engine` | guest |
 
-`atlassian-cli`는 Jira와 Confluence capability를 함께 제공하는 Atlassian
-`acli`다. `notion-cli`는 `ntn`, `linear-cli`는
-`@schpet/linear-cli`를 사용한다.
+Issue, repository, 프로젝트 관리는 GitHub CLI `gh`를 기본 control plane으로 사용한다.
 
 Docker component는 Engine, CLI와 Compose plugin을 guest에 설치한다. host의
 Docker Desktop이나 외부 Docker socket은 이 component를 만족시키지 않는다.

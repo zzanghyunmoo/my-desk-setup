@@ -114,7 +114,7 @@ func TestBunUsesVerifiedLocalArtifact(t *testing.T) {
 
 func TestPackageAdapterPublishesStableGuestLauncher(t *testing.T) {
 	home := t.TempDir()
-	tarball := []byte("reviewed notion CLI tarball")
+	tarball := []byte("reviewed HTML language server tarball")
 	tarballSum := sha256.Sum256(tarball)
 	server := httptest.NewTLSServer(http.HandlerFunc(func(
 		writer http.ResponseWriter,
@@ -132,17 +132,17 @@ func TestPackageAdapterPublishesStableGuestLauncher(t *testing.T) {
 		Environment: catalog.Environment{
 			Catalog: catalog.Catalog{Components: []catalog.Component{
 				{
-					ID: "notion-cli", Kind: "cli",
+					ID: "vscode-html-language-server", Kind: "editor",
 					VersionPolicy: catalog.VersionPolicy{
-						Mode: "pinned", LockKey: "notion-cli",
+						Mode: "pinned", LockKey: "vscode-html-language-server",
 					},
 				},
 			}},
 			Lock: catalog.VersionLock{Versions: map[string]catalog.LockEntry{
-				"notion-cli": {
-					Version: "0.21.5",
+				"vscode-html-language-server": {
+					Version: "4.10.0",
 					NPM: &catalog.NPMArtifact{
-						Tarball:   server.URL + "/ntn-0.21.5.tgz",
+						Tarball:   server.URL + "/vscode-langservers-extracted-4.10.0.tgz",
 						Integrity: bunFixtureSRI(tarball),
 						SHA256:    hex.EncodeToString(tarballSum[:]),
 					},
@@ -151,23 +151,23 @@ func TestPackageAdapterPublishesStableGuestLauncher(t *testing.T) {
 		},
 	}
 	action := planning.Action{
-		ID: "lima-guest:mds/notion-cli", ComponentID: "notion-cli",
-		Installer: "bun", Package: "ntn", Version: "0.21.5",
+		ID: "lima-guest:mds/vscode-html-language-server", ComponentID: "vscode-html-language-server",
+		Installer: "bun", Package: "vscode-langservers-extracted", Version: "4.10.0",
 		Verification: [][]string{
-			{"ntn", "--version"},
+			{"vscode-html-language-server", "--version"},
 		},
 	}
 	if err := adapter.Apply(context.Background(), action); err != nil {
 		t.Fatalf("Apply(): %v", err)
 	}
-	path := filepath.Join(home, ".local", "bin", "ntn")
+	path := filepath.Join(home, ".local", "bin", "vscode-html-language-server")
 	content, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("read launcher: %v", err)
 	}
 	if !strings.Contains(
 		string(content),
-		filepath.Join(home, ".local", "share", "bun", "bin", "ntn"),
+		filepath.Join(home, ".local", "share", "bun", "bin", "vscode-html-language-server"),
 	) {
 		t.Fatalf("launcher = %s", content)
 	}
@@ -180,6 +180,9 @@ func TestPackageAdapterPublishesStableGuestLauncher(t *testing.T) {
 	}
 	if err := os.Remove(path); err != nil {
 		t.Fatalf("remove user-owned launcher fixture: %v", err)
+	}
+	if runtime.GOOS == "windows" {
+		return // Windows symlink creation requires a privilege unavailable to this test process.
 	}
 	target := filepath.Join(home, "user-owned-target")
 	if err := os.WriteFile(target, content, 0o700); err != nil {
@@ -386,7 +389,7 @@ func TestVendorExtractsExactTarGzExecutable(t *testing.T) {
 	}
 	err := vendor.Install(
 		context.Background(),
-		catalog.Component{ID: "atlassian-cli"},
+		catalog.Component{ID: "vendor-cli"},
 		catalog.LockEntry{
 			Artifacts: map[string]catalog.Artifact{
 				"linux-arm64": {

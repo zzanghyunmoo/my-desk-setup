@@ -9,13 +9,13 @@ selection:
   - python
   - typescript
   - c-toolchain
+  - rust
+  - xmake
   - uv
   - neovim
   - nvchad
   - nvim-ide-tools
-  - atlassian-cli
-  - notion-cli
-  - linear-cli
+  - nvim-jvm
+  - nvim-dotnet
   - gh
-  - glab
   - docker-engine

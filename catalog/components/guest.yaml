@@ -99,8 +99,9 @@ components:
         status: unsupported
         reason: Primary language toolchains belong to the Linux guest.
       wsl-guest:
-        status: unsupported
-        reason: JVM application development in this product is enabled only for the Lima guest.
+        status: supported
+        installer: mise
+        package: java
       lima-guest:
         status: supported
         installer: mise
@@ -124,8 +125,9 @@ components:
         status: unsupported
         reason: Primary language toolchains belong to the Linux guest.
       wsl-guest:
-        status: unsupported
-        reason: JVM application development in this product is enabled only for the Lima guest.
+        status: supported
+        installer: mise
+        package: kotlin
       lima-guest:
         status: supported
         installer: mise
@@ -239,6 +241,57 @@ components:
         installer: apt
         package: build-essential pkg-config
 
+  - id: rust
+    name: Rust and Cargo
+    kind: language
+    provides: [rust, rustc, cargo]
+    dependencies: [base-cli]
+    version_policy:
+      mode: manager
+    verification:
+      command: [rustc, --version]
+      functional: [cargo, --version]
+    targets:
+      macos-host:
+        status: unsupported
+        reason: Language toolchains belong to the Linux guest.
+      windows-host:
+        status: unsupported
+        reason: Language toolchains belong to the Linux guest.
+      wsl-guest:
+        status: supported
+        installer: apt
+        package: rustc cargo
+      lima-guest:
+        status: supported
+        installer: apt
+        package: rustc cargo
+
+  - id: xmake
+    name: xmake
+    kind: build
+    provides: [xmake]
+    dependencies: [c-toolchain]
+    version_policy:
+      mode: manager
+    verification:
+      command: [xmake, --version]
+    targets:
+      macos-host:
+        status: unsupported
+        reason: Build tools belong to the Linux guest.
+      windows-host:
+        status: unsupported
+        reason: Build tools belong to the Linux guest.
+      wsl-guest:
+        status: supported
+        installer: apt
+        package: xmake
+      lima-guest:
+        status: supported
+        installer: apt
+        package: xmake
+
   - id: flutter
     name: Flutter and Dart
     kind: language
@@ -282,8 +335,9 @@ components:
         status: unsupported
         reason: Build tools belong to the Linux guest.
       wsl-guest:
-        status: unsupported
-        reason: JVM application development in this product is enabled only for the Lima guest.
+        status: supported
+        installer: mise
+        package: gradle
       lima-guest:
         status: supported
         installer: mise
@@ -371,7 +425,7 @@ components:
   - id: nvim-ide-tools
     name: C++ Go Python Neovim IDE Tools
     kind: editor
-    provides: [nvim-ide-tools, cxx-lsp, go-lsp, nvim-debugger, nvim-linter, nvim-formatter]
+    provides: [nvim-ide-tools, cxx-lsp, go-lsp, nvim-debugger, nvim-formatter]
     dependencies: [c-toolchain, go, python, nvchad, pyright]
     version_policy:
       mode: manager
@@ -388,11 +442,11 @@ components:
       wsl-guest:
         status: supported
         installer: apt
-        package: clangd clang-format clang-tidy lldb gopls delve python3-ruff python3-debugpy
+        package: clangd clang-format clang-tidy lldb gopls delve python3-debugpy
       lima-guest:
         status: supported
         installer: apt
-        package: clangd clang-format clang-tidy lldb gopls delve python3-ruff python3-debugpy
+        package: clangd clang-format clang-tidy lldb gopls delve python3-debugpy
 
   - id: dotnet-sdk
     name: .NET SDK
@@ -414,8 +468,9 @@ components:
         status: unsupported
         reason: The managed .NET SDK belongs to the Linux guest.
       wsl-guest:
-        status: unsupported
-        reason: This .NET IDE cohort is certified only for the Apple Silicon Lima guest.
+        status: supported
+        installer: mise
+        package: http:dotnet
       lima-guest:
         status: supported
         installer: mise
@@ -441,8 +496,9 @@ components:
           status: unsupported
           reason: The managed language server belongs to the Linux guest.
         wsl-guest:
-          status: unsupported
-          reason: This IDE cohort is certified only for the Apple Silicon Lima guest.
+          status: supported
+          installer: vendor
+          package: jdt-language-server
       lima-guest:
         status: supported
         installer: vendor
@@ -461,6 +517,10 @@ components:
       command: [java, --version]
     targets:
       <<: *lima_vendor_unsupported
+      wsl-guest:
+        status: supported
+        installer: vendor
+        package: java-debug-server
       lima-guest:
         status: supported
         installer: vendor
@@ -479,6 +539,10 @@ components:
       command: [java, --version]
     targets:
       <<: *lima_vendor_unsupported
+      wsl-guest:
+        status: supported
+        installer: vendor
+        package: java-test-server
       lima-guest:
         status: supported
         installer: vendor
@@ -497,6 +561,10 @@ components:
       command: [java, --version]
     targets:
       <<: *lima_vendor_unsupported
+      wsl-guest:
+        status: supported
+        installer: vendor
+        package: spring-tools-language-server
       lima-guest:
         status: supported
         installer: vendor
@@ -515,6 +583,10 @@ components:
       command: [java, --version]
     targets:
       <<: *lima_vendor_unsupported
+      wsl-guest:
+        status: supported
+        installer: vendor
+        package: kotlin-language-server
       lima-guest:
         status: supported
         installer: vendor
@@ -533,6 +605,10 @@ components:
       command: [kotlin-debug-adapter]
     targets:
       <<: *lima_vendor_unsupported
+      wsl-guest:
+        status: supported
+        installer: vendor
+        package: kotlin-debug-adapter
       lima-guest:
         status: supported
         installer: vendor
@@ -551,6 +627,10 @@ components:
       command: [dotnet, --version]
     targets:
       <<: *lima_vendor_unsupported
+      wsl-guest:
+        status: supported
+        installer: vendor
+        package: roslyn-language-server
       lima-guest:
         status: supported
         installer: vendor
@@ -575,8 +655,9 @@ components:
         status: unsupported
         reason: The managed IDE belongs to the Linux guest.
       wsl-guest:
-        status: unsupported
-        reason: Razor co-hosting is certified only for the Apple Silicon Lima guest.
+        status: supported
+        installer: bun
+        package: vscode-langservers-extracted
       lima-guest:
         status: supported
         installer: bun
@@ -595,6 +676,10 @@ components:
       command: [dotnet, --version]
     targets:
       <<: *lima_vendor_unsupported
+      wsl-guest:
+        status: supported
+        installer: vendor
+        package: netcoredbg
       lima-guest:
         status: supported
         installer: vendor
@@ -618,8 +703,9 @@ components:
         status: unsupported
         reason: The managed IDE belongs to the Linux guest.
       wsl-guest:
-        status: unsupported
-        reason: This JVM IDE cohort is certified only for the Apple Silicon Lima guest.
+        status: supported
+        installer: script
+        package: nvim-jvm
       lima-guest:
         status: supported
         installer: script
@@ -643,8 +729,9 @@ components:
         status: unsupported
         reason: The managed IDE belongs to the Linux guest.
       wsl-guest:
-        status: unsupported
-        reason: This .NET IDE cohort is certified only for the Apple Silicon Lima guest.
+        status: supported
+        installer: script
+        package: nvim-dotnet
       lima-guest:
         status: supported
         installer: script
@@ -701,86 +788,6 @@ components:
         status: unsupported
         reason: Herdr belongs to the macOS or Windows host workspace.
 
-  - id: atlassian-cli
-    name: Atlassian CLI
-    kind: cli
-    provides: [atlassian-cli, jira-cli, confluence-cli]
-    dependencies: [base-cli]
-    version_policy:
-      mode: pinned
-      lock_key: atlassian-cli
-    verification:
-      command: [acli, --version]
-    targets:
-      macos-host:
-        status: action-required
-        reason: Install the reviewed Atlassian CLI release for macOS, then authenticate manually.
-      windows-host:
-        status: unsupported
-        reason: Collaboration CLI belongs to the Linux guest.
-      wsl-guest:
-        status: supported
-        installer: vendor
-        package: acli
-      lima-guest:
-        status: supported
-        installer: vendor
-        package: acli
-
-  - id: notion-cli
-    name: Notion CLI
-    kind: cli
-    provides: [notion-cli]
-    dependencies: [bun]
-    version_policy:
-      mode: pinned
-      lock_key: notion-cli
-    verification:
-      command: [ntn, --version]
-    targets:
-      macos-host:
-        status: supported
-        installer: bun
-        package: ntn
-      windows-host:
-        status: unsupported
-        reason: Collaboration CLI belongs to the Linux guest.
-      wsl-guest:
-        status: supported
-        installer: bun
-        package: ntn
-      lima-guest:
-        status: supported
-        installer: bun
-        package: ntn
-
-  - id: linear-cli
-    name: Linear CLI
-    kind: cli
-    provides: [linear-cli]
-    dependencies: [bun]
-    version_policy:
-      mode: pinned
-      lock_key: linear-cli
-    verification:
-      command: [linear, --version]
-    targets:
-      macos-host:
-        status: supported
-        installer: bun
-        package: "@schpet/linear-cli"
-      windows-host:
-        status: unsupported
-        reason: Collaboration CLI belongs to the Linux guest.
-      wsl-guest:
-        status: supported
-        installer: bun
-        package: "@schpet/linear-cli"
-      lima-guest:
-        status: supported
-        installer: bun
-        package: "@schpet/linear-cli"
-
   - id: gh
     name: GitHub CLI
     kind: cli
@@ -807,32 +814,6 @@ components:
         status: supported
         installer: apt
         package: gh
-
-  - id: glab
-    name: GitLab CLI
-    kind: cli
-    provides: [glab, gitlab-cli]
-    dependencies: []
-    version_policy:
-      mode: manager
-    verification:
-      command: [glab, --version]
-    targets:
-      macos-host:
-        status: supported
-        installer: brew
-        package: glab
-      windows-host:
-        status: unsupported
-        reason: Collaboration CLI belongs to the Linux guest.
-      wsl-guest:
-        status: supported
-        installer: apt
-        package: glab
-      lima-guest:
-        status: supported
-        installer: apt
-        package: glab
 
   - id: docker-engine
     name: Docker Engine and CLI

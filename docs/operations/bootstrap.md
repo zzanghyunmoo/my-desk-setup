@@ -287,7 +287,7 @@ ready로 판정한다. guest shell의
 mds plan --profile minimal --format json
 mds plan \
   --component neovim \
-  --component notion-cli \
+  --component gh \
   --component codex \
   --format json
 ```

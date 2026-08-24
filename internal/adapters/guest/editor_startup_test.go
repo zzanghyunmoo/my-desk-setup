@@ -170,6 +170,9 @@ func TestTrustCommandsLoadBeforeFirstProjectFile(t *testing.T) {
 }
 
 func TestManagedInitLoadsDirectoryStartupModule(t *testing.T) {
+	if !strings.Contains(renderManagedInit(), `require("base46").load_all_highlights()`) {
+		t.Fatal("managed init must generate the base46 cache before loading it")
+	}
 	if !strings.Contains(renderManagedInit(), `require "configs.startup"`) {
 		t.Fatal("managed init must load directory-first startup behavior")
 	}

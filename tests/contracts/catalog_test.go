@@ -804,26 +804,6 @@ func schemaAccepts(t *testing.T, name string, document any) bool {
 	return compiled.Validate(jsonDocument) == nil
 }
 
-func TestNotionCLISelectionDoesNotResolveDesktop(t *testing.T) {
-	environment := loadCatalog(t)
-	resolved, err := catalog.ResolveSelection(
-		environment,
-		[]string{"notion-cli"},
-		catalog.TargetWSLGuest,
-	)
-	if err != nil {
-		t.Fatalf("ResolveSelection(): %v", err)
-	}
-
-	ids := resolvedIDs(resolved)
-	if !ids["notion-cli"] || !ids["bun"] {
-		t.Fatalf("resolved ids = %v, want notion-cli and bun", ids)
-	}
-	if ids["notion-desktop"] {
-		t.Fatalf("notion-cli unexpectedly resolved notion-desktop: %v", ids)
-	}
-}
-
 func TestGuestAllExcludesHostWorkspaceTools(t *testing.T) {
 	environment := loadCatalog(t)
 	resolved, err := catalog.ResolveProfile(environment, "all", catalog.TargetLimaGuest)
@@ -860,24 +840,28 @@ func TestWorkstationProfilesKeepHostAndGuestResponsibilitiesSeparate(t *testing.
 		{
 			profile: "windows-host", target: catalog.TargetWindowsHost,
 			want:   []string{"go", "c-toolchain", "python", "claude-code", "opencode", "codex", "wezterm", "herdr", "gh", "wsl"},
-			forbid: []string{"neovim", "nvchad", "notion-cli", "linear-cli", "docker-engine"},
+			forbid: []string{"neovim", "nvchad", "docker-engine"},
 		},
 		{
 			profile: "macos-host", target: catalog.TargetMacOSHost,
-			want:   []string{"go", "c-toolchain", "python", "typescript", "java", "claude-code", "opencode", "codex", "wezterm", "herdr", "neovim", "nvchad", "notion-cli", "linear-cli", "atlassian-cli", "gh", "glab", "docker-engine", "lima"},
+			want:   []string{"go", "c-toolchain", "python", "typescript", "java", "claude-code", "opencode", "codex", "wezterm", "herdr", "neovim", "nvchad", "gh", "docker-engine", "lima"},
 			forbid: []string{"wsl"},
 		},
 		{
 			profile: "wsl-guest", target: catalog.TargetWSLGuest,
-			want:   []string{"go", "c-toolchain", "python", "uv", "neovim", "nvchad", "notion-cli", "linear-cli", "gh", "docker-engine"},
-			forbid: []string{"claude-code", "opencode", "codex", "herdr", "typescript", "java", "kotlin", "flutter", "gradle"},
+			want: []string{
+				"go", "c-toolchain", "rust", "xmake", "python", "uv", "neovim", "nvchad", "nvim-ide-tools",
+				"java", "kotlin", "gradle", "nvim-jvm", "dotnet-sdk", "nvim-dotnet",
+				"gh", "docker-engine",
+			},
+			forbid: []string{"claude-code", "opencode", "codex", "herdr", "typescript", "flutter"},
 		},
 		{
 			profile: "lima-guest", target: catalog.TargetLimaGuest,
 			want: []string{
-				"go", "c-toolchain", "python", "uv", "neovim", "nvchad", "nvim-ide-tools",
+				"go", "c-toolchain", "rust", "xmake", "python", "uv", "neovim", "nvchad", "nvim-ide-tools",
 				"java", "kotlin", "gradle", "nvim-jvm", "dotnet-sdk", "nvim-dotnet",
-				"notion-cli", "linear-cli", "gh", "docker-engine",
+				"gh", "docker-engine",
 			},
 			forbid: []string{"claude-code", "opencode", "codex", "herdr", "typescript", "flutter"},
 		},
@@ -906,6 +890,27 @@ func TestWorkstationProfilesKeepHostAndGuestResponsibilitiesSeparate(t *testing.
 				}
 			}
 		})
+	}
+}
+
+func TestWSLGuestVendorComponentsHaveAMD64Artifacts(t *testing.T) {
+	environment := loadCatalog(t)
+	resolved, err := catalog.ResolveProfile(environment, "wsl-guest", catalog.TargetWSLGuest)
+	if err != nil {
+		t.Fatalf("ResolveProfile(wsl-guest): %v", err)
+	}
+
+	for _, item := range resolved {
+		if item.Support.Installer != "vendor" {
+			continue
+		}
+		lock, ok := environment.Lock.Versions[item.Component.VersionPolicy.LockKey]
+		if !ok {
+			t.Fatalf("%s lock %q is missing", item.Component.ID, item.Component.VersionPolicy.LockKey)
+		}
+		if _, ok := lock.Artifacts["linux-amd64"]; !ok {
+			t.Fatalf("%s has no linux-amd64 artifact", item.Component.ID)
+		}
 	}
 }
 
@@ -1219,7 +1224,7 @@ func TestNewProfileCompositionNeedsNoCoreChange(t *testing.T) {
 		SchemaVersion: 1,
 		ID:            "writing",
 		Description:   "Documentation-focused guest tools.",
-		Selection:     []string{"notion-cli", "gh", "neovim"},
+		Selection:     []string{"gh", "neovim"},
 	}
 	if err := catalog.Validate(environment); err != nil {
 		t.Fatalf("Validate(custom profile): %v", err)
@@ -1229,7 +1234,7 @@ func TestNewProfileCompositionNeedsNoCoreChange(t *testing.T) {
 		t.Fatalf("ResolveProfile(writing): %v", err)
 	}
 	ids := resolvedIDs(resolved)
-	for _, id := range []string{"notion-cli", "gh", "neovim"} {
+	for _, id := range []string{"gh", "neovim"} {
 		if !ids[id] {
 			t.Fatalf("resolved ids = %v, missing %q", ids, id)
 		}
