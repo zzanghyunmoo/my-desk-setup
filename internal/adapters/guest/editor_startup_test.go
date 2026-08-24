@@ -78,6 +78,90 @@ vim.cmd "qa!"
 	}
 }
 
+func TestJVMPrepareDebugLoadsAJavaSourceBufferBeforeRegisteringDAP(t *testing.T) {
+	nvim := requireHeadlessNeovim(t)
+	fixtureRoot := t.TempDir()
+	projectRoot := filepath.Join(fixtureRoot, "project")
+	source := filepath.Join(projectRoot, "src", "main", "java", "App.java")
+	if err := os.MkdirAll(filepath.Dir(source), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(projectRoot, "gradlew"), []byte("#!/bin/sh\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(source, []byte("class App {}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	jvmPath := filepath.Join(fixtureRoot, "jvm.lua")
+	harnessPath := filepath.Join(fixtureRoot, "harness.lua")
+	references := map[string]runtimeTreeReference{
+		"jdt-language-server":          testRuntimeTreeReference("jdt-language-server", "bin/jdtls"),
+		"java-debug-server":            testRuntimeTreeReference("java-debug-server", "extension/server/debug.jar"),
+		"java-test-server":             testRuntimeTreeReference("java-test-server", "extension/server/test.jar"),
+		"spring-tools-language-server": testRuntimeTreeReference("spring-tools-language-server", "extension/language-server/spring.jar"),
+		"kotlin-debug-adapter":         testRuntimeTreeReference("kotlin-debug-adapter", "adapter/bin/kotlin-debug-adapter"),
+	}
+	for path, content := range map[string]string{
+		jvmPath: renderJVMConfig(references),
+		harnessPath: `local source = assert(vim.env.MDS_TEST_SOURCE)
+local attached
+local notifications = {}
+vim.notify = function(message)
+  table.insert(notifications, message)
+end
+package.preload["configs.trust"] = function()
+  return {
+    runtime = function(component, _, executable)
+      return "/managed/" .. component .. "/" .. executable
+    end,
+    is_trusted = function() return true end,
+  }
+end
+local dap = { adapters = {}, configurations = {} }
+package.preload["dap"] = function() return dap end
+vim.lsp.get_clients = function(options)
+  options = options or {}
+  if attached and options.bufnr == attached then return { { name = "jdtls" } } end
+  return {}
+end
+package.preload["jdtls"] = function()
+  return {
+    start_or_attach = function(_, options, start_options)
+      assert(options.dap.hotcodereplace == "auto")
+      attached = assert(start_options.bufnr)
+      dap.adapters.java = function() end
+    end,
+    test_nearest_method = function() end,
+    test_class = function() end,
+  }
+end
+vim.bo.filetype = "NvimTree"
+local jvm = dofile(assert(vim.env.MDS_TEST_JVM))
+local ready
+jvm.prepare_debug("java", source, function(value) ready = value end)
+assert(vim.wait(1000, function() return ready ~= nil end), "Java debug preparation timed out")
+assert(ready == true, vim.inspect(notifications))
+assert(vim.uv.fs_realpath(vim.api.nvim_buf_get_name(attached)) == vim.uv.fs_realpath(source))
+assert(type(dap.adapters.java) == "function")
+vim.cmd "qa!"
+`,
+	} {
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	command := exec.Command(nvim, "--clean", "--headless", "-u", "NONE",
+		"-c", "luafile "+harnessPath, "-c", "cquit")
+	command.Env = append(os.Environ(),
+		"MDS_TEST_JVM="+jvmPath,
+		"MDS_TEST_SOURCE="+source,
+		"NVIM_LOG_FILE="+filepath.Join(fixtureRoot, "nvim.log"),
+	)
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("headless Java debug preparation harness: %v\n%s", err, output)
+	}
+}
+
 func TestTrustCommandsLoadBeforeFirstProjectFile(t *testing.T) {
 	pluginSpec := renderPluginSpec(jvmPluginSet)
 	if !strings.Contains(pluginSpec, `event = { "VimEnter", "BufReadPost", "BufNewFile" }`) {

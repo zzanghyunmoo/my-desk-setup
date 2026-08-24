@@ -215,7 +215,7 @@ local function attach(bufnr)
       vim.keymap.set("n", "<leader>jt", client.test_nearest_method, { buffer = attached, desc = "Java test method" })
       vim.keymap.set("n", "<leader>jT", client.test_class, { buffer = attached, desc = "Java test class" })
     end,
-  }, { dap = { hotcodereplace = "auto" } })
+  }, { dap = { hotcodereplace = "auto" } }, { bufnr = bufnr })
 end
 
 function M.setup()
@@ -228,6 +228,51 @@ function M.setup()
 
   local dap = require "dap"
   dap.adapters.kotlin = { type = "executable", command = kotlin_debug }
+end
+
+local function wait_for_java_debug(bufnr, remaining, callback)
+  local dap = require "dap"
+  local clients = vim.lsp.get_clients({ bufnr = bufnr, name = "jdtls" })
+  if #clients > 0 and dap.adapters.java then callback(true); return end
+  if remaining <= 0 then
+    vim.notify("MDS could not initialize the Java debug adapter", vim.log.levels.ERROR)
+    callback(false)
+    return
+  end
+  vim.defer_fn(function() wait_for_java_debug(bufnr, remaining - 1, callback) end, 100)
+end
+
+function M.prepare_debug(adapter, source, callback)
+  M.setup()
+  local dap = require "dap"
+  if adapter == "kotlin" then
+    callback(dap.adapters.kotlin ~= nil)
+    return
+  end
+  local source_stat = source and vim.uv.fs_stat(source) or nil
+  if adapter ~= "java" or not source_stat or source_stat.type ~= "file" or vim.fn.filereadable(source) ~= 1 then
+    vim.notify("MDS requires a readable Java source file to initialize debugging", vim.log.levels.ERROR)
+    callback(false)
+    return
+  end
+  local lazy_ok, lazy = pcall(require, "lazy")
+  if lazy_ok and not pcall(lazy.load, { plugins = { "nvim-jdtls" } }) then
+    vim.notify("MDS could not load the Java language support plugin", vim.log.levels.ERROR)
+    callback(false)
+    return
+  end
+  if not pcall(require, "jdtls") then
+    vim.notify("MDS could not load the Java language support plugin", vim.log.levels.ERROR)
+    callback(false)
+    return
+  end
+  local bufnr = vim.fn.bufadd(source)
+  if not pcall(vim.fn.bufload, bufnr) or not pcall(attach, bufnr) then
+    vim.notify("MDS could not attach Java language support to the project source", vim.log.levels.ERROR)
+    callback(false)
+    return
+  end
+  wait_for_java_debug(bufnr, 300, callback)
 end
 
 return M
@@ -693,15 +738,120 @@ local function action_environment(spec)
 	return result
 end
 
-local function jvm_debug_adapter(root)
+local ignored_source_directories = {
+	[".git"] = true, [".gradle"] = true, [".idea"] = true,
+	build = true, target = true, node_modules = true,
+}
+
+local function first_source(directory, extension)
+	local stat = vim.uv.fs_stat(directory)
+	if not stat then return nil end
+	if stat.type ~= "directory" then return nil, directory .. " is not a directory" end
+	local pending, inspected = { directory }, 0
+	while #pending > 0 do
+		local current = table.remove(pending)
+		local scan, scan_error = vim.uv.fs_scandir(current)
+		if not scan then return nil, "cannot inspect " .. current .. ": " .. tostring(scan_error) end
+		while true do
+			local name, kind = vim.uv.fs_scandir_next(scan)
+			if not name then break end
+			inspected = inspected + 1
+			if inspected > 4096 then return nil, "source scan limit exceeded for " .. directory end
+			local path = current .. "/" .. name
+			if kind == "directory" and not ignored_source_directories[name] then
+				table.insert(pending, path)
+			elseif kind == "file" and vim.endswith(name, extension) then
+				return path
+			end
+		end
+	end
+end
+
+local function jvm_sources(root)
+	local modules = { root }
+	local scan, scan_error = vim.uv.fs_scandir(root)
+	if not scan then return nil, "cannot inspect project root: " .. tostring(scan_error) end
+	local inspected = 0
+	while true do
+		local name, kind = vim.uv.fs_scandir_next(scan)
+		if not name then break end
+		inspected = inspected + 1
+		if inspected > 256 then return nil, "project module scan limit exceeded" end
+		if kind == "directory" and not ignored_source_directories[name] then
+			local candidate = root .. "/" .. name
+			if vim.uv.fs_stat(candidate .. "/build.gradle") or
+				vim.uv.fs_stat(candidate .. "/build.gradle.kts") or vim.uv.fs_stat(candidate .. "/pom.xml") then
+				table.insert(modules, candidate)
+			end
+		end
+	end
+	local result = {}
+	for _, module in ipairs(modules) do
+		for _, source in ipairs({
+			{ language = "java", path = "src/main/java", extension = ".java" },
+			{ language = "java", path = "src/test/java", extension = ".java" },
+			{ language = "kotlin", path = "src/main/kotlin", extension = ".kt" },
+			{ language = "kotlin", path = "src/test/kotlin", extension = ".kt" },
+		}) do
+			if not result[source.language] then
+				local path, source_error = first_source(module .. "/" .. source.path, source.extension)
+				if source_error then return nil, source_error end
+				result[source.language] = path
+			end
+		end
+	end
+	return result
+end
+
+local function select_jvm_debug(root, callback)
 	local filetype = vim.bo.filetype
-	if filetype == "java" or filetype == "kotlin" then return filetype end
-	local kotlin_sources = vim.fs.find(function(name, path)
-		if not vim.endswith(name, ".kt") then return false end
-		local normalized = (path .. "/" .. name):gsub("\\\\", "/")
-		return normalized:find("/src/", 1, true) ~= nil
-	end, { path = root, type = "file", limit = 1 })
-	return #kotlin_sources > 0 and "kotlin" or "java"
+	local current = vim.api.nvim_buf_get_name(0)
+	local root_path = vim.uv.fs_realpath(root) or root
+	local current_path = current ~= "" and vim.uv.fs_realpath(current) or nil
+	local current_in_root = current_path and
+		(current_path == root_path or vim.startswith(current_path, root_path .. "/"))
+	if current_in_root and filetype == "kotlin" then callback("kotlin", current_path); return end
+	if current_in_root and filetype == "java" then
+		callback("java", current_path)
+		return
+	end
+	local sources, source_error = jvm_sources(root)
+	if not sources then
+		vim.notify("MDS cannot determine the JVM debug language: " .. source_error, vim.log.levels.ERROR)
+		return
+	end
+	if sources.java and sources.kotlin then
+		select_one({ "java", "kotlin" }, "MDS JVM debug language", function(adapter)
+			if adapter then callback(adapter, sources[adapter]) end
+		end)
+		return
+	end
+	local adapter = sources.kotlin and "kotlin" or sources.java and "java" or nil
+	if not adapter then
+		vim.notify("MDS could not find Java or Kotlin sources in recognized source roots", vim.log.levels.ERROR)
+		return
+	end
+	callback(adapter, sources[adapter])
+end
+
+local function prepare_jvm_debug(root, spec, callback)
+	select_jvm_debug(root, function(adapter, source)
+		local ok, jvm = pcall(require, "configs.jvm")
+		if not ok or type(jvm.prepare_debug) ~= "function" then
+			vim.notify("MDS JVM debug setup is unavailable", vim.log.levels.ERROR)
+			return
+		end
+		jvm.prepare_debug(adapter, source, function(ready)
+			local dap = require "dap"
+			if not ready or not dap.adapters or not dap.adapters[adapter] then
+				vim.notify("MDS " .. adapter .. " debug adapter is unavailable", vim.log.levels.ERROR)
+				return
+			end
+			local resolved = vim.deepcopy(spec)
+			resolved.debug_adapter = adapter
+			callback(resolved)
+		end)
+	end)
 end
 
 local function run(root, name, spec)
@@ -742,7 +892,7 @@ local function run(root, name, spec)
 	end
   stop(root)
 	local generation = generations[root]
-	local debug_adapter = spec.java_debug and jvm_debug_adapter(root) or nil
+	local debug_adapter = spec.debug_adapter
   local buffer = vim.api.nvim_create_buf(false, true)
   vim.api.nvim_set_current_buf(buffer)
   vim.bo[buffer].filetype = "mds-project-output"
@@ -760,7 +910,7 @@ local function run(root, name, spec)
 					require("dap").run {
 						type = debug_adapter,
 						request = "attach", name = "Attach Gradle JVM",
-						hostName = "127.0.0.1", port = 5005, mds_root = root,
+						hostName = "127.0.0.1", port = 5005, cwd = root, mds_root = root,
 						mds_generation = generation,
 					}
 					debug_root = root
@@ -813,6 +963,8 @@ local function choose_action(root, kind)
 		end)
 	elseif kind == "dotnet" then
 		select_dotnet_project(root, spec, function(selected) run(root, name, selected) end)
+	elseif spec.java_debug then
+		prepare_jvm_debug(root, spec, function(resolved) run(root, name, resolved) end)
     else
       run(root, name, spec)
     end
