@@ -93,9 +93,10 @@ var (
 	basePluginSpec       = "return {}\n"
 	idePluginSpec        = renderPluginSpec(idePluginSet)
 	editorConfiguration  = map[string]string{
-		"init.lua":             renderManagedInit(),
-		"lazy-lock.json":       managedLazyLock,
-		"lua/plugins/init.lua": basePluginSpec,
+		"init.lua":                renderManagedInit(),
+		"lazy-lock.json":          managedLazyLock,
+		"lua/configs/startup.lua": renderStartupConfig(),
+		"lua/plugins/init.lua":    basePluginSpec,
 	}
 	ideConfiguration = map[string]string{
 		"lua/configs/lspconfig.lua": `require("nvchad.configs.lspconfig").defaults()
@@ -342,17 +343,26 @@ dofile(vim.g.base46_cache .. "statusline")
 require "options"
 require "autocmds"
 vim.schedule(function() require "mappings" end)
+require "configs.startup"
+`, lazyPluginCommit[:12], managedPluginGraphID)
+}
+
+func renderStartupConfig() string {
+	return `local M = {}
 
 vim.api.nvim_create_autocmd({ "BufReadPost", "BufNewFile" }, {
   group = vim.api.nvim_create_augroup("mds-directory-filetype", { clear = true }),
   callback = function(event)
     if vim.bo[event.buf].filetype ~= "" then return end
-    local detected_filetype = vim.filetype.match { filename = event.file }
+    local filename = event.file
+    if not filename or filename == "" then filename = vim.api.nvim_buf_get_name(event.buf) end
+    local detected_filetype = vim.filetype.match { filename = filename }
     if not detected_filetype then return end
 
     vim.schedule(function()
       if not vim.api.nvim_buf_is_valid(event.buf) or
           not vim.api.nvim_buf_is_loaded(event.buf) or
+          vim.api.nvim_buf_get_name(event.buf) ~= filename or
           vim.bo[event.buf].filetype ~= "" then
         return
       end
@@ -385,7 +395,9 @@ vim.api.nvim_create_autocmd("VimEnter", {
     vim.schedule(function() vim.cmd "NvimTreeFocus" end)
   end,
 })
-`, lazyPluginCommit[:12], managedPluginGraphID)
+
+return M
+`
 }
 
 func writeEditorConfiguration(root string) error {

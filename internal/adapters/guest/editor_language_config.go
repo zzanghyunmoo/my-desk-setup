@@ -42,7 +42,7 @@ function M.roots(source)
   if not start or start == "" then start = vim.uv.cwd() end
   local stat = vim.uv.fs_stat(start)
   if not stat then
-    start = vim.uv.cwd()
+    start = vim.fs.dirname(start)
   elseif stat.type ~= "directory" then
     start = vim.fs.dirname(start)
   end
@@ -228,11 +228,6 @@ function M.setup()
 
   local dap = require "dap"
   dap.adapters.kotlin = { type = "executable", command = kotlin_debug }
-  dap.configurations.kotlin = {{
-    type = "kotlin", request = "launch", name = "Launch Kotlin main",
-    projectRoot = "${workspaceFolder}",
-    mainClass = function() return vim.fn.input("Kotlin main class: ") end,
-  }}
 end
 
 return M

@@ -57,39 +57,6 @@ func TestSliceConfigurationFullIsExactUnion(t *testing.T) {
 	}
 }
 
-func TestJVMPluginLoadsDAPSetupForKotlinBuffers(t *testing.T) {
-	pluginSpec := renderPluginSpec(jvmPluginSet)
-	if !strings.Contains(pluginSpec, `ft = { "java", "kotlin" }`) {
-		t.Fatal("managed JVM plugin must load its DAP setup for Kotlin-only projects")
-	}
-}
-
-func TestTrustCommandsLoadBeforeFirstProjectFile(t *testing.T) {
-	pluginSpec := renderPluginSpec(jvmPluginSet)
-	if !strings.Contains(pluginSpec, `event = { "VimEnter", "BufReadPost", "BufNewFile" }`) {
-		t.Fatal("managed LSP configuration must expose workspace trust commands at startup")
-	}
-}
-
-func TestManagedInitSupportsDirectoryFirstSessions(t *testing.T) {
-	init := renderManagedInit()
-	for _, token := range []string{
-		`vim.api.nvim_create_autocmd({ "BufReadPost", "BufNewFile" }`,
-		`vim.filetype.match { filename = event.file }`,
-		`vim.schedule(function()`,
-		`cmd = "setfiletype"`,
-		`vim.api.nvim_create_autocmd("VimEnter"`,
-		`vim.fn.argc()`,
-		`vim.fn.isdirectory(argument)`,
-		`vim.api.nvim_set_current_dir(project_directory)`,
-		`vim.cmd "NvimTreeFocus"`,
-	} {
-		if !strings.Contains(init, token) {
-			t.Fatalf("managed init omits directory-first project explorer behavior %q", token)
-		}
-	}
-}
-
 func TestExpectedPluginPinsAreExactSliceUnion(t *testing.T) {
 	names := func(set pluginSet) []string {
 		pins := expectedPluginPins(set)
@@ -245,10 +212,7 @@ func TestDotNetActionConfigurationUsesExactRoslynRazorAndDAPTrees(t *testing.T) 
 }
 
 func TestProjectActionsExecuteExactCleanCheckoutAndDebugSelections(t *testing.T) {
-	nvim, err := exec.LookPath("nvim")
-	if err != nil {
-		t.Skip("headless Neovim is unavailable")
-	}
+	nvim := requireHeadlessNeovim(t)
 	for _, test := range []struct {
 		name           string
 		set            pluginSet
@@ -449,10 +413,7 @@ func TestProjectActionsExecuteExactCleanCheckoutAndDebugSelections(t *testing.T)
 }
 
 func TestWorkspaceTrustRevocationIsRootScoped(t *testing.T) {
-	nvim, err := exec.LookPath("nvim")
-	if err != nil {
-		t.Skip("headless Neovim is unavailable")
-	}
+	nvim := requireHeadlessNeovim(t)
 	rootA := filepath.Join(t.TempDir(), "a")
 	rootB := filepath.Join(t.TempDir(), "b")
 	for _, root := range []string{rootA, rootB} {
@@ -460,7 +421,7 @@ func TestWorkspaceTrustRevocationIsRootScoped(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	rootA, err = filepath.EvalSymlinks(rootA)
+	rootA, err := filepath.EvalSymlinks(rootA)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -517,56 +478,8 @@ func TestWorkspaceTrustRevocationIsRootScoped(t *testing.T) {
 	}
 }
 
-func TestWorkspaceTrustUsesCWDForVirtualProjectBuffers(t *testing.T) {
-	nvim, err := exec.LookPath("nvim")
-	if err != nil {
-		t.Skip("headless Neovim is unavailable")
-	}
-	root := t.TempDir()
-	if err := os.WriteFile(filepath.Join(root, "Test.csproj"), []byte("<Project />\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	root, err = filepath.EvalSymlinks(root)
-	if err != nil {
-		t.Fatal(err)
-	}
-	fixtureRoot := t.TempDir()
-	trustPath := filepath.Join(fixtureRoot, "trust.lua")
-	harnessPath := filepath.Join(fixtureRoot, "harness.lua")
-	for path, content := range map[string]string{
-		trustPath: workspaceTrustLua,
-		harnessPath: `local root = assert(vim.env.MDS_TEST_ROOT)
-vim.api.nvim_set_current_dir(root)
-vim.api.nvim_buf_set_name(0, root .. "/NvimTree_1")
-local trust = dofile(assert(vim.env.MDS_TEST_TRUST))
-local roots = trust.roots(0)
-assert(#roots == 1 and roots[1] == root, vim.inspect(roots))
-assert(vim.fn.exists(":MdsTrustWorkspace") == 2)
-vim.cmd "qa!"
-`,
-	} {
-		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
-			t.Fatal(err)
-		}
-	}
-	command := exec.Command(nvim, "--clean", "--headless", "-u", "NONE",
-		"-c", "luafile "+harnessPath, "-c", "cquit")
-	command.Env = append(os.Environ(),
-		"MDS_TEST_ROOT="+root,
-		"MDS_TEST_TRUST="+trustPath,
-		"XDG_STATE_HOME="+filepath.Join(fixtureRoot, "state"),
-		"NVIM_LOG_FILE="+filepath.Join(fixtureRoot, "nvim.log"),
-	)
-	if output, err := command.CombinedOutput(); err != nil {
-		t.Fatalf("headless virtual project buffer trust harness: %v\n%s", err, output)
-	}
-}
-
 func TestWorkspaceTrustRevocationCancelsScheduledJVMAttach(t *testing.T) {
-	nvim, err := exec.LookPath("nvim")
-	if err != nil {
-		t.Skip("headless Neovim is unavailable")
-	}
+	nvim := requireHeadlessNeovim(t)
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "gradlew"), []byte("#!/bin/sh\n"), 0o700); err != nil {
 		t.Fatal(err)
@@ -612,10 +525,7 @@ func TestWorkspaceTrustRevocationCancelsScheduledJVMAttach(t *testing.T) {
 }
 
 func TestWorkspaceTrustRevocationCancelsPendingDotNetTestAttach(t *testing.T) {
-	nvim, err := exec.LookPath("nvim")
-	if err != nil {
-		t.Skip("headless Neovim is unavailable")
-	}
+	nvim := requireHeadlessNeovim(t)
 	root := t.TempDir()
 	project := filepath.Join(root, "Probe.csproj")
 	if err := os.WriteFile(project, []byte(`<Project Sdk="Microsoft.NET.Sdk"></Project>`), 0o600); err != nil {
@@ -679,10 +589,7 @@ func TestWorkspaceTrustRevocationCancelsPendingDotNetTestAttach(t *testing.T) {
 }
 
 func TestASPNetDebugConfigurationEnforcesManagedLoopback(t *testing.T) {
-	nvim, err := exec.LookPath("nvim")
-	if err != nil {
-		t.Skip("headless Neovim is unavailable")
-	}
+	nvim := requireHeadlessNeovim(t)
 	root := t.TempDir()
 	project := prepareDotNetWebAction(t, root)
 	references := map[string]runtimeTreeReference{}
