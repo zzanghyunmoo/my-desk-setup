@@ -217,10 +217,11 @@ local original_argc = vim.fn.argc
 local original_argv = vim.fn.argv
 vim.api.nvim_list_uis = function() return { {} } end
 
-local function load_with_args(argument_count, argument)
+local function load_with_args(argument_count, argument, read_from_stdin)
   vim.fn.argc = function() return argument_count end
   vim.fn.argv = function() return argument end
   dofile(startup)
+  if read_from_stdin then vim.api.nvim_exec_autocmds("StdinReadPre", {}) end
   vim.api.nvim_exec_autocmds("VimEnter", {})
 end
 
@@ -235,6 +236,14 @@ vim.api.nvim_buf_set_name(named, project_root .. "/README.md")
 load_with_args(0, nil)
 vim.wait(20)
 assert(tree_calls == 1, "named zero-argument start focused NvimTree")
+
+local stdin_buffer = vim.api.nvim_create_buf(true, false)
+vim.api.nvim_set_current_buf(stdin_buffer)
+vim.api.nvim_set_current_dir(other_root)
+load_with_args(0, nil, true)
+vim.wait(20)
+assert(tree_calls == 1, "stdin start focused NvimTree")
+assert(vim.uv.cwd() == other_root, vim.uv.cwd())
 
 vim.api.nvim_set_current_dir(other_root)
 load_with_args(1, project_root)

@@ -350,6 +350,12 @@ require "configs.startup"
 func renderStartupConfig() string {
 	return `local M = {}
 
+local read_from_stdin = false
+vim.api.nvim_create_autocmd("StdinReadPre", {
+  once = true,
+  callback = function() read_from_stdin = true end,
+})
+
 vim.api.nvim_create_autocmd({ "BufReadPost", "BufNewFile" }, {
   group = vim.api.nvim_create_augroup("mds-directory-filetype", { clear = true }),
   callback = function(event)
@@ -378,6 +384,7 @@ vim.api.nvim_create_autocmd("VimEnter", {
   once = true,
   callback = function()
     if #vim.api.nvim_list_uis() == 0 then return end
+    if read_from_stdin then return end
 
     local argument_count = vim.fn.argc()
     if argument_count > 1 then return end
