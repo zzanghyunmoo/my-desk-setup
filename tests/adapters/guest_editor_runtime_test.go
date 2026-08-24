@@ -250,6 +250,55 @@ func TestEditorPublishesExactManagedRevision(t *testing.T) {
 	}
 }
 
+func TestEditorObserveDetectsMissingOrDriftedStartupModuleWithoutSlices(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		mutate     func(*testing.T, string)
+		wantDetail string
+	}{
+		{
+			name: "missing",
+			mutate: func(t *testing.T, path string) {
+				t.Helper()
+				if err := os.Remove(path); err != nil {
+					t.Fatal(err)
+				}
+			},
+			wantDetail: "managed configuration is missing lua/configs/startup.lua",
+		},
+		{
+			name: "drifted",
+			mutate: func(t *testing.T, path string) {
+				t.Helper()
+				if err := os.WriteFile(path, []byte("return {} -- drifted\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			},
+			wantDetail: "managed configuration differs at lua/configs/startup.lua",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			home := t.TempDir()
+			port := &recordingPort{result: func(command transport.Command) transport.Result {
+				return managedEditorCommandResult(t, home, nvchadAction().Version, command)
+			}}
+			editor := guestadapter.Editor{Home: home, Port: port, Now: time.Now}
+			action := nvchadAction()
+			if err := editor.Apply(context.Background(), action); err != nil {
+				t.Fatalf("Apply(): %v", err)
+			}
+			test.mutate(t, filepath.Join(home, ".config", "nvim", "lua", "configs", "startup.lua"))
+			observation, err := editor.Observe(context.Background(), action)
+			if err != nil {
+				t.Fatalf("Observe(): %v", err)
+			}
+			if observation.State != adapters.StateAbsent || observation.Detail != test.wantDetail {
+				t.Fatalf("observation = %+v, want absent detail %q", observation, test.wantDetail)
+			}
+		})
+	}
+}
+
 func TestEditorVerifyRestoresInitiallyMissingPluginCheckouts(t *testing.T) {
 	home := t.TempDir()
 	port := &recordingPort{}

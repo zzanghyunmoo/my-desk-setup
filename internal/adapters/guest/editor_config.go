@@ -354,15 +354,16 @@ vim.api.nvim_create_autocmd({ "BufReadPost", "BufNewFile" }, {
   group = vim.api.nvim_create_augroup("mds-directory-filetype", { clear = true }),
   callback = function(event)
     if vim.bo[event.buf].filetype ~= "" then return end
+    local buffer_name = vim.api.nvim_buf_get_name(event.buf)
     local filename = event.file
-    if not filename or filename == "" then filename = vim.api.nvim_buf_get_name(event.buf) end
+    if not filename or filename == "" then filename = buffer_name end
     local detected_filetype = vim.filetype.match { filename = filename }
     if not detected_filetype then return end
 
     vim.schedule(function()
       if not vim.api.nvim_buf_is_valid(event.buf) or
           not vim.api.nvim_buf_is_loaded(event.buf) or
-          vim.api.nvim_buf_get_name(event.buf) ~= filename or
+          vim.api.nvim_buf_get_name(event.buf) ~= buffer_name or
           vim.bo[event.buf].filetype ~= "" then
         return
       end
@@ -625,7 +626,14 @@ func expectedPluginPins(set pluginSet) []pluginPin {
 }
 
 func inspectEditorConfiguration(root string) (bool, bool, string, error) {
-	for _, relativePath := range []string{"init.lua", "lazy-lock.json"} {
+	basePaths := make([]string, 0, len(editorConfiguration)-1)
+	for relativePath := range editorConfiguration {
+		if relativePath != "lua/plugins/init.lua" {
+			basePaths = append(basePaths, relativePath)
+		}
+	}
+	sort.Strings(basePaths)
+	for _, relativePath := range basePaths {
 		ready, detail, err := inspectConfigurationFile(
 			root,
 			relativePath,

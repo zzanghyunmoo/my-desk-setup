@@ -28,6 +28,56 @@ func TestJVMPluginLoadsTrustControlledDAPSetupForKotlinBuffers(t *testing.T) {
 	}
 }
 
+func TestJVMSetupRegistersOnlyPinnedKotlinAdapter(t *testing.T) {
+	nvim := requireHeadlessNeovim(t)
+	fixtureRoot := t.TempDir()
+	jvmPath := filepath.Join(fixtureRoot, "jvm.lua")
+	harnessPath := filepath.Join(fixtureRoot, "harness.lua")
+	references := map[string]runtimeTreeReference{
+		"jdt-language-server":          testRuntimeTreeReference("jdt-language-server", "bin/jdtls"),
+		"java-debug-server":            testRuntimeTreeReference("java-debug-server", "extension/server/debug.jar"),
+		"java-test-server":             testRuntimeTreeReference("java-test-server", "extension/server/test.jar"),
+		"spring-tools-language-server": testRuntimeTreeReference("spring-tools-language-server", "extension/language-server/spring.jar"),
+		"kotlin-debug-adapter":         testRuntimeTreeReference("kotlin-debug-adapter", "adapter/bin/kotlin-debug-adapter"),
+	}
+	for path, content := range map[string]string{
+		jvmPath: renderJVMConfig(references),
+		harnessPath: `package.preload["configs.trust"] = function()
+  return {
+    runtime = function(component, _, executable)
+      return "/managed/" .. component .. "/" .. executable
+    end,
+    is_trusted = function() return true end,
+  }
+end
+local dap = { adapters = {}, configurations = {} }
+package.preload["dap"] = function() return dap end
+vim.bo.filetype = "kotlin"
+local jvm = dofile(assert(vim.env.MDS_TEST_JVM))
+jvm.setup()
+assert(vim.deep_equal(dap.adapters.kotlin, {
+  type = "executable",
+  command = "/managed/kotlin-debug-adapter/adapter/bin/kotlin-debug-adapter",
+}), vim.inspect(dap.adapters.kotlin))
+assert(dap.configurations.kotlin == nil, vim.inspect(dap.configurations.kotlin))
+vim.cmd "qa!"
+`,
+	} {
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	command := exec.Command(nvim, "--clean", "--headless", "-u", "NONE",
+		"-c", "luafile "+harnessPath, "-c", "cquit")
+	command.Env = append(os.Environ(),
+		"MDS_TEST_JVM="+jvmPath,
+		"NVIM_LOG_FILE="+filepath.Join(fixtureRoot, "nvim.log"),
+	)
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("headless managed JVM harness: %v\n%s", err, output)
+	}
+}
+
 func TestTrustCommandsLoadBeforeFirstProjectFile(t *testing.T) {
 	pluginSpec := renderPluginSpec(jvmPluginSet)
 	if !strings.Contains(pluginSpec, `event = { "VimEnter", "BufReadPost", "BufNewFile" }`) {
@@ -179,6 +229,13 @@ load_with_args(0, nil)
 assert(vim.wait(1000, function() return tree_calls == 1 end), "bare start did not focus NvimTree")
 assert(vim.uv.cwd() == project_root, vim.uv.cwd())
 
+local named = vim.api.nvim_create_buf(true, false)
+vim.api.nvim_set_current_buf(named)
+vim.api.nvim_buf_set_name(named, project_root .. "/README.md")
+load_with_args(0, nil)
+vim.wait(20)
+assert(tree_calls == 1, "named zero-argument start focused NvimTree")
+
 vim.api.nvim_set_current_dir(other_root)
 load_with_args(1, project_root)
 assert(vim.wait(1000, function() return tree_calls == 2 end), "directory start did not focus NvimTree")
@@ -221,6 +278,48 @@ for extension, expected in pairs({
   vim.wait(20)
   assert(vim.bo[buffer].filetype == expected, extension .. ":" .. vim.bo[buffer].filetype)
 end
+
+local empty_event = vim.api.nvim_create_buf(true, false)
+vim.api.nvim_buf_set_name(empty_event, project_root .. "/empty-event.py")
+recover_filetype({ buf = empty_event, file = "" })
+vim.wait(20)
+assert(vim.bo[empty_event].filetype == "python", vim.bo[empty_event].filetype)
+
+local relative_event = vim.api.nvim_create_buf(true, false)
+vim.api.nvim_buf_set_name(relative_event, project_root .. "/relative.go")
+recover_filetype({ buf = relative_event, file = "relative.go" })
+vim.wait(20)
+assert(vim.bo[relative_event].filetype == "go", vim.bo[relative_event].filetype)
+
+local unmatched = vim.api.nvim_create_buf(true, false)
+vim.api.nvim_buf_set_name(unmatched, project_root .. "/probe.mds-unknown")
+recover_filetype({ buf = unmatched, file = vim.api.nvim_buf_get_name(unmatched) })
+vim.wait(20)
+assert(vim.bo[unmatched].filetype == "", vim.bo[unmatched].filetype)
+
+local deleted = vim.api.nvim_create_buf(true, false)
+local deleted_name = project_root .. "/deleted.cs"
+vim.api.nvim_buf_set_name(deleted, deleted_name)
+recover_filetype({ buf = deleted, file = deleted_name })
+vim.api.nvim_buf_delete(deleted, { force = true })
+vim.wait(20)
+assert(not vim.api.nvim_buf_is_valid(deleted))
+
+local unloaded = vim.api.nvim_create_buf(true, false)
+local unloaded_name = project_root .. "/unloaded.java"
+vim.api.nvim_buf_set_name(unloaded, unloaded_name)
+recover_filetype({ buf = unloaded, file = unloaded_name })
+vim.api.nvim_buf_delete(unloaded, { unload = true })
+vim.wait(20)
+assert(not vim.api.nvim_buf_is_loaded(unloaded))
+
+local claimed = vim.api.nvim_create_buf(true, false)
+local claimed_name = project_root .. "/claimed.cs"
+vim.api.nvim_buf_set_name(claimed, claimed_name)
+recover_filetype({ buf = claimed, file = claimed_name })
+vim.bo[claimed].filetype = "text"
+vim.wait(20)
+assert(vim.bo[claimed].filetype == "text")
 
 local detected = vim.api.nvim_create_buf(true, false)
 vim.api.nvim_buf_set_name(detected, project_root .. "/already.cs")

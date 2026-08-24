@@ -300,6 +300,20 @@ func TestProjectActionsExecuteExactCleanCheckoutAndDebugSelections(t *testing.T)
 			wantDAP:       "java",
 		},
 		{
+			name: "kotlin debug uses pinned adapter through project action", set: jvmPluginSet,
+			action: "debug-app", filetype: "kotlin", wantExecutable: "setsid",
+			prepare: func(t *testing.T, root string) string {
+				t.Helper()
+				gradlew := filepath.Join(root, "gradlew")
+				if err := os.WriteFile(gradlew, []byte("#!/bin/sh\n"), 0o700); err != nil {
+					t.Fatal(err)
+				}
+				return ""
+			},
+			wantArguments: []string{"--no-daemon", "bootRun", "--debug-jvm"},
+			wantDAP:       "kotlin",
+		},
+		{
 			name: "jvm test debug reruns only the selected task", set: jvmPluginSet,
 			action: "debug-test", filetype: "java", wantExecutable: "setsid",
 			prepare: func(t *testing.T, root string) string {
