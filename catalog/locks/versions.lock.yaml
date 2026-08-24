@@ -17,21 +17,6 @@ compatibility_epochs:
       - roslyn-language-server
       - vscode-html-language-server
 versions:
-  atlassian-cli:
-    version: 1.3.22-stable
-    source: Atlassian versioned release
-    provenance: https://developer.atlassian.com/cloud/acli/guides/download-supported-packages/
-    artifacts:
-      linux-arm64:
-        url: https://acli.atlassian.com/linux/1.3.22-stable/acli_1.3.22-stable_linux_arm64.tar.gz
-        sha256: 1a9e86d0b46a62a8f1992c1ef98b3af7e9a9ee3f76d0efa215fe1f2d1b2fd139
-        format: tar.gz
-        executable: acli_1.3.22-stable_linux_arm64/acli
-      linux-amd64:
-        url: https://acli.atlassian.com/linux/1.3.22-stable/acli_1.3.22-stable_linux_amd64.tar.gz
-        sha256: de9e0a60a556e4119428b9072f6ca787e75b9f9a538aa71ebcc8084deb8ca1a6
-        format: tar.gz
-        executable: acli_1.3.22-stable_linux_amd64/acli
   bun:
     version: 1.3.14
     source: GitHub release
@@ -136,8 +121,11 @@ versions:
         sha256: 13c219bfd1ff00a886c1523a9c7027c4f24c1e730e653376d2b81f1435da5a59
         format: tar.gz
         executable: dotnet
-    unavailable_platforms:
-      linux-amd64: This cohort is intentionally limited to the certified Apple Silicon Lima guest.
+      linux-amd64:
+        url: https://builds.dotnet.microsoft.com/dotnet/Sdk/10.0.400/dotnet-sdk-10.0.400-linux-x64.tar.gz
+        sha256: 7ad9d2db01512e41fd580a0630321bb70cd062d7fe4c5badfb4ce81ec1eddbb8
+        format: tar.gz
+        executable: dotnet
   flutter:
     version: 3.44.4
     source: Flutter stable archive
@@ -226,6 +214,17 @@ versions:
           usage: resource
           required_paths:
             - extension/server/com.microsoft.java.debug.plugin-0.53.2.jar
+      linux-amd64:
+        url: https://open-vsx.org/api/vscjava/vscode-java-debug/0.59.0/file/vscjava.vscode-java-debug-0.59.0.vsix
+        sha256: 87627e24dbb5b01137decc0265f043cb08adad22af3c195f1ba39898dafb1588
+        format: zip
+        executable: extension/server/com.microsoft.java.debug.plugin-0.53.2.jar
+        tree:
+          manifest_sha256: 79674f0c92dfe4693bee14db50eb28ade6ad98b35648967512713ca5c7b44cd3
+          launcher_sha256: 69128bebd6c46d3a9daeeb77a3bbe877423c2f66eb773fd1ae5375658ce0c9bf
+          usage: resource
+          required_paths:
+            - extension/server/com.microsoft.java.debug.plugin-0.53.2.jar
   java-test-server:
     version: 0.46.0
     source: Java Test extension 0.46.0 with server plugin 0.43.1
@@ -244,6 +243,18 @@ versions:
           required_paths:
             - extension/server/com.microsoft.java.test.plugin-0.43.1.jar
             - extension/server/com.microsoft.java.test.runner-jar-with-dependencies.jar
+      linux-amd64:
+        url: https://open-vsx.org/api/vscjava/vscode-java-test/0.46.0/file/vscjava.vscode-java-test-0.46.0.vsix
+        sha256: 56c1e14dc73a30e9574c47042106fa52893bf8325b580f47c14ace07d5eef255
+        format: zip
+        executable: extension/server/com.microsoft.java.test.plugin-0.43.1.jar
+        tree:
+          manifest_sha256: adee0a1fc322436e1f0144e3af4f00f9a19dfe5f70e030b6e6bd6d1868dcbe0d
+          launcher_sha256: e01cc491d866f996499e8ee55d0c3d8ba4f6ec44053975b791e3d0d2c76044e6
+          usage: resource
+          required_paths:
+            - extension/server/com.microsoft.java.test.plugin-0.43.1.jar
+            - extension/server/com.microsoft.java.test.runner-jar-with-dependencies.jar
   jdt-language-server:
     version: 1.60.0+202606262232
     source: Eclipse JDT Language Server milestone 1.60.0
@@ -251,6 +262,19 @@ versions:
     compatibility_epoch: jvm-ide-2026-08
     artifacts:
       linux-arm64:
+        url: https://download.eclipse.org/jdtls/milestones/1.60.0/jdt-language-server-1.60.0-202606262232.tar.gz
+        sha256: e94c303d8198f977930803582738771fd18c52c5492878410bf222b1aa81ef1d
+        format: tar.gz
+        executable: bin/jdtls
+        tree:
+          manifest_sha256: 84747fbc6e7c28c1ce432d4dc618034adf0331f9b4c2f5f7800d694c6763681d
+          launcher_sha256: ed0980ea2da080b79566b24b67f94f510d5001eeb401c7ed316748c0b03fbfee
+          usage: direct
+          required_paths:
+            - bin/jdtls
+            - config_linux/config.ini
+            - plugins/org.eclipse.equinox.launcher_1.7.200.v20260619-2039.jar
+      linux-amd64:
         url: https://download.eclipse.org/jdtls/milestones/1.60.0/jdt-language-server-1.60.0-202606262232.tar.gz
         sha256: e94c303d8198f977930803582738771fd18c52c5492878410bf222b1aa81ef1d
         format: tar.gz
@@ -284,6 +308,26 @@ versions:
     provenance: https://github.com/Kotlin/kotlin-lsp/releases/tag/kotlin-lsp%2Fv262.9593.0
     compatibility_epoch: jvm-ide-2026-08
     artifacts:
+      linux-amd64:
+        url: https://download-cdn.jetbrains.com/language-server/kotlin-server/262.9593.0/kotlin-server-0.0.6-linux-amd64.vsix
+        sha256: 90974cd81d31fa27b5c487c29f712a956bc6887667d5712c260303f7e33687ec
+        format: zip
+        executable: extension/server/bin/intellij-server
+        tree:
+          manifest_sha256: 5a2c2f8b7e61e6012e66d4a7f4a804ddba7b4c8242c1c6e9fbc80f4fb8a35360
+          launcher_sha256: e988f37f25d55a1c0c77bb9d7f1d3ef9ba6ecc78c927af992a2a5ce69bcc9825
+          usage: direct
+          max_total_bytes: 2147483648
+          max_entries: 5000
+          required_paths:
+            - extension/server/bin/intellij-server
+            - extension/server/jbr/bin/java
+            - extension/server/jbr/lib/jspawnhelper
+            - extension/server/lib/eclipse.lsp4j.jar
+          executable_paths:
+            - extension/server/bin/intellij-server
+            - extension/server/jbr/bin/java
+            - extension/server/jbr/lib/jspawnhelper
       linux-arm64:
         url: https://download-cdn.jetbrains.com/language-server/kotlin-server/262.9593.0/kotlin-server-0.0.6-linux-aarch64.vsix
         sha256: c9c11d98194c72fd1056ca58d1434e9ce708b9f524e9c6b356ca3085c6db60fa
@@ -310,6 +354,18 @@ versions:
     provenance: https://github.com/fwcd/kotlin-debug-adapter/releases/tag/0.4.4
     compatibility_epoch: jvm-ide-2026-08
     artifacts:
+      linux-amd64:
+        url: https://github.com/fwcd/kotlin-debug-adapter/releases/download/0.4.4/adapter.zip
+        sha256: 3874cbaded0fdb8229a381167895b0a6caf88b7adffabc690fcf5a6fb65d11b6
+        format: zip
+        executable: adapter/bin/kotlin-debug-adapter
+        tree:
+          manifest_sha256: a0389be2cd2a45f851a20788a982966de9656025c7d676dc957220f0c560f86e
+          launcher_sha256: 9b059a1d98ca34cd34fa6552d3efef3748d98bf3e51ba719c4d0eb1ff061e6b9
+          usage: direct
+          required_paths:
+            - adapter/bin/kotlin-debug-adapter
+            - adapter/lib/adapter-0.4.4.jar
       linux-arm64:
         url: https://github.com/fwcd/kotlin-debug-adapter/releases/download/0.4.4/adapter.zip
         sha256: 3874cbaded0fdb8229a381167895b0a6caf88b7adffabc690fcf5a6fb65d11b6
@@ -385,6 +441,19 @@ versions:
             - netcoredbg/ManagedPart.dll
             - netcoredbg/libdbgshim.so
             - netcoredbg/netcoredbg
+      linux-amd64:
+        url: https://github.com/Samsung/netcoredbg/releases/download/3.2.0-1092/netcoredbg-linux-amd64.tar.gz
+        sha256: 080eb3b2d2152465f599d3b33d1ee6e747794e11cc0a3773ec689f5e5f2c5afa
+        format: tar.gz
+        executable: netcoredbg/netcoredbg
+        tree:
+          manifest_sha256: e2bdea61f2724c8470429488a9ca94ee4a23448a3d6bb1dab281eb2e84a3d5ce
+          launcher_sha256: 03dbc5dd30471ff5648a973e9b1542fea6aca345fd913292159904c44aaf8c1a
+          usage: direct
+          required_paths:
+            - netcoredbg/ManagedPart.dll
+            - netcoredbg/libdbgshim.so
+            - netcoredbg/netcoredbg
   nvim-dotnet:
     version: de9a98d61ed3fd01b5016eea5fe9e32f1a4c7cfb
     source: roslyn.nvim exact plugin commit
@@ -402,6 +471,11 @@ versions:
     provenance: https://github.com/mfussenegger/nvim-jdtls/commit/6e9d953f0b82bccdb834cfde0e893f3119c22592
     compatibility_epoch: jvm-ide-2026-08
     artifacts:
+      linux-amd64:
+        url: https://github.com/mfussenegger/nvim-jdtls/archive/6e9d953f0b82bccdb834cfde0e893f3119c22592.tar.gz
+        sha256: 23eeeb423240c87965216759e0dec4c3aa10d7366c35606f0481a73c4c88481f
+        format: tar.gz
+        executable: nvim-jdtls-6e9d953f0b82bccdb834cfde0e893f3119c22592/lua/jdtls.lua
       linux-arm64:
         url: https://github.com/mfussenegger/nvim-jdtls/archive/6e9d953f0b82bccdb834cfde0e893f3119c22592.tar.gz
         sha256: 23eeeb423240c87965216759e0dec4c3aa10d7366c35606f0481a73c4c88481f
@@ -421,14 +495,6 @@ versions:
     source: NvChad starter commit
     provenance: https://github.com/NvChad/starter/commit/e3572e1f5e1c297212c3deeb17b7863139ce663e
     compatibility_epoch: neovim-razor-2026-08
-  notion-cli:
-    version: 0.21.5
-    source: npm registry
-    provenance: https://www.npmjs.com/package/ntn/v/0.21.5
-    npm:
-      tarball: https://registry.npmjs.org/ntn/-/ntn-0.21.5.tgz
-      integrity: sha512-GxSo9x8nuarbx1haWL5Ue1hl+3i5iF+BtGwVJhf8bx8SRat6OkwD8Jf+MEB42sqk7PoePDpGQPh8mih0sSFwTw==
-      sha256: 884d6518ed7a457925e2980b6386055a49f9dc09cb960428db35b3fd377f5025
   omh-node-runtime:
     version: 22.19.0
     source: Official Node.js release for OMH v0.3.0
@@ -508,14 +574,6 @@ versions:
         format: zip
         executable: opencode.exe
         executable_sha256: 06f5e20813ed50aefcbb0c2d120e89ffca9d5f35826990f1bafa39af1ce2707e
-  linear-cli:
-    version: 2.3.0
-    source: npm registry
-    provenance: https://www.npmjs.com/package/@schpet/linear-cli/v/2.3.0
-    npm:
-      tarball: https://registry.npmjs.org/@schpet/linear-cli/-/linear-cli-2.3.0.tgz
-      integrity: sha512-HzmiYMxOVTxo1HfmDB9BSMtXhBFBhglL9ZwYIZofOi5xWSbfbGyGXgeLop/bvpWRwLxMgG+JxvGJ+Y1Un0lPDw==
-      sha256: e813a3b92a84c2f1a8625b4c96891eccf08162d80b30f1dd4e9d32868649b602
   python:
     version: 3.14.6
     source: Python release page
@@ -563,12 +621,42 @@ versions:
           executable_paths:
             - tools/net10.0/linux-arm64/Microsoft.CodeAnalysis.LanguageServer
             - tools/net10.0/linux-arm64/roslyn-language-server
+      linux-amd64:
+        url: https://api.nuget.org/v3-flatcontainer/roslyn-language-server.linux-x64/5.11.0-1.26380.4/roslyn-language-server.linux-x64.5.11.0-1.26380.4.nupkg
+        sha256: 576df6b666575a1fd65305038014b171d6a2086bb99174b20c002cd628c49361
+        format: zip
+        executable: tools/net10.0/linux-x64/roslyn-language-server
+        tree:
+          manifest_sha256: 90a2b8f49b47c2a9b6c801b2d05d316026f9f1d40bb6c62c0e0679fb1de44538
+          launcher_sha256: 9fd98dc4c2cd79d86e5f05be73bd21fcabbcb09eea4ad3b6e4742e4a0b44f476
+          usage: direct
+          required_paths:
+            - tools/net10.0/linux-x64/Microsoft.CodeAnalysis.LanguageServer
+            - tools/net10.0/linux-x64/Microsoft.CodeAnalysis.Razor.Workspaces.dll
+            - tools/net10.0/linux-x64/Microsoft.VisualStudioCode.RazorExtension.dll
+            - tools/net10.0/linux-x64/roslyn-language-server
+            - tools/net10.0/linux-x64/roslyn-language-server.dll
+          executable_paths:
+            - tools/net10.0/linux-x64/Microsoft.CodeAnalysis.LanguageServer
+            - tools/net10.0/linux-x64/roslyn-language-server
   spring-tools-language-server:
     version: 5.2.0.RELEASE
     source: Spring Tools 5.2.0 release VSIX carrier 2.2.0-RC1
     provenance: https://github.com/spring-projects/spring-tools/releases/tag/5.2.0.RELEASE
     compatibility_epoch: jvm-ide-2026-08
     artifacts:
+      linux-amd64:
+        url: https://github.com/spring-projects/spring-tools/releases/download/5.2.0.RELEASE/vscode-spring-boot-2.2.0-RC1.vsix
+        sha256: 70943c4e434d469090f8cee54dacf1de10ec1161f92685581dc2ef6164971bb3
+        format: zip
+        executable: extension/language-server/spring-boot-language-server-2.2.0-SNAPSHOT-exec.jar
+        tree:
+          manifest_sha256: b8bd2f537de94a3ca188a9826c093dad6ea0e132803cbdcf2016e4a1009a2207
+          launcher_sha256: ec922c593895331943ee1eccda434461da034bb87ac20f406fd7fb5e211bc8e1
+          usage: resource
+          required_paths:
+            - extension/language-server/lib/spring-core-7.0.7.jar
+            - extension/language-server/spring-boot-language-server-2.2.0-SNAPSHOT-exec.jar
       linux-arm64:
         url: https://github.com/spring-projects/spring-tools/releases/download/5.2.0.RELEASE/vscode-spring-boot-2.2.0-RC1.vsix
         sha256: 70943c4e434d469090f8cee54dacf1de10ec1161f92685581dc2ef6164971bb3

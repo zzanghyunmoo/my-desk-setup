@@ -201,6 +201,9 @@ func (adapter Adapter) Apply(
 		if buildErr != nil {
 			return buildErr
 		}
+		for index := range commands {
+			commands[index].Executable = filepath.Join(adapter.Home, ".local", "bin", "mise")
+		}
 		err = adapter.runAll(ctx, commands)
 	case "bun":
 		if lock.NPM == nil {
@@ -224,9 +227,12 @@ func (adapter Adapter) Apply(
 		if buildErr != nil {
 			return errors.Join(buildErr, cleanup())
 		}
+		command.Executable = filepath.Join(adapter.Home, ".local", "bin", "bun")
 		commands := make([]transport.Command, 0, 2)
 		if adapter.bunGlobalDependencyExists(action.Package) {
-			commands = append(commands, BunRemove(action.Package, adapter.environment()))
+			remove := BunRemove(action.Package, adapter.environment())
+			remove.Executable = filepath.Join(adapter.Home, ".local", "bin", "bun")
+			commands = append(commands, remove)
 		}
 		commands = append(commands, command)
 		err = errors.Join(adapter.runAll(ctx, commands), cleanup())

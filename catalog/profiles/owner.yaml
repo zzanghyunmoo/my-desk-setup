@@ -2,7 +2,6 @@ schema_version: 1
 id: owner
 description: Complete owner environment; target-ineligible components remain explicit.
 selection:
-  - atlassian-cli
   - bun
   - c-toolchain
   - chrome
@@ -11,7 +10,6 @@ selection:
   - docker-engine
   - flutter
   - gh
-  - glab
   - go
   - gradle
   - herdr
@@ -19,11 +17,9 @@ selection:
   - kakaotalk
   - kotlin
   - lima
-  - linear-cli
   - linear-desktop
   - mise
   - neovim
-  - notion-cli
   - notion-desktop
   - nvchad
   - oh-my-harness

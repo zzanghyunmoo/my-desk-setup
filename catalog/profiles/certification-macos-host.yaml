@@ -15,8 +15,5 @@ selection:
   - opencode
   - slack
   - typescript
-  - notion-cli
-  - linear-cli
   - gh
-  - glab
   - wezterm

@@ -7,6 +7,8 @@ selection:
   - mise
   - go
   - c-toolchain
+  - rust
+  - xmake
   - python
   - uv
   - neovim
@@ -14,7 +16,5 @@ selection:
   - nvim-ide-tools
   - nvim-jvm
   - nvim-dotnet
-  - notion-cli
-  - linear-cli
   - gh
   - docker-engine
