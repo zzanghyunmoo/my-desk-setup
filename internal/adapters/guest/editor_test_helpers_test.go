@@ -2,8 +2,6 @@ package guest
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
 	"os"
 	"os/exec"
@@ -13,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	mdsartifact "github.com/zzanghyunmoo/my-desk-setup/internal/artifact"
 	mdscatalog "github.com/zzanghyunmoo/my-desk-setup/internal/catalog"
 )
 
@@ -20,7 +19,19 @@ var (
 	ciNeovimOnce sync.Once
 	ciNeovimPath string
 	ciNeovimErr  error
+	ciNeovim     *mdsartifact.Snapshot
 )
+
+func TestMain(m *testing.M) {
+	code := m.Run()
+	if ciNeovim != nil {
+		if err := ciNeovim.Close(); err != nil {
+			fmt.Fprintf(os.Stderr, "clean up locked CI Neovim: %v\n", err)
+			code = 1
+		}
+	}
+	os.Exit(code)
+}
 
 func requireHeadlessNeovim(t *testing.T) string {
 	t.Helper()
@@ -72,43 +83,23 @@ func installCINeovim() (string, error) {
 	if !exists {
 		return "", fmt.Errorf("reviewed catalog omits Neovim")
 	}
-	artifact, exists := entry.Artifacts["linux-amd64"]
-	if !exists || artifact.URL == "" || artifact.SHA256 == "" || artifact.Executable == "" ||
-		artifact.Format != "tar.gz" {
+	catalogArtifact, exists := entry.Artifacts["linux-amd64"]
+	if !exists || catalogArtifact.URL == "" || catalogArtifact.SHA256 == "" ||
+		catalogArtifact.Executable == "" || catalogArtifact.Format != "tar.gz" {
 		return "", fmt.Errorf("reviewed catalog has no usable linux-amd64 Neovim artifact")
 	}
-	directory, err := os.MkdirTemp("", "mds-ci-neovim-")
-	if err != nil {
-		return "", fmt.Errorf("create Neovim test directory: %w", err)
-	}
-	archive := filepath.Join(directory, "nvim-linux-x86_64.tar.gz")
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
-	command := exec.CommandContext(ctx, "curl", "--fail", "--location", "--retry", "3",
-		"--output", archive, artifact.URL)
-	if output, commandErr := command.CombinedOutput(); commandErr != nil {
-		return "", fmt.Errorf("download locked Neovim: %w: %s", commandErr, output)
-	}
-	content, err := os.ReadFile(archive)
+	snapshot, err := (mdsartifact.Snapshotter{}).Acquire(ctx, mdsartifact.SnapshotRequest{
+		URL:        catalogArtifact.URL,
+		SHA256:     catalogArtifact.SHA256,
+		Format:     catalogArtifact.Format,
+		Executable: catalogArtifact.Executable,
+		ExtractAll: true,
+	})
 	if err != nil {
-		return "", fmt.Errorf("read locked Neovim archive: %w", err)
+		return "", fmt.Errorf("acquire locked Neovim artifact: %w", err)
 	}
-	digest := sha256.Sum256(content)
-	if actual := hex.EncodeToString(digest[:]); actual != artifact.SHA256 {
-		return "", fmt.Errorf("locked Neovim checksum = %s", actual)
-	}
-	command = exec.CommandContext(ctx, "tar", "--extract", "--gzip", "--file", archive,
-		"--directory", directory)
-	if output, commandErr := command.CombinedOutput(); commandErr != nil {
-		return "", fmt.Errorf("extract locked Neovim: %w: %s", commandErr, output)
-	}
-	nvim := filepath.Join(directory, filepath.FromSlash(artifact.Executable))
-	stat, err := os.Stat(nvim)
-	if err != nil {
-		return "", fmt.Errorf("stat locked Neovim executable: %w", err)
-	}
-	if stat.Mode()&0o111 == 0 {
-		return "", fmt.Errorf("locked Neovim executable is not executable")
-	}
-	return nvim, nil
+	ciNeovim = snapshot
+	return snapshot.Executable(), nil
 }
