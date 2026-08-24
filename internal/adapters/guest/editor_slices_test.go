@@ -314,6 +314,27 @@ func TestProjectActionsExecuteExactCleanCheckoutAndDebugSelections(t *testing.T)
 			wantDAP:       "kotlin",
 		},
 		{
+			name: "kotlin debug detects project from nvim tree", set: jvmPluginSet,
+			action: "debug-app", filetype: "NvimTree", wantExecutable: "setsid",
+			prepare: func(t *testing.T, root string) string {
+				t.Helper()
+				gradlew := filepath.Join(root, "gradlew")
+				if err := os.WriteFile(gradlew, []byte("#!/bin/sh\n"), 0o700); err != nil {
+					t.Fatal(err)
+				}
+				source := filepath.Join(root, "src", "main", "kotlin", "App.kt")
+				if err := os.MkdirAll(filepath.Dir(source), 0o700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(source, []byte("fun main() {}\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				return ""
+			},
+			wantArguments: []string{"--no-daemon", "bootRun", "--debug-jvm"},
+			wantDAP:       "kotlin",
+		},
+		{
 			name: "jvm test debug reruns only the selected task", set: jvmPluginSet,
 			action: "debug-test", filetype: "java", wantExecutable: "setsid",
 			prepare: func(t *testing.T, root string) string {

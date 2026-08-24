@@ -693,6 +693,17 @@ local function action_environment(spec)
 	return result
 end
 
+local function jvm_debug_adapter(root)
+	local filetype = vim.bo.filetype
+	if filetype == "java" or filetype == "kotlin" then return filetype end
+	local kotlin_sources = vim.fs.find(function(name, path)
+		if not vim.endswith(name, ".kt") then return false end
+		local normalized = (path .. "/" .. name):gsub("\\\\", "/")
+		return normalized:find("/src/", 1, true) ~= nil
+	end, { path = root, type = "file", limit = 1 })
+	return #kotlin_sources > 0 and "kotlin" or "java"
+end
+
 local function run(root, name, spec)
   if not trust.is_trusted(root) then return end
 	if spec.launch_profile and dotnet_web_project(spec.project) and not spec.profile then
@@ -731,7 +742,7 @@ local function run(root, name, spec)
 	end
   stop(root)
 	local generation = generations[root]
-	local debug_adapter = vim.bo.filetype == "kotlin" and "kotlin" or "java"
+	local debug_adapter = spec.java_debug and jvm_debug_adapter(root) or nil
   local buffer = vim.api.nvim_create_buf(false, true)
   vim.api.nvim_set_current_buf(buffer)
   vim.bo[buffer].filetype = "mds-project-output"
