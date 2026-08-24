@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -212,23 +213,24 @@ func TestDotNetActionConfigurationUsesExactRoslynRazorAndDAPTrees(t *testing.T) 
 }
 
 func TestProjectActionsExecuteExactCleanCheckoutAndDebugSelections(t *testing.T) {
-	nvim, err := exec.LookPath("nvim")
-	if err != nil {
-		t.Skip("headless Neovim is unavailable")
-	}
+	nvim := requireHeadlessNeovim(t)
 	for _, test := range []struct {
-		name           string
-		set            pluginSet
-		action         string
-		filetype       string
-		prepare        func(*testing.T, string) string
-		wantExecutable string
-		wantArguments  []string
-		wantOrdered    []string
-		wantDAP        string
-		wantProject    bool
-		wantRejected   bool
-		wantSafeEnv    bool
+		name               string
+		set                pluginSet
+		action             string
+		filetype           string
+		prepare            func(*testing.T, string) string
+		currentFile        func(string) string
+		wantExecutable     string
+		wantArguments      []string
+		wantOrdered        []string
+		wantDAP            string
+		wantPrepared       string
+		wantProject        bool
+		wantRejected       bool
+		adapterUnavailable bool
+		untrusted          bool
+		wantSafeEnv        bool
 	}{
 		{
 			name: "dotnet build restores exact selected project", set: dotnetPluginSet,
@@ -289,18 +291,214 @@ func TestProjectActionsExecuteExactCleanCheckoutAndDebugSelections(t *testing.T)
 			wantRejected: true,
 		},
 		{
-			name: "jvm debug attaches automatically", set: jvmPluginSet,
+			name: "java source buffer wins in mixed jvm project", set: jvmPluginSet,
 			action: "debug-app", filetype: "java", wantExecutable: "setsid",
+			currentFile: func(root string) string {
+				return filepath.Join(root, "src", "main", "java", "App.java")
+			},
 			prepare: func(t *testing.T, root string) string {
 				t.Helper()
 				gradlew := filepath.Join(root, "gradlew")
 				if err := os.WriteFile(gradlew, []byte("#!/bin/sh\n"), 0o700); err != nil {
 					t.Fatal(err)
 				}
+				kotlinSource := filepath.Join(root, "src", "main", "kotlin", "Helper.kt")
+				if err := os.MkdirAll(filepath.Dir(kotlinSource), 0o700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(kotlinSource, []byte("class Helper\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				javaSource := filepath.Join(root, "src", "main", "java", "App.java")
+				if err := os.MkdirAll(filepath.Dir(javaSource), 0o700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(javaSource, []byte("class App {}\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
 				return ""
 			},
 			wantArguments: []string{"--no-daemon", "bootRun", "--debug-jvm"},
-			wantDAP:       "java",
+			wantDAP:       "java", wantPrepared: "java",
+		},
+		{
+			name: "java debug defaults from nvim tree", set: jvmPluginSet,
+			action: "debug-app", filetype: "NvimTree", wantExecutable: "setsid",
+			prepare: func(t *testing.T, root string) string {
+				t.Helper()
+				gradlew := filepath.Join(root, "gradlew")
+				if err := os.WriteFile(gradlew, []byte("#!/bin/sh\n"), 0o700); err != nil {
+					t.Fatal(err)
+				}
+				javaSource := filepath.Join(root, "src", "main", "java", "App.java")
+				if err := os.MkdirAll(filepath.Dir(javaSource), 0o700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(javaSource, []byte("class App {}\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				return ""
+			},
+			wantArguments: []string{"--no-daemon", "bootRun", "--debug-jvm"},
+			wantDAP:       "java", wantPrepared: "java",
+		},
+		{
+			name: "mixed jvm tree project selects a debug language", set: jvmPluginSet,
+			action: "debug-app", filetype: "NvimTree", wantExecutable: "setsid",
+			prepare: func(t *testing.T, root string) string {
+				t.Helper()
+				if err := os.WriteFile(filepath.Join(root, "gradlew"), []byte("#!/bin/sh\n"), 0o700); err != nil {
+					t.Fatal(err)
+				}
+				for path, content := range map[string]string{
+					filepath.Join(root, "src", "main", "java", "App.java"):    "class App {}\n",
+					filepath.Join(root, "src", "main", "kotlin", "Helper.kt"): "class Helper\n",
+				} {
+					if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+						t.Fatal(err)
+					}
+					if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+						t.Fatal(err)
+					}
+				}
+				return ""
+			},
+			wantArguments: []string{"--no-daemon", "bootRun", "--debug-jvm"},
+			wantDAP:       "java", wantPrepared: "java",
+		},
+		{
+			name: "kotlin debug uses pinned adapter through project action", set: jvmPluginSet,
+			action: "debug-app", filetype: "kotlin", wantExecutable: "setsid",
+			prepare: func(t *testing.T, root string) string {
+				t.Helper()
+				gradlew := filepath.Join(root, "gradlew")
+				if err := os.WriteFile(gradlew, []byte("#!/bin/sh\n"), 0o700); err != nil {
+					t.Fatal(err)
+				}
+				source := filepath.Join(root, "src", "main", "kotlin", "App.kt")
+				if err := os.MkdirAll(filepath.Dir(source), 0o700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(source, []byte("fun main() {}\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				return ""
+			},
+			wantArguments: []string{"--no-daemon", "bootRun", "--debug-jvm"},
+			wantDAP:       "kotlin", wantPrepared: "kotlin",
+		},
+		{
+			name: "kotlin debug detects project from nvim tree", set: jvmPluginSet,
+			action: "debug-app", filetype: "NvimTree", wantExecutable: "setsid",
+			prepare: func(t *testing.T, root string) string {
+				t.Helper()
+				gradlew := filepath.Join(root, "gradlew")
+				if err := os.WriteFile(gradlew, []byte("#!/bin/sh\n"), 0o700); err != nil {
+					t.Fatal(err)
+				}
+				source := filepath.Join(root, "src", "main", "kotlin", "App.kt")
+				if err := os.MkdirAll(filepath.Dir(source), 0o700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(source, []byte("fun main() {}\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				return ""
+			},
+			wantArguments: []string{"--no-daemon", "bootRun", "--debug-jvm"},
+			wantDAP:       "kotlin", wantPrepared: "kotlin",
+		},
+		{
+			name: "kotlin debug detects a nested gradle module from nvim tree", set: jvmPluginSet,
+			action: "debug-app", filetype: "NvimTree", wantExecutable: "setsid",
+			prepare: func(t *testing.T, root string) string {
+				t.Helper()
+				if err := os.WriteFile(filepath.Join(root, "gradlew"), []byte("#!/bin/sh\n"), 0o700); err != nil {
+					t.Fatal(err)
+				}
+				module := filepath.Join(root, "services", "api")
+				if err := os.MkdirAll(module, 0o700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(module, "build.gradle.kts"), []byte("plugins {}\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				source := filepath.Join(module, "src", "main", "kotlin", "App.kt")
+				if err := os.MkdirAll(filepath.Dir(source), 0o700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(source, []byte("fun main() {}\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				return ""
+			},
+			wantArguments: []string{"--no-daemon", "bootRun", "--debug-jvm"},
+			wantDAP:       "kotlin", wantPrepared: "kotlin",
+		},
+		{
+			name: "jvm debug rejects an unavailable adapter before gradle starts", set: jvmPluginSet,
+			action: "debug-app", filetype: "NvimTree", prepare: func(t *testing.T, root string) string {
+				t.Helper()
+				if err := os.WriteFile(filepath.Join(root, "gradlew"), []byte("#!/bin/sh\n"), 0o700); err != nil {
+					t.Fatal(err)
+				}
+				source := filepath.Join(root, "src", "main", "kotlin", "App.kt")
+				if err := os.MkdirAll(filepath.Dir(source), 0o700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(source, []byte("fun main() {}\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				return ""
+			},
+			wantPrepared: "kotlin", wantRejected: true, adapterUnavailable: true,
+		},
+		{
+			name: "jvm debug rejects an untrusted project before adapter preparation", set: jvmPluginSet,
+			action: "debug-app", filetype: "NvimTree", prepare: func(t *testing.T, root string) string {
+				t.Helper()
+				if err := os.WriteFile(filepath.Join(root, "gradlew"), []byte("#!/bin/sh\n"), 0o700); err != nil {
+					t.Fatal(err)
+				}
+				source := filepath.Join(root, "src", "main", "kotlin", "App.kt")
+				if err := os.MkdirAll(filepath.Dir(source), 0o700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(source, []byte("fun main() {}\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				return ""
+			},
+			wantRejected: true, untrusted: true,
+		},
+		{
+			name: "jvm debug rejects a tree project without recognized sources", set: jvmPluginSet,
+			action: "debug-app", filetype: "NvimTree", prepare: func(t *testing.T, root string) string {
+				t.Helper()
+				if err := os.WriteFile(filepath.Join(root, "gradlew"), []byte("#!/bin/sh\n"), 0o700); err != nil {
+					t.Fatal(err)
+				}
+				return ""
+			},
+			wantRejected: true,
+		},
+		{
+			name: "jvm debug rejects a malformed source root", set: jvmPluginSet,
+			action: "debug-app", filetype: "NvimTree", prepare: func(t *testing.T, root string) string {
+				t.Helper()
+				if err := os.WriteFile(filepath.Join(root, "gradlew"), []byte("#!/bin/sh\n"), 0o700); err != nil {
+					t.Fatal(err)
+				}
+				sourceRoot := filepath.Join(root, "src", "main")
+				if err := os.MkdirAll(sourceRoot, 0o700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(sourceRoot, "kotlin"), []byte("not a directory\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				return ""
+			},
+			wantRejected: true,
 		},
 		{
 			name: "jvm test debug reruns only the selected task", set: jvmPluginSet,
@@ -311,16 +509,27 @@ func TestProjectActionsExecuteExactCleanCheckoutAndDebugSelections(t *testing.T)
 				if err := os.WriteFile(gradlew, []byte("#!/bin/sh\n"), 0o700); err != nil {
 					t.Fatal(err)
 				}
+				javaSource := filepath.Join(root, "src", "test", "java", "AppTest.java")
+				if err := os.MkdirAll(filepath.Dir(javaSource), 0o700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(javaSource, []byte("class AppTest {}\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
 				return ""
 			},
 			wantArguments: []string{"--no-daemon", "test", "--debug-jvm", "--rerun"},
-			wantDAP:       "java",
+			wantDAP:       "java", wantPrepared: "java",
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			root := t.TempDir()
 			nvimLog := filepath.Join(t.TempDir(), "nvim.log")
 			wantedProject := test.prepare(t, root)
+			currentFile := ""
+			if test.currentFile != nil {
+				currentFile = test.currentFile(root)
+			}
 			actionsPath := filepath.Join(t.TempDir(), "actions.lua")
 			capturePath := filepath.Join(t.TempDir(), "capture.json")
 			if err := os.WriteFile(actionsPath, []byte(renderProjectActions(test.set)), 0o600); err != nil {
@@ -335,9 +544,12 @@ func TestProjectActionsExecuteExactCleanCheckoutAndDebugSelections(t *testing.T)
 				"MDS_TEST_ROOT="+root,
 				"MDS_TEST_ACTION="+test.action,
 				"MDS_TEST_FILETYPE="+test.filetype,
+				"MDS_TEST_CURRENT_FILE="+currentFile,
 				"MDS_TEST_PROJECT="+wantedProject,
 				"MDS_TEST_ACTIONS="+actionsPath,
 				"MDS_TEST_CAPTURE="+capturePath,
+				"MDS_TEST_ADAPTER_UNAVAILABLE="+strconv.FormatBool(test.adapterUnavailable),
+				"MDS_TEST_UNTRUSTED="+strconv.FormatBool(test.untrusted),
 				"NVIM_LOG_FILE="+nvimLog,
 			)
 			if output, err := command.CombinedOutput(); err != nil {
@@ -351,13 +563,17 @@ func TestProjectActionsExecuteExactCleanCheckoutAndDebugSelections(t *testing.T)
 				return
 			}
 			var captured struct {
-				Argv    []string          `json:"argv"`
-				Project string            `json:"project"`
-				DAP     string            `json:"dap"`
-				Env     map[string]string `json:"env"`
+				Argv     []string          `json:"argv"`
+				Project  string            `json:"project"`
+				DAP      string            `json:"dap"`
+				Prepared string            `json:"prepared"`
+				Env      map[string]string `json:"env"`
 			}
 			if err := json.Unmarshal(content, &captured); err != nil {
 				t.Fatalf("decode capture %q: %v", content, err)
+			}
+			if captured.Prepared != test.wantPrepared {
+				t.Fatalf("prepared adapter = %q, want %q", captured.Prepared, test.wantPrepared)
 			}
 			if test.wantRejected {
 				if len(captured.Argv) != 0 || captured.DAP != "" {
@@ -415,11 +631,60 @@ func TestProjectActionsExecuteExactCleanCheckoutAndDebugSelections(t *testing.T)
 	}
 }
 
-func TestWorkspaceTrustRevocationIsRootScoped(t *testing.T) {
-	nvim, err := exec.LookPath("nvim")
-	if err != nil {
-		t.Skip("headless Neovim is unavailable")
+func TestPendingJVMPreparationCanBeCancelledBeforeGradleStarts(t *testing.T) {
+	nvim := requireHeadlessNeovim(t)
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "gradlew"), []byte("#!/bin/sh\n"), 0o700); err != nil {
+		t.Fatal(err)
 	}
+	source := filepath.Join(root, "src", "main", "kotlin", "App.kt")
+	if err := os.MkdirAll(filepath.Dir(source), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(source, []byte("fun main() {}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	fixtureRoot := t.TempDir()
+	actionsPath := filepath.Join(fixtureRoot, "actions.lua")
+	harnessPath := filepath.Join(fixtureRoot, "harness.lua")
+	capturePath := filepath.Join(fixtureRoot, "capture.json")
+	for path, content := range map[string]string{
+		actionsPath: renderProjectActions(jvmPluginSet),
+		harnessPath: headlessPendingJVMPreparationHarness,
+	} {
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	command := exec.Command(nvim, "--clean", "--headless", "-u", "NONE", "-c", "luafile "+harnessPath)
+	command.Env = append(os.Environ(),
+		"MDS_TEST_ROOT="+root,
+		"MDS_TEST_ACTIONS="+actionsPath,
+		"MDS_TEST_CAPTURE="+capturePath,
+		"NVIM_LOG_FILE="+filepath.Join(fixtureRoot, "nvim.log"),
+	)
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("headless pending JVM cancellation harness: %v\n%s", err, output)
+	}
+	content, err := os.ReadFile(capturePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var captured struct {
+		Prepared   int `json:"prepared"`
+		SystemRuns int `json:"system_runs"`
+		DAPRuns    int `json:"dap_runs"`
+	}
+	if err := json.Unmarshal(content, &captured); err != nil {
+		t.Fatalf("decode capture %q: %v", content, err)
+	}
+	if captured.Prepared != 1 || captured.SystemRuns != 0 || captured.DAPRuns != 0 {
+		t.Fatalf("cancelled JVM preparation = %#v", captured)
+	}
+}
+
+func TestWorkspaceTrustRevocationIsRootScoped(t *testing.T) {
+	nvim := requireHeadlessNeovim(t)
 	rootA := filepath.Join(t.TempDir(), "a")
 	rootB := filepath.Join(t.TempDir(), "b")
 	for _, root := range []string{rootA, rootB} {
@@ -427,7 +692,7 @@ func TestWorkspaceTrustRevocationIsRootScoped(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	rootA, err = filepath.EvalSymlinks(rootA)
+	rootA, err := filepath.EvalSymlinks(rootA)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -485,12 +750,16 @@ func TestWorkspaceTrustRevocationIsRootScoped(t *testing.T) {
 }
 
 func TestWorkspaceTrustRevocationCancelsScheduledJVMAttach(t *testing.T) {
-	nvim, err := exec.LookPath("nvim")
-	if err != nil {
-		t.Skip("headless Neovim is unavailable")
-	}
+	nvim := requireHeadlessNeovim(t)
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "gradlew"), []byte("#!/bin/sh\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	javaSource := filepath.Join(root, "src", "test", "java", "AppTest.java")
+	if err := os.MkdirAll(filepath.Dir(javaSource), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(javaSource, []byte("class AppTest {}\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	fixtureRoot := t.TempDir()
@@ -534,10 +803,7 @@ func TestWorkspaceTrustRevocationCancelsScheduledJVMAttach(t *testing.T) {
 }
 
 func TestWorkspaceTrustRevocationCancelsPendingDotNetTestAttach(t *testing.T) {
-	nvim, err := exec.LookPath("nvim")
-	if err != nil {
-		t.Skip("headless Neovim is unavailable")
-	}
+	nvim := requireHeadlessNeovim(t)
 	root := t.TempDir()
 	project := filepath.Join(root, "Probe.csproj")
 	if err := os.WriteFile(project, []byte(`<Project Sdk="Microsoft.NET.Sdk"></Project>`), 0o600); err != nil {
@@ -601,10 +867,7 @@ func TestWorkspaceTrustRevocationCancelsPendingDotNetTestAttach(t *testing.T) {
 }
 
 func TestASPNetDebugConfigurationEnforcesManagedLoopback(t *testing.T) {
-	nvim, err := exec.LookPath("nvim")
-	if err != nil {
-		t.Skip("headless Neovim is unavailable")
-	}
+	nvim := requireHeadlessNeovim(t)
 	root := t.TempDir()
 	project := prepareDotNetWebAction(t, root)
 	references := map[string]runtimeTreeReference{}
@@ -743,20 +1006,35 @@ local record = {}
 package.preload["configs.trust"] = function()
   return {
     roots = function() return { root } end,
-    is_trusted = function(candidate) return candidate == root end,
+    is_trusted = function(candidate)
+      return vim.env.MDS_TEST_UNTRUSTED ~= "true" and candidate == root
+    end,
     managed_executable = function(name) assert(name == "dotnet"); return "/managed/dotnet" end,
   }
 end
-package.preload["dap"] = function()
+local dap = {
+  adapters = {},
+  configurations = { cs = { { marker = "app" }, { marker = "test" } } },
+}
+dap.run = function(config)
+  record.dap = config.type or config.marker
+  record.project = vim.g.mds_dotnet_project
+end
+package.preload["dap"] = function() return dap end
+package.preload["configs.jvm"] = function()
   return {
-    configurations = { cs = { { marker = "app" }, { marker = "test" } } },
-    run = function(config)
-      record.dap = config.type or config.marker
-      record.project = vim.g.mds_dotnet_project
+    prepare_debug = function(adapter, source, callback)
+      record.prepared = adapter
+      record.source = source
+      if vim.env.MDS_TEST_ADAPTER_UNAVAILABLE == "true" then callback(false); return end
+      dap.adapters[adapter] = { type = "test" }
+      callback(true)
     end,
   }
 end
 
+local current_file = vim.env.MDS_TEST_CURRENT_FILE
+if current_file and current_file ~= "" then vim.api.nvim_buf_set_name(0, current_file) end
 vim.bo.filetype = assert(vim.env.MDS_TEST_FILETYPE)
 vim.ui.select = function(items, options, callback)
   if options.prompt == "MDS project action" then callback(wanted_action); return end
@@ -791,6 +1069,61 @@ vim.defer_fn(function()
   handle:close()
   vim.cmd "qa!"
 end, 250)
+`
+
+const headlessPendingJVMPreparationHarness = `local root = assert(vim.env.MDS_TEST_ROOT)
+local record = { prepared = 0, system_runs = 0, dap_runs = 0 }
+local complete_prepare
+
+package.preload["configs.trust"] = function()
+  return {
+    roots = function() return { root } end,
+    is_trusted = function(candidate) return candidate == root end,
+    managed_executable = function(name) return name end,
+  }
+end
+package.preload["configs.dotnet"] = function() return { stop = function() end } end
+local dap = {
+  adapters = {},
+  listeners = { before = { event_initialized = {} } },
+  run = function() record.dap_runs = record.dap_runs + 1 end,
+  session = function() return nil end,
+  sessions = function() return {} end,
+  set_session = function() end,
+  terminate = function() end,
+}
+package.preload["dap"] = function() return dap end
+package.preload["configs.jvm"] = function()
+  return {
+    prepare_debug = function(adapter, _, callback)
+      record.prepared = record.prepared + 1
+      dap.adapters[adapter] = { type = "test" }
+      complete_prepare = callback
+    end,
+  }
+end
+vim.bo.filetype = "NvimTree"
+vim.ui.select = function(items, options, callback)
+  if options.prompt == "MDS project action" then callback("debug-app"); return end
+  callback(items[1])
+end
+vim.system = function()
+  record.system_runs = record.system_runs + 1
+  return { pid = 1234, kill = function() end }
+end
+
+local actions = dofile(assert(vim.env.MDS_TEST_ACTIONS))
+actions.setup()
+actions.open()
+assert(complete_prepare, "JVM preparation did not start")
+vim.cmd "MdsProjectCancel"
+complete_prepare(true)
+vim.defer_fn(function()
+  local capture = assert(io.open(assert(vim.env.MDS_TEST_CAPTURE), "wb"))
+  capture:write(vim.json.encode(record))
+  capture:close()
+  vim.cmd "qa!"
+end, 100)
 `
 
 const headlessTrustRevocationHarness = `local root_a = assert(vim.env.MDS_TEST_ROOT_A)
@@ -853,6 +1186,7 @@ package.preload["configs.trust"] = function()
 end
 package.preload["configs.dotnet"] = function() return { stop = function() end } end
 local dap = {
+	adapters = {},
   listeners = { before = { event_initialized = {} } },
   run = function() record.dap_runs = record.dap_runs + 1 end,
   session = function() return nil end,
@@ -861,6 +1195,14 @@ local dap = {
   terminate = function() end,
 }
 package.preload["dap"] = function() return dap end
+package.preload["configs.jvm"] = function()
+  return {
+    prepare_debug = function(adapter, _, callback)
+      dap.adapters[adapter] = { type = "test" }
+      callback(true)
+    end,
+  }
+end
 vim.ui.select = function(items, options, callback)
   if options.prompt == "MDS project action" then callback("debug-test"); return end
   callback(items[1])

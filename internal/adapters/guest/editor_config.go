@@ -93,9 +93,10 @@ var (
 	basePluginSpec       = "return {}\n"
 	idePluginSpec        = renderPluginSpec(idePluginSet)
 	editorConfiguration  = map[string]string{
-		"init.lua":             renderManagedInit(),
-		"lazy-lock.json":       managedLazyLock,
-		"lua/plugins/init.lua": basePluginSpec,
+		"init.lua":                renderManagedInit(),
+		"lazy-lock.json":          managedLazyLock,
+		"lua/configs/startup.lua": renderStartupConfig(),
+		"lua/plugins/init.lua":    basePluginSpec,
 	}
 	ideConfiguration = map[string]string{
 		"lua/configs/lspconfig.lua": `require("nvchad.configs.lspconfig").defaults()
@@ -259,7 +260,7 @@ func renderPluginSpec(set pluginSet) string {
 		return basePluginSpec
 	}
 	lines := []string{
-		`  { "neovim/nvim-lspconfig", event = { "BufReadPost", "BufNewFile" }, config = function() require "configs.lspconfig" end },`,
+		`  { "neovim/nvim-lspconfig", event = { "VimEnter", "BufReadPost", "BufNewFile" }, config = function() require "configs.lspconfig" end },`,
 		`  { "mfussenegger/nvim-dap" },`,
 		`  { "rcarriga/nvim-dap-ui", event = "VeryLazy", dependencies = { "mfussenegger/nvim-dap", "nvim-neotest/nvim-nio" }, config = function() require "configs.dap" end },`,
 		`  { "theHamsta/nvim-dap-virtual-text", opts = {} },`,
@@ -271,7 +272,7 @@ func renderPluginSpec(set pluginSet) string {
 		)
 	}
 	if set&jvmPluginSet != 0 {
-		lines = append(lines, `  { "mfussenegger/nvim-jdtls", ft = { "java" }, config = function() require("configs.jvm").setup() end },`)
+		lines = append(lines, `  { "mfussenegger/nvim-jdtls", ft = { "java", "kotlin" }, config = function() require("configs.jvm").setup() end },`)
 	}
 	if set&dotnetPluginSet != 0 {
 		lines = append(lines, `  { "seblyng/roslyn.nvim", event = { "BufReadPre", "BufNewFile" },
@@ -342,7 +343,69 @@ dofile(vim.g.base46_cache .. "statusline")
 require "options"
 require "autocmds"
 vim.schedule(function() require "mappings" end)
+require "configs.startup"
 `, lazyPluginCommit[:12], managedPluginGraphID)
+}
+
+func renderStartupConfig() string {
+	return `local M = {}
+
+local read_from_stdin = false
+vim.api.nvim_create_autocmd("StdinReadPre", {
+  once = true,
+  callback = function() read_from_stdin = true end,
+})
+
+vim.api.nvim_create_autocmd({ "BufReadPost", "BufNewFile" }, {
+  group = vim.api.nvim_create_augroup("mds-directory-filetype", { clear = true }),
+  callback = function(event)
+    if vim.bo[event.buf].filetype ~= "" then return end
+    local buffer_name = vim.api.nvim_buf_get_name(event.buf)
+    local filename = event.file
+    if not filename or filename == "" then filename = buffer_name end
+    local detected_filetype = vim.filetype.match { filename = filename }
+    if not detected_filetype then return end
+
+    vim.schedule(function()
+      if not vim.api.nvim_buf_is_valid(event.buf) or
+          not vim.api.nvim_buf_is_loaded(event.buf) or
+          vim.api.nvim_buf_get_name(event.buf) ~= buffer_name or
+          vim.bo[event.buf].filetype ~= "" then
+        return
+      end
+      vim.api.nvim_buf_call(event.buf, function()
+        vim.api.nvim_cmd({ cmd = "setfiletype", args = { detected_filetype } }, {})
+      end)
+    end)
+  end,
+})
+
+vim.api.nvim_create_autocmd("VimEnter", {
+  once = true,
+  callback = function()
+    if #vim.api.nvim_list_uis() == 0 then return end
+    if read_from_stdin then return end
+
+    local argument_count = vim.fn.argc()
+    if argument_count > 1 then return end
+
+    local project_directory
+    if argument_count == 0 then
+      if vim.api.nvim_buf_get_name(0) ~= "" then return end
+      project_directory = vim.fn.getcwd()
+    else
+      local argument = vim.fn.argv(0)
+      if vim.fn.isdirectory(argument) ~= 1 then return end
+      project_directory = vim.fn.fnamemodify(argument, ":p")
+    end
+
+    vim.api.nvim_set_current_dir(project_directory)
+    vim.schedule(function() vim.cmd "NvimTreeFocus" end)
+  end,
+})
+
+return M
+`
 }
 
 func writeEditorConfiguration(root string) error {
@@ -570,7 +633,14 @@ func expectedPluginPins(set pluginSet) []pluginPin {
 }
 
 func inspectEditorConfiguration(root string) (bool, bool, string, error) {
-	for _, relativePath := range []string{"init.lua", "lazy-lock.json"} {
+	basePaths := make([]string, 0, len(editorConfiguration)-1)
+	for relativePath := range editorConfiguration {
+		if relativePath != "lua/plugins/init.lua" {
+			basePaths = append(basePaths, relativePath)
+		}
+	}
+	sort.Strings(basePaths)
+	for _, relativePath := range basePaths {
 		ready, detail, err := inspectConfigurationFile(
 			root,
 			relativePath,
