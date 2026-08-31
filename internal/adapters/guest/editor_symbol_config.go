@@ -44,6 +44,7 @@ local state = {
   generation = 0,
   refresh_serial = 0,
   cancel = nil,
+  request_timer = nil,
   suppressed = {},
   setup = false,
 }
@@ -71,10 +72,10 @@ local function remember_source(buf, win)
   state.source_buf = buf
   if valid_window(win) and vim.api.nvim_win_get_buf(win) == buf then
     state.source_win = win
-    state.sources[vim.api.nvim_win_get_tabpage(win)] = { buf = buf, win = win }
+    state.sources[vim.api.nvim_win_get_tabpage(win)] = buf
   else
     state.source_win = nil
-    state.sources[vim.api.nvim_get_current_tabpage()] = { buf = buf, win = nil }
+    state.sources[vim.api.nvim_get_current_tabpage()] = buf
   end
   return true
 end
@@ -85,10 +86,10 @@ local function remember_visible_source()
   if remember_source(vim.api.nvim_get_current_buf(), current_win) then return true end
 
   local remembered = state.sources[tab]
-  if remembered and is_source_buffer(remembered.buf) then
+  if is_source_buffer(remembered) then
     for _, win in ipairs(vim.api.nvim_tabpage_list_wins(tab)) do
-      if valid_window(win) and vim.api.nvim_win_get_buf(win) == remembered.buf then
-        return remember_source(remembered.buf, win)
+      if valid_window(win) and vim.api.nvim_win_get_buf(win) == remembered then
+        return remember_source(remembered, win)
       end
     end
   end
@@ -247,6 +248,27 @@ local function client_encodings(clients)
   return result
 end
 
+local function stop_request_timer()
+  local timer = state.request_timer
+  state.request_timer = nil
+  if not timer or timer:is_closing() then return end
+  pcall(timer.stop, timer)
+  pcall(timer.close, timer)
+end
+
+local function cancel_request()
+  stop_request_timer()
+  local cancel = state.cancel
+  state.cancel = nil
+  if cancel then pcall(cancel) end
+end
+
+local function request_timeout_ms()
+  local configured = tonumber(vim.g.mds_symbol_request_timeout_ms)
+  if configured and configured > 0 then return configured end
+  return 5000
+end
+
 function M.refresh()
   if not valid_window(state.panel_win) or not valid_buffer(state.panel_buf) then return end
   if not valid_buffer(state.source_buf) then
@@ -256,8 +278,7 @@ function M.refresh()
 
   state.generation = state.generation + 1
   local generation = state.generation
-  if state.cancel then pcall(state.cancel) end
-  state.cancel = nil
+  cancel_request()
 
   local clients = vim.lsp.get_clients { bufnr = state.source_buf, method = method }
   if #clients == 0 then
@@ -270,7 +291,14 @@ function M.refresh()
   local source_uri = vim.uri_from_bufnr(source_buf)
   local encodings = client_encodings(clients)
   local params = { textDocument = vim.lsp.util.make_text_document_params(source_buf) }
-  state.cancel = vim.lsp.buf_request_all(source_buf, method, params, function(results)
+  local completed = false
+  local cancel
+  cancel = vim.lsp.buf_request_all(source_buf, method, params, function(results)
+    completed = true
+    if state.cancel == cancel then
+      state.cancel = nil
+      stop_request_timer()
+    end
     if generation ~= state.generation or source_buf ~= state.source_buf or
         not valid_buffer(source_buf) or not valid_window(state.panel_win) then
       return
@@ -282,7 +310,8 @@ function M.refresh()
     table.sort(client_ids, function(left, right) return tostring(left) < tostring(right) end)
     for _, client_id in ipairs(client_ids) do
       local response = results[client_id]
-      if response and not response.error then
+      local response_error = response and (response.err or response.error)
+      if response and not response_error then
         successful_response = true
         merge_symbols(
           roots,
@@ -302,6 +331,20 @@ function M.refresh()
     end
     render(lines, entries)
   end)
+  if completed then return end
+  state.cancel = cancel
+  state.request_timer = vim.defer_fn(function()
+    if generation ~= state.generation or source_buf ~= state.source_buf or state.cancel ~= cancel then
+      return
+    end
+    stop_request_timer()
+    state.cancel = nil
+    if cancel then pcall(cancel) end
+    state.generation = state.generation + 1
+    if valid_buffer(source_buf) and valid_window(state.panel_win) then
+      placeholder "Symbol request timed out"
+    end
+  end, request_timeout_ms())
 end
 
 local function schedule_refresh()
@@ -388,8 +431,7 @@ end
 function M.close(suppress)
   state.generation = state.generation + 1
   state.refresh_serial = state.refresh_serial + 1
-  if state.cancel then pcall(state.cancel) end
-  state.cancel = nil
+  cancel_request()
   local panel_win = state.panel_win
   local panel_tab = valid_window(panel_win) and vim.api.nvim_win_get_tabpage(panel_win)
     or vim.api.nvim_get_current_tabpage()
@@ -489,9 +531,7 @@ function M.setup()
           if state.tree_win == closed then M.close(false) end
         end)
       elseif closed == state.panel_win then
-        state.panel_win = nil
-        state.tree_win = nil
-        state.entries = {}
+        M.close(false)
       end
     end,
   })

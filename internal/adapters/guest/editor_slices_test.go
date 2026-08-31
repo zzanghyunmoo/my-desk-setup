@@ -38,7 +38,8 @@ func TestSliceConfigurationFullIsExactUnion(t *testing.T) {
 	}
 	for _, token := range []string{
 		"conform.nvim", "nvim-jdtls", "roslyn.nvim", "kotlin_lsp", "spring_boot",
-		"rust_analyzer", `require("configs.symbols").setup()`,
+		`rust_analyzer = { cmd = { vim.fn.expand("~/.local/bin/rust-analyzer") } }`,
+		`require("configs.symbols").setup()`,
 	} {
 		content := full["lua/plugins/init.lua"] + full["lua/configs/lspconfig.lua"]
 		if !strings.Contains(content, token) {

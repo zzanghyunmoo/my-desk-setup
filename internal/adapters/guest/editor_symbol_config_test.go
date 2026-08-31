@@ -71,7 +71,15 @@ func TestSymbolPanelRendersHierarchyAndJumpsFromTreeColumn(t *testing.T) {
 	}
 	command := exec.Command(nvim, "--clean", "--headless", "-u", "NONE",
 		"-c", "luafile "+harnessPath, "-c", "cquit")
-	command.Env = append(os.Environ(),
+	command.Env = make([]string, 0, len(os.Environ())+2)
+	for _, variable := range os.Environ() {
+		if strings.HasPrefix(variable, "MDS_TEST_SYMBOLS=") ||
+			strings.HasPrefix(variable, "NVIM_LOG_FILE=") {
+			continue
+		}
+		command.Env = append(command.Env, variable)
+	}
+	command.Env = append(command.Env,
 		"MDS_TEST_SYMBOLS="+symbolsPath,
 		"NVIM_LOG_FILE="+filepath.Join(fixtureRoot, "nvim.log"),
 	)
@@ -119,6 +127,7 @@ vim.lsp.util.show_document = function(location, encoding, options)
 end
 
 local symbols = dofile(assert(vim.env.MDS_TEST_SYMBOLS))
+symbols.setup()
 symbols.setup()
 assert(symbols.open() == false, "headless symbol panel opened without an explicit force")
 local original_list_uis = vim.api.nvim_list_uis
@@ -229,13 +238,17 @@ assert(shown.location.range.start.line == 30)
 
 symbols.refresh()
 assert(#callbacks == 2, #callbacks)
-callbacks[2]({ [7] = { result = {
+local cancelled_before_refresh = cancelled
+symbols.refresh()
+assert(#callbacks == 3, #callbacks)
+assert(cancelled == cancelled_before_refresh + 1, cancelled)
+callbacks[3]({ [7] = { result = {
   {
     name = "fresh", kind = 12,
     range = { start = { line = 20, character = 0 }, ["end"] = { line = 20, character = 5 } },
   },
 } } })
-callbacks[1]({ [7] = { result = {
+callbacks[2]({ [7] = { result = {
   {
     name = "stale", kind = 12,
     range = { start = { line = 21, character = 0 }, ["end"] = { line = 21, character = 5 } },
@@ -243,19 +256,37 @@ callbacks[1]({ [7] = { result = {
 } } })
 lines = vim.api.nvim_buf_get_lines(panel_buf, 0, -1, false)
 assert(lines[2] == "[function] fresh", vim.inspect(lines))
-assert(cancelled >= 1, cancelled)
 
 symbols.refresh()
-assert(#callbacks == 3, #callbacks)
-callbacks[3]({ [7] = { result = {} } })
+assert(#callbacks == 4, #callbacks)
+callbacks[4]({ [7] = { result = {} } })
 lines = vim.api.nvim_buf_get_lines(panel_buf, 0, -1, false)
 assert(lines[2] == "[No symbols]", vim.inspect(lines))
 
 symbols.refresh()
-assert(#callbacks == 4, #callbacks)
-callbacks[4]({ [7] = { error = { code = -32603, message = "failed" } } })
+assert(#callbacks == 5, #callbacks)
+callbacks[5]({ [7] = { err = { code = -32603, message = "failed" } } })
 lines = vim.api.nvim_buf_get_lines(panel_buf, 0, -1, false)
 assert(lines[2] == "[Symbol request failed]", vim.inspect(lines))
+
+vim.g.mds_symbol_request_timeout_ms = 100
+symbols.refresh()
+assert(#callbacks == 6, #callbacks)
+local cancelled_before_timeout = cancelled
+assert(vim.wait(500, function()
+  lines = vim.api.nvim_buf_get_lines(panel_buf, 0, -1, false)
+  return lines[2] == "[Symbol request timed out]"
+end), "unanswered symbol request did not time out")
+assert(cancelled == cancelled_before_timeout + 1, cancelled)
+callbacks[6]({ [7] = { result = {
+  {
+    name = "late", kind = 12,
+    range = { start = { line = 22, character = 0 }, ["end"] = { line = 22, character = 4 } },
+  },
+} } })
+lines = vim.api.nvim_buf_get_lines(panel_buf, 0, -1, false)
+assert(lines[2] == "[Symbol request timed out]", vim.inspect(lines))
+vim.g.mds_symbol_request_timeout_ms = nil
 
 clients = {}
 symbols.refresh()
@@ -405,7 +436,33 @@ assert(vim.wait(500, function()
 end), "symbol panel did not return when resize constraints recovered")
 vim.api.nvim_list_uis = original_list_uis
 
+clients = { { id = 7, offset_encoding = "utf-16" } }
+symbols.refresh()
+local direct_close_callback = callbacks[#callbacks]
+local cancelled_before_direct_close = cancelled
+vim.api.nvim_win_close(returned_panel_win, true)
+assert(vim.wait(500, function() return cancelled == cancelled_before_direct_close + 1 end),
+  "closing the panel window did not cancel its pending symbol request")
+direct_close_callback({ [7] = { result = {
+  {
+    name = "closed", kind = 12,
+    range = { start = { line = 23, character = 0 }, ["end"] = { line = 23, character = 6 } },
+  },
+} } })
+
+vim.api.nvim_list_uis = function() return { {} } end
+assert(symbols.open(true), "symbol panel did not reopen for tree-close verification")
+returned_panel_win = nil
+for _, win in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
+  if vim.bo[vim.api.nvim_win_get_buf(win)].filetype == "mds-symbols" then returned_panel_win = win end
+end
+assert(returned_panel_win, "tree-close verification has no symbol panel")
+vim.api.nvim_list_uis = original_list_uis
+local cancelled_before_tree_close = cancelled
 vim.api.nvim_win_close(tree_win, true)
-assert(vim.wait(500, function() return not vim.api.nvim_win_is_valid(returned_panel_win) end), "orphan symbol panel")
+assert(vim.wait(500, function()
+  return not vim.api.nvim_win_is_valid(returned_panel_win)
+    and cancelled == cancelled_before_tree_close + 1
+end), "tree close left an orphan panel or pending symbol request")
 vim.cmd "qa!"
 `

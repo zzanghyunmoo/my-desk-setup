@@ -447,7 +447,7 @@ func renderSliceLSPConfig(set pluginSet, references map[string]runtimeTreeRefere
 	if set&idePluginSet != 0 {
 		blocks = append(blocks, `  clangd = { cmd = { "clangd", "--background-index", "--clang-tidy" } },
   gopls = { settings = { gopls = { staticcheck = true } } },
-  rust_analyzer = {},
+  rust_analyzer = { cmd = { vim.fn.expand("~/.local/bin/rust-analyzer") } },
   pyright = {
     cmd = { vim.fn.expand("~/.local/share/bun/bin/pyright-langserver"), "--stdio" },
     settings = { python = { analysis = { typeCheckingMode = "standard" } } },

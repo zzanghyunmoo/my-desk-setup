@@ -459,7 +459,6 @@ components:
       lock_key: rust-analyzer
     verification:
       command: [rust-analyzer, --version]
-      functional: [rust-analyzer, --version]
     targets:
       macos-host:
         status: unsupported
