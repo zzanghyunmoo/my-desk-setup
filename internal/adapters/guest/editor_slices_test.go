@@ -38,6 +38,7 @@ func TestSliceConfigurationFullIsExactUnion(t *testing.T) {
 	}
 	for _, token := range []string{
 		"conform.nvim", "nvim-jdtls", "roslyn.nvim", "kotlin_lsp", "spring_boot",
+		"rust_analyzer", `require("configs.symbols").setup()`,
 	} {
 		content := full["lua/plugins/init.lua"] + full["lua/configs/lspconfig.lua"]
 		if !strings.Contains(content, token) {
@@ -1034,6 +1035,7 @@ package.preload["configs.jvm"] = function()
 end
 
 local current_file = vim.env.MDS_TEST_CURRENT_FILE
+vim.bo.swapfile = false
 if current_file and current_file ~= "" then vim.api.nvim_buf_set_name(0, current_file) end
 vim.bo.filetype = assert(vim.env.MDS_TEST_FILETYPE)
 vim.ui.select = function(items, options, callback)

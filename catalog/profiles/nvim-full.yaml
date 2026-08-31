@@ -1,6 +1,6 @@
 schema_version: 1
 id: nvim-full
-description: Reproducible legacy, JVM, and .NET NvChad IDE for a Linux guest.
+description: Reproducible C++, Rust, Go, Python, JVM, and .NET NvChad IDE for a Linux guest.
 selection:
   - nvim-dotnet
   - nvim-ide-tools

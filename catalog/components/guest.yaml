@@ -423,10 +423,10 @@ components:
         package: nvchad-derived
 
   - id: nvim-ide-tools
-    name: C++ Go Python Neovim IDE Tools
+    name: C++ Rust Go Python Neovim IDE Tools
     kind: editor
     provides: [nvim-ide-tools, cxx-lsp, go-lsp, nvim-debugger, nvim-formatter]
-    dependencies: [c-toolchain, go, python, nvchad, pyright]
+    dependencies: [c-toolchain, go, python, rust-analyzer, nvchad, pyright]
     version_policy:
       mode: manager
     verification:
@@ -447,6 +447,34 @@ components:
         status: supported
         installer: apt
         package: clangd clang-format clang-tidy lldb gopls delve python3-debugpy
+
+  - id: rust-analyzer
+    name: Rust Analyzer
+    kind: editor
+    selection_policy: dependency-only
+    provides: [rust-analyzer, rust-lsp]
+    dependencies: [rust]
+    version_policy:
+      mode: pinned
+      lock_key: rust-analyzer
+    verification:
+      command: [rust-analyzer, --version]
+      functional: [rust-analyzer, --version]
+    targets:
+      macos-host:
+        status: unsupported
+        reason: The managed Rust IDE tooling belongs to the Linux guest.
+      windows-host:
+        status: unsupported
+        reason: The managed Rust IDE tooling belongs to the Linux guest.
+      wsl-guest:
+        status: supported
+        installer: vendor
+        package: rust-analyzer
+      lima-guest:
+        status: supported
+        installer: vendor
+        package: rust-analyzer
 
   - id: dotnet-sdk
     name: .NET SDK

@@ -125,7 +125,7 @@ func TestLimaIDECohortIsExactAndComplete(t *testing.T) {
 	for _, id := range []string{
 		"java-debug-server", "java-test-server", "jdt-language-server",
 		"kotlin-debug-adapter", "kotlin-language-server", "netcoredbg",
-		"roslyn-language-server", "spring-tools-language-server",
+		"roslyn-language-server", "rust-analyzer", "spring-tools-language-server",
 	} {
 		component := catalogComponentByID(t, environment, id)
 		if got := component.Targets[catalog.TargetLimaGuest].Package; got != id {
@@ -147,7 +147,7 @@ func TestLimaIDEProfilesComposeExactIndependentSlices(t *testing.T) {
 	}
 	wantLegacy := []string{
 		"base-cli", "bun", "c-toolchain", "go", "mise", "neovim", "nvchad",
-		"nvim-ide-tools", "pyright", "python",
+		"nvim-ide-tools", "pyright", "python", "rust", "rust-analyzer",
 	}
 	for profile, want := range map[string][]string{
 		"nvim-jvm":    wantJVM,
@@ -179,10 +179,44 @@ func TestLimaIDEProfilesComposeExactIndependentSlices(t *testing.T) {
 	for _, internal := range []string{
 		"dotnet-sdk", "jdt-language-server", "java-debug-server", "java-test-server",
 		"kotlin-debug-adapter", "kotlin-language-server", "netcoredbg", "roslyn-language-server",
-		"spring-tools-language-server", "vscode-html-language-server",
+		"rust-analyzer", "spring-tools-language-server", "vscode-html-language-server",
 	} {
 		if candidates[internal] {
 			t.Fatalf("dependency-only cohort member %q leaked into direct candidates", internal)
+		}
+	}
+}
+
+func TestRustAnalyzerArtifactsAreExactForBothGuestArchitectures(t *testing.T) {
+	environment := loadCatalog(t)
+	component := catalogComponentByID(t, environment, "rust-analyzer")
+	if component.SelectionPolicy != catalog.SelectionPolicyDependencyOnly ||
+		!slices.Contains(component.Dependencies, "rust") {
+		t.Fatalf("rust-analyzer component contract = %+v", component)
+	}
+	entry := environment.Lock.Versions["rust-analyzer"]
+	if entry.Version != "0.3.2989" ||
+		entry.Provenance != "https://github.com/rust-lang/rust-analyzer/releases/tag/2026-07-27" {
+		t.Fatalf("rust-analyzer release identity = %+v", entry)
+	}
+	want := map[string]struct {
+		url    string
+		sha256 string
+	}{
+		"linux-arm64": {
+			"https://github.com/rust-lang/rust-analyzer/releases/download/2026-07-27/rust-analyzer-linux-arm64.vsix",
+			"5b766752f0b5b7cd935d012f8a3c1cc562b7be16141dc152d2f0f491787cbeb1",
+		},
+		"linux-amd64": {
+			"https://github.com/rust-lang/rust-analyzer/releases/download/2026-07-27/rust-analyzer-linux-x64.vsix",
+			"d378de9ee2f8a3034bf659e6edcd8695208e530a8fb5d0d4af6d6dbde72a8d3c",
+		},
+	}
+	for platform, expected := range want {
+		artifactValue, exists := entry.Artifacts[platform]
+		if !exists || artifactValue.URL != expected.url || artifactValue.SHA256 != expected.sha256 ||
+			artifactValue.Format != "zip" || artifactValue.Executable != "extension/server/rust-analyzer" {
+			t.Fatalf("rust-analyzer %s artifact = %+v, want %+v", platform, artifactValue, expected)
 		}
 	}
 }
@@ -851,6 +885,7 @@ func TestWorkstationProfilesKeepHostAndGuestResponsibilitiesSeparate(t *testing.
 			profile: "wsl-guest", target: catalog.TargetWSLGuest,
 			want: []string{
 				"go", "c-toolchain", "rust", "xmake", "python", "uv", "neovim", "nvchad", "nvim-ide-tools",
+				"rust-analyzer",
 				"java", "kotlin", "gradle", "nvim-jvm", "dotnet-sdk", "nvim-dotnet",
 				"gh", "docker-engine",
 			},
@@ -860,6 +895,7 @@ func TestWorkstationProfilesKeepHostAndGuestResponsibilitiesSeparate(t *testing.
 			profile: "lima-guest", target: catalog.TargetLimaGuest,
 			want: []string{
 				"go", "c-toolchain", "rust", "xmake", "python", "uv", "neovim", "nvchad", "nvim-ide-tools",
+				"rust-analyzer",
 				"java", "kotlin", "gradle", "nvim-jvm", "dotnet-sdk", "nvim-dotnet",
 				"gh", "docker-engine",
 			},
@@ -935,6 +971,8 @@ func TestNvimIDEProfileResolvesOnlyReviewedGuestToolGraph(t *testing.T) {
 		"nvim-ide-tools": true,
 		"pyright":        true,
 		"python":         true,
+		"rust":           true,
+		"rust-analyzer":  true,
 	}
 	if got := resolvedIDs(resolved); !reflect.DeepEqual(got, want) {
 		t.Fatalf("nvim-ide resolved ids = %v, want exactly %v", got, want)

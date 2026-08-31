@@ -639,6 +639,21 @@ versions:
           executable_paths:
             - tools/net10.0/linux-x64/Microsoft.CodeAnalysis.LanguageServer
             - tools/net10.0/linux-x64/roslyn-language-server
+  rust-analyzer:
+    version: 0.3.2989
+    source: Official rust-analyzer GitHub release
+    provenance: https://github.com/rust-lang/rust-analyzer/releases/tag/2026-07-27
+    artifacts:
+      linux-arm64:
+        url: https://github.com/rust-lang/rust-analyzer/releases/download/2026-07-27/rust-analyzer-linux-arm64.vsix
+        sha256: 5b766752f0b5b7cd935d012f8a3c1cc562b7be16141dc152d2f0f491787cbeb1
+        format: zip
+        executable: extension/server/rust-analyzer
+      linux-amd64:
+        url: https://github.com/rust-lang/rust-analyzer/releases/download/2026-07-27/rust-analyzer-linux-x64.vsix
+        sha256: d378de9ee2f8a3034bf659e6edcd8695208e530a8fb5d0d4af6d6dbde72a8d3c
+        format: zip
+        executable: extension/server/rust-analyzer
   spring-tools-language-server:
     version: 5.2.0.RELEASE
     source: Spring Tools 5.2.0 release VSIX carrier 2.2.0-RC1

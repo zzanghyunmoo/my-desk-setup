@@ -99,22 +99,6 @@ var (
 		"lua/plugins/init.lua":    basePluginSpec,
 	}
 	ideConfiguration = map[string]string{
-		"lua/configs/lspconfig.lua": `require("nvchad.configs.lspconfig").defaults()
-
-local servers = {
-  clangd = { cmd = { "clangd", "--background-index", "--clang-tidy" } },
-  gopls = { settings = { gopls = { staticcheck = true } } },
-  pyright = {
-    cmd = { vim.fn.expand("~/.local/share/bun/bin/pyright-langserver"), "--stdio" },
-    settings = { python = { analysis = { typeCheckingMode = "standard" } } },
-  },
-}
-
-for name, config in pairs(servers) do
-  vim.lsp.config(name, config)
-  vim.lsp.enable(name)
-end
-`,
 		"lua/configs/conform.lua": `return {
   formatters_by_ft = {
     c = { "clang_format" },
@@ -420,6 +404,7 @@ func configurationForPluginSet(set pluginSet) map[string]string {
 	}
 	files["lua/plugins/init.lua"] = renderPluginSpec(set)
 	files["lua/configs/lspconfig.lua"] = renderSliceLSPConfig(set, nil)
+	files["lua/configs/symbols.lua"] = renderSymbolConfig()
 	files["lua/configs/dap.lua"] = ideConfiguration["lua/configs/dap.lua"]
 	if set&idePluginSet != 0 {
 		files["lua/configs/conform.lua"] = ideConfiguration["lua/configs/conform.lua"]
@@ -462,6 +447,7 @@ func renderSliceLSPConfig(set pluginSet, references map[string]runtimeTreeRefere
 	if set&idePluginSet != 0 {
 		blocks = append(blocks, `  clangd = { cmd = { "clangd", "--background-index", "--clang-tidy" } },
   gopls = { settings = { gopls = { staticcheck = true } } },
+  rust_analyzer = {},
   pyright = {
     cmd = { vim.fn.expand("~/.local/share/bun/bin/pyright-langserver"), "--stdio" },
     settings = { python = { analysis = { typeCheckingMode = "standard" } } },
@@ -513,6 +499,7 @@ require("configs.actions").setup()
 		}
 	}
 	return `require("nvchad.configs.lspconfig").defaults()
+require("configs.symbols").setup()
 
 ` + trust + `
 
