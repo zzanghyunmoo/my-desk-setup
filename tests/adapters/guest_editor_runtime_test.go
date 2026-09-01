@@ -453,6 +453,10 @@ func TestExplicitAdoptionBacksUpUserOwnedEditorConfiguration(t *testing.T) {
 	if err != nil || !strings.Contains(string(managed), "pyright") {
 		t.Fatalf("managed LSP config = %q, err = %v", managed, err)
 	}
+	symbols, err := os.ReadFile(filepath.Join(root, "lua", "configs", "symbols.lua"))
+	if err != nil || !strings.Contains(string(symbols), "textDocument/documentSymbol") {
+		t.Fatalf("managed symbol config = %q, err = %v", symbols, err)
+	}
 	assertPinnedIDEPluginGraph(t, home, root)
 
 	lspPath := filepath.Join(root, "lua", "configs", "lspconfig.lua")
@@ -662,6 +666,7 @@ func TestNvChadAloneDoesNotPublishIDEConfiguration(t *testing.T) {
 	materializeManagedPluginPaths(t, home, false)
 	for relativePath := range map[string]bool{
 		"lua/configs/lspconfig.lua": true,
+		"lua/configs/symbols.lua":   true,
 	} {
 		if _, err := os.Stat(filepath.Join(home, ".config", "nvim", filepath.FromSlash(relativePath))); !errors.Is(err, os.ErrNotExist) {
 			t.Fatalf("nvchad-only apply published %s: %v", relativePath, err)

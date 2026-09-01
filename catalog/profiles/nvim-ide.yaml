@@ -1,5 +1,5 @@
 schema_version: 1
 id: nvim-ide
-description: Reproducible C++, Go, and Python NvChad IDE for a Linux guest.
+description: Reproducible C++, Rust, Go, and Python NvChad IDE for a Linux guest.
 selection:
   - nvim-ide-tools

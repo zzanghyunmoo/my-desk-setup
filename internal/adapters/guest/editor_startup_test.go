@@ -104,6 +104,7 @@ func TestJVMPrepareDebugLoadsAJavaSourceBufferBeforeRegisteringDAP(t *testing.T)
 	for path, content := range map[string]string{
 		jvmPath: renderJVMConfig(references),
 		harnessPath: `local source = assert(vim.env.MDS_TEST_SOURCE)
+vim.opt_global.swapfile = false
 local attached
 local notifications = {}
 vim.notify = function(message)
@@ -294,6 +295,7 @@ const headlessManagedStartupHarness = `local project_root = assert(vim.env.MDS_T
 local other_root = assert(vim.env.MDS_TEST_OTHER_ROOT)
 local startup = assert(vim.env.MDS_TEST_STARTUP)
 local tree_calls = 0
+vim.opt.directory = project_root
 
 vim.api.nvim_create_user_command("NvimTreeFocus", function()
   tree_calls = tree_calls + 1
@@ -372,6 +374,7 @@ for extension, expected in pairs({
   cpp = "cpp",
   go = "go",
   py = "python",
+  rs = "rust",
   java = "java",
   cs = "cs",
 }) do

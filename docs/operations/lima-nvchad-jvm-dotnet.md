@@ -25,7 +25,9 @@ LIMA_INSTANCE=mds mds doctor --target lima-guest:mds --profile nvim-full --forma
 - `nvim-dotnet`: .NET SDK 10, Roslyn/Razor LSP, Bun으로 고정된 HTML LSP와
   NetCoreDbg를 설치한다. Razor와 Blazor의 HTML projection은 이름이 `html`인
   이 managed language server로 전달된다.
-- `nvim-full`: 기존 C++·Go·Python IDE와 위 두 profile의 exact union이다.
+- `nvim-full`: C++·Rust·Go·Python IDE와 위 두 profile의 exact union이다. NvimTree가
+  열리면 현재 파일의 LSP 심볼 패널이 트리 아래에 함께 열리며 `<CR>` 또는 `o`로
+  선언 위치로 이동한다. `:MdsSymbolsToggle`과 `:MdsSymbolsRefresh`로 직접 제어할 수 있다.
 
 기존 NvChad 설정을 명시적으로 넘길 때만 reviewed apply에 `--adopt-nvchad`를
 추가한다. 원래 설정은 timestamp가 붙은 backup directory로 보존된다.
