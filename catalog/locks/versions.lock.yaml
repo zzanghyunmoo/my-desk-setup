@@ -640,7 +640,7 @@ versions:
             - tools/net10.0/linux-x64/Microsoft.CodeAnalysis.LanguageServer
             - tools/net10.0/linux-x64/roslyn-language-server
   rust-analyzer:
-    version: 0.3.2989
+    version: 0.3.2989-standalone
     source: Official rust-analyzer GitHub release
     provenance: https://github.com/rust-lang/rust-analyzer/releases/tag/2026-07-27
     artifacts:
