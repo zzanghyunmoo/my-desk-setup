@@ -198,7 +198,7 @@ func TestRustAnalyzerArtifactsAreExactForBothGuestArchitectures(t *testing.T) {
 		t.Fatalf("rust-analyzer repeats its version probe as a functional check: %v", component.Verification.Functional)
 	}
 	entry := environment.Lock.Versions["rust-analyzer"]
-	if entry.Version != "0.3.2989" ||
+	if entry.Version != "0.3.2989-standalone" ||
 		entry.Provenance != "https://github.com/rust-lang/rust-analyzer/releases/tag/2026-07-27" {
 		t.Fatalf("rust-analyzer release identity = %+v", entry)
 	}
