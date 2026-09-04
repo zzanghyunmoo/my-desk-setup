@@ -16,9 +16,10 @@ const (
 )
 
 type Selection struct {
-	Mode       SelectionMode
-	Profile    string
-	Components []string
+	Mode                SelectionMode
+	Profile             string
+	Components          []string
+	allowDependencyOnly bool
 }
 
 func All() Selection {
@@ -55,4 +56,17 @@ func Components(ids []string) (Selection, error) {
 	}
 	sort.Strings(normalized)
 	return Selection{Mode: SelectionComponents, Components: normalized}, nil
+}
+
+// ComponentForUpdate creates the single-component selection used by the
+// reviewed lock update flow. Dependency-only components remain unavailable to
+// normal user selections, but their own pinned artifact must still be
+// replaceable without forcing an unrelated parent component into the update.
+func ComponentForUpdate(id string) (Selection, error) {
+	selection, err := Components([]string{id})
+	if err != nil {
+		return Selection{}, err
+	}
+	selection.allowDependencyOnly = true
+	return selection, nil
 }

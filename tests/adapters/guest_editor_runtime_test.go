@@ -912,8 +912,8 @@ func assertPinnedIDEPluginGraph(t *testing.T, home, root string) {
 	if err := json.Unmarshal(content, &entries); err != nil {
 		t.Fatalf("decode lazy lock: %v", err)
 	}
-	if len(entries) != 33 {
-		t.Fatalf("lazy lock entries = %d, want 33", len(entries))
+	if len(entries) != 35 {
+		t.Fatalf("lazy lock entries = %d, want 35", len(entries))
 	}
 	for name, entry := range entries {
 		decoded, err := hex.DecodeString(entry.Commit)
@@ -985,6 +985,19 @@ func managedEditorCommandResult(
 	command transport.Command,
 ) transport.Result {
 	t.Helper()
+	materializeManagedNeovimLauncher(t, home)
+	if command.Executable == filepath.Join(home, ".local", "bin", "nvim") &&
+		strings.Contains(strings.Join(command.Arguments, " "), `require("nvim-treesitter").install`) {
+		parserRoot := filepath.Join(home, ".local", "share", "mds", "nvim", "treesitter", "parser")
+		if err := os.MkdirAll(parserRoot, 0o700); err != nil {
+			t.Fatalf("materialize managed parser directory: %v", err)
+		}
+		for _, parser := range []string{"c_sharp", "cpp", "go", "java", "python", "rust"} {
+			if err := os.WriteFile(filepath.Join(parserRoot, parser+".so"), []byte("parser"), 0o600); err != nil {
+				t.Fatalf("materialize managed parser %s: %v", parser, err)
+			}
+		}
+	}
 	if command.Executable != "git" || len(command.Arguments) < 3 {
 		return transport.Result{}
 	}
@@ -1049,12 +1062,14 @@ func materializeManagedPluginPaths(t *testing.T, home string, includeIDE bool) {
 		t.Fatalf("managed plugin roots = %v, err = %v", roots, err)
 	}
 	ideOnly := map[string]bool{
+		"async.nvim":            true,
 		"conform.nvim":          true,
 		"nvim-dap":              true,
 		"nvim-dap-ui":           true,
 		"nvim-dap-virtual-text": true,
 		"nvim-lint":             true,
 		"nvim-nio":              true,
+		"refactoring.nvim":      true,
 	}
 	for name := range readPluginLock(t, home) {
 		if ideOnly[name] && !includeIDE {

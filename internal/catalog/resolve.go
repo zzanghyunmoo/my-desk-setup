@@ -51,6 +51,29 @@ func ResolveSelection(
 	return resolveSelection(components, capabilities, selection, target)
 }
 
+// ResolveComponentForUpdate resolves a reviewed, exact component replacement.
+// Unlike normal user selection, this permits a dependency-only component to be
+// the root while preserving the same dependency closure and target checks.
+func ResolveComponentForUpdate(
+	environment Environment,
+	componentID string,
+	target TargetKind,
+) ([]ResolvedComponent, error) {
+	if !knownTarget(target) {
+		return nil, fmt.Errorf("unknown target %q", target)
+	}
+	components, capabilities := index(environment)
+	if _, exists := components[componentID]; !exists {
+		return nil, fmt.Errorf("unknown selection %q", componentID)
+	}
+	return resolveSelection(
+		components,
+		capabilities,
+		[]string{componentID},
+		target,
+	)
+}
+
 // SelectionCandidates returns the stable user-facing root set before a target
 // is observed. Dependencies remain resolvable but are never offered directly.
 func SelectionCandidates(environment Environment) []Component {

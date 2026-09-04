@@ -61,6 +61,16 @@ func (ide IDE) Observe(
 			InstalledVersion: observation.InstalledVersion,
 		}, nil
 	}
+	ready, detail, err = inspectRefactorParsers(ide.Home, set)
+	if err != nil {
+		return adapters.Observation{}, err
+	}
+	if !ready {
+		return adapters.Observation{
+			State: adapters.StateAbsent, Detail: detail,
+			InstalledVersion: observation.InstalledVersion,
+		}, nil
+	}
 	return observation, nil
 }
 
@@ -99,7 +109,10 @@ func (ide IDE) Apply(ctx context.Context, action planning.Action) error {
 	if err := writeActionConfiguration(root, action); err != nil {
 		return err
 	}
-	return preparePluginRuntime(ctx, ide.Home, ide.Port, set)
+	if err := preparePluginRuntime(ctx, ide.Home, ide.Port, set); err != nil {
+		return err
+	}
+	return ensureRefactorParsers(ctx, ide.Home, ide.Port, set)
 }
 
 func (ide IDE) Verify(ctx context.Context, action planning.Action) error {
@@ -121,6 +134,13 @@ func (ide IDE) Verify(ctx context.Context, action planning.Action) error {
 	}
 	if !ready {
 		return fmt.Errorf("managed IDE configuration is not ready: %s", detail)
+	}
+	ready, detail, err = inspectRefactorParsers(ide.Home, set)
+	if err != nil {
+		return err
+	}
+	if !ready {
+		return fmt.Errorf("managed IDE refactor parsers are not ready: %s", detail)
 	}
 	return verifyManagedNeovim(ctx, ide.Home, ide.Port, set)
 }

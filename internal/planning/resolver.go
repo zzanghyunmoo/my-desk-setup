@@ -25,7 +25,24 @@ func Build(
 	case SelectionProfile:
 		resolved, err = catalog.ResolveProfile(environment, selection.Profile, targetKind)
 	case SelectionComponents:
-		resolved, err = catalog.ResolveSelection(environment, selection.Components, targetKind)
+		if selection.allowDependencyOnly {
+			if len(selection.Components) != 1 {
+				return Plan{}, fmt.Errorf(
+					"update selection requires exactly one component",
+				)
+			}
+			resolved, err = catalog.ResolveComponentForUpdate(
+				environment,
+				selection.Components[0],
+				targetKind,
+			)
+		} else {
+			resolved, err = catalog.ResolveSelection(
+				environment,
+				selection.Components,
+				targetKind,
+			)
+		}
 	default:
 		return Plan{}, fmt.Errorf("invalid selection mode %q", selection.Mode)
 	}

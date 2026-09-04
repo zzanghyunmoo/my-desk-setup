@@ -103,7 +103,7 @@ func build(
 		return Plan{}, catalog.Environment{}, fmt.Errorf("after catalog revision: %w", err)
 	}
 	facts.CatalogRevision = afterRevision
-	selection, err := planning.Components([]string{candidate.ComponentID})
+	selection, err := planning.ComponentForUpdate(candidate.ComponentID)
 	if err != nil {
 		return Plan{}, catalog.Environment{}, err
 	}
@@ -176,7 +176,7 @@ func buildCompatibilityMatrix(
 	cliRevision,
 	catalogRevision string,
 ) ([]MatrixEntry, error) {
-	selection, err := planning.Components([]string{component.ID})
+	selection, err := planning.ComponentForUpdate(component.ID)
 	if err != nil {
 		return nil, err
 	}
