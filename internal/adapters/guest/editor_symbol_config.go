@@ -219,14 +219,137 @@ local function merge_symbols(target, index, symbols, source_uri, encoding)
         name = name,
         kind = kind,
         location = location,
+        scope_range = symbol.range or (location and location.range),
         encoding = encoding,
         children = {},
         child_index = {},
       }
       index[key] = node
       table.insert(target, node)
+    elseif not node.scope_range then
+      node.scope_range = symbol.range or (location and location.range)
     end
     merge_symbols(node.children, node.child_index, symbol.children, source_uri, encoding)
+  end
+end
+
+local cpp_local_parent_kinds = {
+  constructor = true,
+  ["function"] = true,
+  method = true,
+}
+
+local cpp_function_node_types = {
+  function_definition = true,
+  lambda_expression = true,
+}
+
+local cpp_identifier_node_types = {
+  field_identifier = true,
+  identifier = true,
+}
+
+local function node_has_type(node, expected)
+  if node:type() == expected then return true end
+  for child in node:iter_children() do
+    if node_has_type(child, expected) then return true end
+  end
+  return false
+end
+
+local function cpp_local_declaration(node)
+  local parent = node:parent()
+  while parent do
+    if cpp_function_node_types[parent:type()] then return true end
+    parent = parent:parent()
+  end
+  return false
+end
+
+local function declarator_identifiers(node, result)
+  result = result or {}
+  if cpp_identifier_node_types[node:type()] then
+    table.insert(result, node)
+    return result
+  end
+  for child in node:iter_children() do declarator_identifiers(child, result) end
+  return result
+end
+
+local function collect_cpp_local_symbols(bufnr)
+  if vim.bo[bufnr].filetype ~= "cpp" then return {} end
+  local ok, parser = pcall(vim.treesitter.get_parser, bufnr, "cpp", { error = false })
+  if not ok or not parser then return {} end
+  local parsed, trees = pcall(function() return parser:parse() end)
+  if not parsed then return {} end
+
+  local symbols = {}
+  local seen = {}
+  local function visit(node)
+    if node:type() == "declaration" and cpp_local_declaration(node) then
+      for _, declarator in ipairs(node:field "declarator" or {}) do
+        if not node_has_type(declarator, "function_declarator") then
+          for _, identifier in ipairs(declarator_identifiers(declarator)) do
+            local start_row, start_col, end_row, end_col = identifier:range()
+            local text_ok, name = pcall(vim.treesitter.get_node_text, identifier, bufnr)
+            local key = table.concat({ start_row, start_col, end_row, end_col }, ":")
+            if text_ok and name ~= "" and not seen[key] then
+              seen[key] = true
+              table.insert(symbols, {
+                name = name,
+                kind = 13,
+                range = {
+                  start = { line = start_row, character = start_col },
+                  ["end"] = { line = end_row, character = end_col },
+                },
+              })
+            end
+          end
+        end
+      end
+    end
+    for child in node:iter_children() do visit(child) end
+  end
+  local traversed = pcall(function()
+    for _, tree in ipairs(trees or {}) do visit(tree:root()) end
+  end)
+  if not traversed then return {} end
+  table.sort(symbols, function(left, right)
+    if left.range.start.line ~= right.range.start.line then
+      return left.range.start.line < right.range.start.line
+    end
+    return left.range.start.character < right.range.start.character
+  end)
+  return symbols
+end
+
+local function position_in_range(position, range)
+  if not range or not range.start or not range["end"] then return false end
+  local after_start = position.line > range.start.line or
+    (position.line == range.start.line and position.character >= range.start.character)
+  local before_end = position.line < range["end"].line or
+    (position.line == range["end"].line and position.character <= range["end"].character)
+  return after_start and before_end
+end
+
+local function enclosing_local_parent(nodes, position)
+  for _, node in ipairs(nodes) do
+    local child = enclosing_local_parent(node.children, position)
+    if child then return child end
+    if cpp_local_parent_kinds[node.kind] and position_in_range(position, node.scope_range) then
+      return node
+    end
+  end
+end
+
+local function merge_cpp_local_symbols(roots, root_index, bufnr, source_uri)
+  for _, symbol in ipairs(collect_cpp_local_symbols(bufnr)) do
+    local parent = enclosing_local_parent(roots, symbol.range.start)
+    if parent then
+      merge_symbols(parent.children, parent.child_index, { symbol }, source_uri, "utf-8")
+    else
+      merge_symbols(roots, root_index, { symbol }, source_uri, "utf-8")
+    end
   end
 end
 
@@ -282,6 +405,15 @@ function M.refresh()
 
   local clients = vim.lsp.get_clients { bufnr = state.source_buf, method = method }
   if #clients == 0 then
+    local roots = {}
+    merge_cpp_local_symbols(roots, {}, state.source_buf, vim.uri_from_bufnr(state.source_buf))
+    if #roots > 0 then
+      local lines = {}
+      local entries = {}
+      flatten_symbols(roots, 0, lines, entries)
+      render(lines, entries)
+      return
+    end
     placeholder "No LSP document symbols"
     return
   end
@@ -322,6 +454,7 @@ function M.refresh()
         )
       end
     end
+    merge_cpp_local_symbols(roots, root_index, source_buf, source_uri)
     local lines = {}
     local entries = {}
     flatten_symbols(roots, 0, lines, entries)
