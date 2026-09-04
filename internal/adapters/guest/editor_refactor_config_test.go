@@ -217,5 +217,41 @@ assert(vim.wait(500, function()
   })
 end), "Rust macro string Extract Variable failed: " .. vim.inspect(vim.api.nvim_buf_get_lines(0, 0, -1, false)))
 
+vim.cmd "enew!"
+vim.bo.filetype = "cpp"
+vim.api.nvim_buf_set_lines(0, 0, -1, false, {
+  "#include <iostream>",
+  "",
+  "int main(int argc, char **argv) {",
+  "  std::cout << \"hello world!\" << std::endl;",
+  "  return 0;",
+  "}",
+})
+local cpp_literal = {
+  type = function() return "string_literal" end,
+  range = function() return 3, 15, 3, 29 end,
+  parent = function() return nil end,
+}
+vim.treesitter.get_node = function()
+  return {
+    type = function() return "string_content" end,
+    parent = function() return cpp_literal end,
+  }
+end
+vim.ui.input = function(_, callback) callback "msg" end
+vim.api.nvim_win_set_cursor(0, { 4, 0 })
+vim.fn.feedkeys(vim.keycode('f"lvi"<leader>rv'), "mx")
+assert(vim.wait(500, function()
+  return vim.deep_equal(vim.api.nvim_buf_get_lines(0, 0, -1, false), {
+    "#include <iostream>",
+    "",
+    "int main(int argc, char **argv) {",
+    "  const auto msg = \"hello world!\";",
+    "  std::cout << msg << std::endl;",
+    "  return 0;",
+    "}",
+  })
+end), "C++ string Extract Variable failed: " .. vim.inspect(vim.api.nvim_buf_get_lines(0, 0, -1, false)))
+
 vim.cmd "qa!"
 `

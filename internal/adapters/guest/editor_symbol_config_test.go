@@ -36,6 +36,9 @@ func TestSymbolPanelUsesDocumentSymbolsAndDeclarationKinds(t *testing.T) {
 		"textDocument/documentSymbol",
 		"vim.lsp.buf_request_all",
 		"vim.lsp.util.show_document",
+		"vim.treesitter.get_parser",
+		"collect_cpp_local_symbols",
+		"function_definition",
 		`[5] = "class"`,
 		`[6] = "method"`,
 		`[7] = "property"`,
@@ -107,6 +110,42 @@ local active_source_buf = source_buf
 local clients = {}
 local callbacks = {}
 local cancelled = 0
+local cpp_locals_enabled = true
+local function fake_node(node_type, range, children, fields)
+  local node = {}
+  node.type = function() return node_type end
+  node.range = function() return unpack(range) end
+  node.parent = function() return node._parent end
+  node.field = function(_, name) return (fields and fields[name]) or {} end
+  node.iter_children = function()
+    local index = 0
+    return function()
+      index = index + 1
+      return children and children[index] or nil
+    end
+  end
+  for _, child in ipairs(children or {}) do child._parent = node end
+  return node
+end
+local local_identifier = fake_node("identifier", { 11, 8, 11, 11 })
+local local_declarator = fake_node("init_declarator", { 11, 2, 11, 20 }, { local_identifier })
+local local_declaration = fake_node(
+  "declaration",
+  { 11, 2, 11, 21 },
+  { local_declarator },
+  { declarator = { local_declarator } }
+)
+local local_function = fake_node("function_definition", { 10, 0, 12, 1 }, { local_declaration })
+local local_root = fake_node("translation_unit", { 0, 0, 15, 0 }, { local_function })
+vim.treesitter.get_parser = function(bufnr, language, options)
+  if not cpp_locals_enabled then return nil end
+  assert(bufnr == source_buf and language == "cpp" and options.error == false)
+  return { parse = function() return { { root = function() return local_root end } } end }
+end
+vim.treesitter.get_node_text = function(node, bufnr)
+  assert(node == local_identifier and bufnr == source_buf)
+  return "msg"
+end
 vim.lsp.get_clients = function(options)
   if not options then return {} end
   assert(options.bufnr == active_source_buf, vim.inspect({ requested = options.bufnr, active = active_source_buf }))
@@ -142,11 +181,16 @@ assert(vim.wait(500, function()
   return automatically_opened_buf ~= nil
 end), "FileType did not open the symbol panel")
 local automatic_lines = vim.api.nvim_buf_get_lines(automatically_opened_buf, 0, -1, false)
+assert(automatic_lines[2] == "[variable] msg", vim.inspect(automatic_lines))
+cpp_locals_enabled = false
+symbols.refresh()
+automatic_lines = vim.api.nvim_buf_get_lines(automatically_opened_buf, 0, -1, false)
 assert(automatic_lines[2] == "[No LSP document symbols]", vim.inspect(automatic_lines))
 clients = {
   { id = 7, offset_encoding = "utf-16" },
   { id = 8, offset_encoding = "utf-8" },
 }
+cpp_locals_enabled = true
 vim.api.nvim_exec_autocmds("LspAttach", { buffer = source_buf, data = { client_id = 7 } })
 assert(vim.wait(500, function() return #callbacks == 1 end), "LspAttach did not refresh the symbol panel")
 vim.api.nvim_list_uis = original_list_uis
@@ -217,8 +261,9 @@ assert(lines[2] == "[class] Widget", vim.inspect(lines))
 assert(lines[3] == "  [field] value", vim.inspect(lines))
 assert(lines[4] == "  [property] label", vim.inspect(lines))
 assert(lines[5] == "[function] run", vim.inspect(lines))
-assert(lines[6] == "[variable] count", vim.inspect(lines))
-assert(lines[7] == "[function] external", vim.inspect(lines))
+assert(lines[6] == "  [variable] msg", vim.inspect(lines))
+assert(lines[7] == "[variable] count", vim.inspect(lines))
+assert(lines[8] == "[function] external", vim.inspect(lines))
 
 vim.api.nvim_set_current_win(panel_win)
 vim.api.nvim_win_set_cursor(panel_win, { 5, 0 })
@@ -230,12 +275,20 @@ assert(shown.location.uri == vim.uri_from_bufnr(source_buf))
 assert(shown.location.range.start.line == 10)
 
 vim.api.nvim_set_current_win(panel_win)
-vim.api.nvim_win_set_cursor(panel_win, { 7, 0 })
+vim.api.nvim_win_set_cursor(panel_win, { 6, 0 })
+symbols.jump()
+assert(shown.encoding == "utf-8", vim.inspect(shown))
+assert(shown.location.uri == vim.uri_from_bufnr(source_buf))
+assert(shown.location.range.start.line == 11)
+
+vim.api.nvim_set_current_win(panel_win)
+vim.api.nvim_win_set_cursor(panel_win, { 8, 0 })
 symbols.jump()
 assert(shown.encoding == "utf-8", vim.inspect(shown))
 assert(shown.location.uri == "file:///tmp/external.cpp")
 assert(shown.location.range.start.line == 30)
 
+cpp_locals_enabled = false
 symbols.refresh()
 assert(#callbacks == 2, #callbacks)
 local cancelled_before_refresh = cancelled

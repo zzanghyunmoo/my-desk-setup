@@ -67,7 +67,7 @@ func renderRefactorConfig() string {
 	return `local M = {}
 
 local routes = {
-  cpp = { variable = "plugin-variable", method = "plugin-function", ["function"] = "plugin-function", class = "lsp" },
+  cpp = { variable = "cpp-variable", method = "plugin-function", ["function"] = "plugin-function", class = "lsp" },
   rust = { variable = "rust-variable", ["function"] = "lsp" },
   python = { variable = "plugin-variable", method = "plugin-function", ["function"] = "plugin-function", class = "lsp" },
   go = { variable = "lsp", method = "lsp", ["function"] = "lsp" },
@@ -131,6 +131,31 @@ local rust_literal_types = {
   byte_literal = true,
 }
 
+local cpp_literal_types = {
+  string_literal = true,
+  raw_string_literal = true,
+  char_literal = true,
+}
+
+local cpp_keywords = {}
+for _, keyword in ipairs {
+  "alignas", "alignof", "and", "and_eq", "asm", "atomic_cancel", "atomic_commit",
+  "atomic_noexcept", "auto", "bitand", "bitor", "bool", "break", "case", "catch",
+  "char", "char8_t", "char16_t", "char32_t", "class", "compl", "concept", "const",
+  "consteval", "constexpr", "constinit", "const_cast", "continue", "co_await", "co_return",
+  "co_yield", "decltype", "default", "delete", "do", "double", "dynamic_cast", "else",
+  "enum", "explicit", "export", "extern", "false", "float", "for", "friend", "goto",
+  "if", "inline", "int", "long", "mutable", "namespace", "new", "noexcept", "not",
+  "not_eq", "nullptr", "operator", "or", "or_eq", "private", "protected", "public",
+  "reflexpr", "register", "reinterpret_cast", "requires", "return", "short", "signed",
+  "sizeof", "static", "static_assert", "static_cast", "struct", "switch", "synchronized",
+  "template", "this", "thread_local", "throw", "true", "try", "typedef", "typeid",
+  "typename", "union", "unsigned", "using", "virtual", "void", "volatile", "wchar_t",
+  "while", "xor", "xor_eq",
+} do
+  cpp_keywords[keyword] = true
+end
+
 local rust_format_macros = {
   print = true,
   println = true,
@@ -143,7 +168,7 @@ local function position_before_or_equal(left_row, left_col, right_row, right_col
   return left_row < right_row or (left_row == right_row and left_col <= right_col)
 end
 
-local function expand_rust_literal(bufnr, start_row, start_col, end_row, end_col)
+local function expand_literal(bufnr, start_row, start_col, end_row, end_col, literal_types)
   pcall(function() vim.treesitter.get_parser(bufnr):parse() end)
   local ok, node = pcall(vim.treesitter.get_node, {
     bufnr = bufnr,
@@ -151,7 +176,7 @@ local function expand_rust_literal(bufnr, start_row, start_col, end_row, end_col
   })
   if not ok then return start_row, start_col, end_row, end_col end
   while node do
-    if rust_literal_types[node:type()] then
+    if literal_types[node:type()] then
       local node_start_row, node_start_col, node_end_row, node_end_col = node:range()
       if position_before_or_equal(node_start_row, node_start_col, start_row, start_col)
         and position_before_or_equal(end_row, end_col, node_end_row, node_end_col)
@@ -162,6 +187,76 @@ local function expand_rust_literal(bufnr, start_row, start_col, end_row, end_col
     node = node:parent()
   end
   return start_row, start_col, end_row, end_col
+end
+
+local function expand_rust_literal(bufnr, start_row, start_col, end_row, end_col)
+  return expand_literal(bufnr, start_row, start_col, end_row, end_col, rust_literal_types)
+end
+
+local function expand_cpp_literal(bufnr, start_row, start_col, end_row, end_col)
+  return expand_literal(bufnr, start_row, start_col, end_row, end_col, cpp_literal_types)
+end
+
+local function cpp_extract_variable()
+  local mode = vim.fn.mode()
+  if mode ~= "v" then
+    notify("C++ Extract Variable은 문자 단위 Visual 선택에서 사용해야 합니다", vim.log.levels.WARN)
+    return "<Ignore>"
+  end
+
+  local positions = vim.fn.getregionpos(vim.fn.getpos "v", vim.fn.getpos ".", { type = mode })
+  if #positions == 0 then
+    notify("추출할 C++ 표현식을 선택하지 못했습니다", vim.log.levels.WARN)
+    return "<Ignore>"
+  end
+  local first = positions[1][1]
+  local last = positions[#positions][2]
+  local start_row, start_col = first[2] - 1, first[3] - 1
+  local end_row, end_col = last[2] - 1, last[3]
+  local bufnr = vim.api.nvim_get_current_buf()
+  start_row, start_col, end_row, end_col = expand_cpp_literal(
+    bufnr,
+    start_row,
+    start_col,
+    end_row,
+    end_col
+  )
+  local changedtick = vim.api.nvim_buf_get_changedtick(bufnr)
+  local selected = vim.api.nvim_buf_get_text(bufnr, start_row, start_col, end_row, end_col, {})
+  local expression = vim.trim(table.concat(selected, "\n"))
+  if expression == "" then
+    notify("추출할 C++ 표현식이 비어 있습니다", vim.log.levels.WARN)
+    return "<Ignore>"
+  end
+
+  vim.schedule(function()
+    vim.ui.input({ prompt = "Variable name: ", default = "value" }, function(name)
+      if name == nil then return end
+      name = vim.trim(name)
+      if not name:match "^[_%a][_%w]*$" or cpp_keywords[name] then
+        notify("올바른 C++ 변수 이름을 입력하세요", vim.log.levels.ERROR)
+        return
+      end
+      if not vim.api.nvim_buf_is_valid(bufnr) or vim.api.nvim_buf_get_changedtick(bufnr) ~= changedtick then
+        notify("버퍼가 변경되어 C++ Extract Variable을 취소했습니다", vim.log.levels.WARN)
+        return
+      end
+
+      local original = vim.api.nvim_buf_get_lines(bufnr, start_row, end_row + 1, false)
+      local prefix = original[1]:sub(1, start_col)
+      local suffix = original[#original]:sub(end_col + 1)
+      local indent = original[1]:match "^%s*" or ""
+      local declaration = vim.split(
+        indent .. "const auto " .. name .. " = " .. expression .. ";",
+        "\n",
+        { plain = true }
+      )
+      table.insert(declaration, prefix .. name .. suffix)
+      vim.api.nvim_buf_set_lines(bufnr, start_row, end_row + 1, false, declaration)
+      notify("C++ variable extracted")
+    end)
+  end)
+  return "<Ignore>"
 end
 
 local function rust_extract_variable()
@@ -244,6 +339,7 @@ function M.extract(kind)
     return "<Ignore>"
   end
   if route == "lsp" then return lsp_extract(kind) end
+  if route == "cpp-variable" then return cpp_extract_variable() end
   if route == "rust-variable" then return rust_extract_variable() end
   return plugin_extract(route)
 end
