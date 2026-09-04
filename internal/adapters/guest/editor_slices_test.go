@@ -37,7 +37,8 @@ func TestSliceConfigurationFullIsExactUnion(t *testing.T) {
 		t.Fatal("full plugin specification was not rendered by the shared renderer")
 	}
 	for _, token := range []string{
-		"conform.nvim", "nvim-jdtls", "roslyn.nvim", "kotlin_lsp", "spring_boot",
+		"conform.nvim", "nvim-jdtls", "roslyn.nvim", "refactoring.nvim", "async.nvim",
+		"kotlin_lsp", "spring_boot",
 		`rust_analyzer = { cmd = { vim.fn.expand("~/.local/bin/rust-analyzer") } }`,
 		`require("configs.symbols").setup()`,
 	} {
@@ -74,11 +75,15 @@ func TestExpectedPluginPinsAreExactSliceUnion(t *testing.T) {
 	if !reflect.DeepEqual(full, names(idePluginSet|jvmPluginSet|dotnetPluginSet)) {
 		t.Fatal("full plugin pin union is not deterministic")
 	}
-	for set, required := range map[pluginSet]string{
-		jvmPluginSet: "nvim-jdtls", dotnetPluginSet: "roslyn.nvim",
+	for set, required := range map[pluginSet][]string{
+		idePluginSet:    {"async.nvim", "refactoring.nvim"},
+		jvmPluginSet:    {"async.nvim", "nvim-jdtls", "refactoring.nvim"},
+		dotnetPluginSet: {"async.nvim", "refactoring.nvim", "roslyn.nvim"},
 	} {
-		if !containsString(names(set), required) {
-			t.Fatalf("slice %d omits exact plugin %s", set, required)
+		for _, plugin := range required {
+			if !containsString(names(set), plugin) {
+				t.Fatalf("slice %d omits exact plugin %s", set, plugin)
+			}
 		}
 	}
 }

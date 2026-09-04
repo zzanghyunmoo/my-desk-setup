@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -149,6 +150,47 @@ func TestUpdateUsesInjectedTargetPlanBuilderAndRejectsHarnessUpdates(t *testing.
 	if err := updateflow.Verify(unsupported, unsupported.Digest); err == nil ||
 		!strings.Contains(err.Error(), "not supported by generic update") {
 		t.Fatalf("Verify(unsupported resume) error = %v", err)
+	}
+}
+
+func TestUpdateCanReplaceDependencyOnlyComponent(t *testing.T) {
+	environment, err := catalog.LoadFS(catalogdata.FS)
+	if err != nil {
+		t.Fatalf("LoadFS(): %v", err)
+	}
+	current := environment.Lock.Versions["rust-analyzer"]
+	id, _ := target.NewID(target.KindLimaGuest, "mds")
+	facts := target.Facts{
+		ID: id, OS: "linux", OSVersion: "26.04", Architecture: "arm64",
+		SystemdSupported: true, SystemdActive: true, Reachable: true,
+		CLIRevision: "dev",
+	}
+	candidate := updateflow.Candidate{
+		ComponentID: "rust-analyzer",
+		Version:     "0.3.2802-standalone",
+		Source:      current.Source,
+		Provenance:  "https://github.com/rust-lang/rust-analyzer/releases/tag/2026-02-16",
+		Artifacts:   current.Artifacts,
+	}
+
+	plan, _, err := updateflow.Build(environment, facts, candidate)
+	if err != nil {
+		t.Fatalf("Build(dependency-only): %v", err)
+	}
+	if plan.ComponentID != "rust-analyzer" ||
+		!slices.Contains(plan.TargetPlan.Selection, "rust-analyzer") ||
+		!slices.Contains(plan.TargetPlan.Selection, "rust") {
+		t.Fatalf("dependency-only update plan = %+v", plan.TargetPlan.Selection)
+	}
+	if _, err := planning.Build(
+		environment,
+		facts,
+		planning.Selection{
+			Mode:       planning.SelectionComponents,
+			Components: []string{"rust-analyzer"},
+		},
+	); err == nil || !strings.Contains(err.Error(), "dependency-only") {
+		t.Fatalf("normal selection error = %v, want dependency-only rejection", err)
 	}
 }
 

@@ -137,12 +137,12 @@ func TestLimaIDECohortIsExactAndComplete(t *testing.T) {
 func TestLimaIDEProfilesComposeExactIndependentSlices(t *testing.T) {
 	environment := loadCatalog(t)
 	wantJVM := []string{
-		"base-cli", "gradle", "java", "java-debug-server", "java-test-server",
+		"base-cli", "c-toolchain", "gradle", "java", "java-debug-server", "java-test-server",
 		"jdt-language-server", "kotlin", "kotlin-debug-adapter", "kotlin-language-server", "mise", "neovim",
 		"nvchad", "nvim-jvm", "spring-tools-language-server",
 	}
 	wantDotNet := []string{
-		"base-cli", "bun", "dotnet-sdk", "mise", "neovim", "netcoredbg", "nvchad",
+		"base-cli", "bun", "c-toolchain", "dotnet-sdk", "mise", "neovim", "netcoredbg", "nvchad",
 		"nvim-dotnet", "roslyn-language-server", "vscode-html-language-server",
 	}
 	wantLegacy := []string{
@@ -187,6 +187,32 @@ func TestLimaIDEProfilesComposeExactIndependentSlices(t *testing.T) {
 	}
 }
 
+func TestRustToolchainIncludesStandardLibrarySourcesForLanguageAnalysis(t *testing.T) {
+	environment := loadCatalog(t)
+	component := catalogComponentByID(t, environment, "rust")
+	for _, target := range []catalog.TargetKind{catalog.TargetWSLGuest, catalog.TargetLimaGuest} {
+		if got := component.Targets[target].Package; got != "rustc cargo rust-src" {
+			t.Fatalf("rust %s package = %q, want rust-src for semantic language analysis", target, got)
+		}
+	}
+	if !reflect.DeepEqual(component.Verification.Functional, []string{"dpkg-query", "-W", "rust-src"}) {
+		t.Fatalf("rust functional verification = %v, want rust-src package probe", component.Verification.Functional)
+	}
+}
+
+func TestCToolchainIncludesTreeSitterCLIForManagedParserBuilds(t *testing.T) {
+	environment := loadCatalog(t)
+	component := catalogComponentByID(t, environment, "c-toolchain")
+	if !reflect.DeepEqual(component.Verification.Functional, []string{"tree-sitter", "--version"}) {
+		t.Fatalf("c-toolchain functional verification = %v, want tree-sitter CLI", component.Verification.Functional)
+	}
+	for _, target := range []catalog.TargetKind{catalog.TargetWSLGuest, catalog.TargetLimaGuest} {
+		if got := component.Targets[target].Package; got != "build-essential pkg-config tree-sitter-cli" {
+			t.Fatalf("c-toolchain %s package = %q, want Tree-sitter CLI", target, got)
+		}
+	}
+}
+
 func TestRustAnalyzerArtifactsAreExactForBothGuestArchitectures(t *testing.T) {
 	environment := loadCatalog(t)
 	component := catalogComponentByID(t, environment, "rust-analyzer")
@@ -198,8 +224,8 @@ func TestRustAnalyzerArtifactsAreExactForBothGuestArchitectures(t *testing.T) {
 		t.Fatalf("rust-analyzer repeats its version probe as a functional check: %v", component.Verification.Functional)
 	}
 	entry := environment.Lock.Versions["rust-analyzer"]
-	if entry.Version != "0.3.2989-standalone" ||
-		entry.Provenance != "https://github.com/rust-lang/rust-analyzer/releases/tag/2026-07-27" {
+	if entry.Version != "0.3.2803-standalone" ||
+		entry.Provenance != "https://github.com/rust-lang/rust-analyzer/releases/tag/2026-02-23" {
 		t.Fatalf("rust-analyzer release identity = %+v", entry)
 	}
 	want := map[string]struct {
@@ -207,12 +233,12 @@ func TestRustAnalyzerArtifactsAreExactForBothGuestArchitectures(t *testing.T) {
 		sha256 string
 	}{
 		"linux-arm64": {
-			"https://github.com/rust-lang/rust-analyzer/releases/download/2026-07-27/rust-analyzer-linux-arm64.vsix",
-			"5b766752f0b5b7cd935d012f8a3c1cc562b7be16141dc152d2f0f491787cbeb1",
+			"https://github.com/rust-lang/rust-analyzer/releases/download/2026-02-23/rust-analyzer-linux-arm64.vsix",
+			"b20919eaadf58052dcbbfa1cd32d4c142d324b99cb5cbd82ed41576f2456129f",
 		},
 		"linux-amd64": {
-			"https://github.com/rust-lang/rust-analyzer/releases/download/2026-07-27/rust-analyzer-linux-x64.vsix",
-			"d378de9ee2f8a3034bf659e6edcd8695208e530a8fb5d0d4af6d6dbde72a8d3c",
+			"https://github.com/rust-lang/rust-analyzer/releases/download/2026-02-23/rust-analyzer-linux-x64.vsix",
+			"b4f5df0713b1684bc3efd7063d69f2d98705d8292f2e4a91944b082028d68010",
 		},
 	}
 	for platform, expected := range want {

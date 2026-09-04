@@ -46,6 +46,7 @@ type pluginPin struct {
 var pluginPins = []pluginPin{
 	{Name: "LuaSnip", Repository: "https://github.com/L3MON4D3/LuaSnip.git", Branch: "master", Commit: "0abc8f390b278c3b4aabc4c004ac8a088b65cf24"},
 	{Name: "NvChad", Repository: "https://github.com/NvChad/NvChad.git", Branch: "v2.5", Commit: "add44b952d631981614bbb8cfc6f7002f296dfe6"},
+	{Name: "async.nvim", Repository: "https://github.com/lewis6991/async.nvim.git", Branch: "main", Commit: "ca8f5696c45bd4786b8840923d86b6932ce92ded", Set: allIDEPluginSets},
 	{Name: "base46", Repository: "https://github.com/nvchad/base46.git", Branch: "v3.0", Commit: "2ffb8eda35cfb3547d0d7dce30f4f2f0f674c4d7"},
 	{Name: "cmp-async-path", Repository: "https://codeberg.org/FelipeLema/cmp-async-path.git", Branch: "main", Commit: "98185a91d49ff5dd249aebf2f7456e18063fa2a0"},
 	{Name: "cmp-buffer", Repository: "https://github.com/hrsh7th/cmp-buffer.git", Branch: "main", Commit: "b74fab3656eea9de20a9b8116afa3cfc4ec09657"},
@@ -72,6 +73,7 @@ var pluginPins = []pluginPin{
 	{Name: "nvim-treesitter", Repository: "https://github.com/nvim-treesitter/nvim-treesitter.git", Branch: "main", Commit: "7b6cc8949f9999c5ed91436cbe24aa5f99c42025"},
 	{Name: "nvim-web-devicons", Repository: "https://github.com/nvim-tree/nvim-web-devicons.git", Branch: "master", Commit: "2ae6958df7ced50baac5035cec0c15799eedfbf7"},
 	{Name: "plenary.nvim", Repository: "https://github.com/nvim-lua/plenary.nvim.git", Branch: "master", Commit: "74b06c6c75e4eeb3108ec01852001636d85a932b"},
+	{Name: "refactoring.nvim", Repository: "https://github.com/ThePrimeagen/refactoring.nvim.git", Branch: "master", Commit: "64e10d782ae5b9653558482910213b8946651456", Set: allIDEPluginSets},
 	{Name: "roslyn.nvim", Repository: "https://github.com/seblyng/roslyn.nvim.git", Branch: "main", Commit: "de9a98d61ed3fd01b5016eea5fe9e32f1a4c7cfb", Set: dotnetPluginSet},
 	{Name: "telescope.nvim", Repository: "https://github.com/nvim-telescope/telescope.nvim.git", Branch: "master", Commit: "427b576c16792edad01a92b89721d923c19ad60f"},
 	{Name: "ui", Repository: "https://github.com/nvchad/ui.git", Branch: "v3.0", Commit: "f22719026b94d02ce44c66c0059b89d927d942a0"},
@@ -248,6 +250,7 @@ func renderPluginSpec(set pluginSet) string {
 		`  { "mfussenegger/nvim-dap" },`,
 		`  { "rcarriga/nvim-dap-ui", event = "VeryLazy", dependencies = { "mfussenegger/nvim-dap", "nvim-neotest/nvim-nio" }, config = function() require "configs.dap" end },`,
 		`  { "theHamsta/nvim-dap-virtual-text", opts = {} },`,
+		renderRefactorPluginSpec(set),
 	}
 	if set&idePluginSet != 0 {
 		lines = append(lines,
@@ -404,6 +407,7 @@ func configurationForPluginSet(set pluginSet) map[string]string {
 	}
 	files["lua/plugins/init.lua"] = renderPluginSpec(set)
 	files["lua/configs/lspconfig.lua"] = renderSliceLSPConfig(set, nil)
+	files["lua/configs/refactor.lua"] = renderRefactorConfig()
 	files["lua/configs/symbols.lua"] = renderSymbolConfig()
 	files["lua/configs/dap.lua"] = ideConfiguration["lua/configs/dap.lua"]
 	if set&idePluginSet != 0 {
