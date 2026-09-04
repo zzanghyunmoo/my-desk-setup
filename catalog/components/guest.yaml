@@ -244,13 +244,13 @@ components:
   - id: rust
     name: Rust and Cargo
     kind: language
-    provides: [rust, rustc, cargo]
+    provides: [rust, rustc, cargo, rustfmt]
     dependencies: [base-cli]
     version_policy:
       mode: manager
     verification:
       command: [rustc, --version]
-      functional: [dpkg-query, -W, rust-src]
+      functional: [dpkg-query, -W, rust-src, rustfmt]
     targets:
       macos-host:
         status: unsupported
@@ -261,11 +261,11 @@ components:
       wsl-guest:
         status: supported
         installer: apt
-        package: rustc cargo rust-src
+        package: rustc cargo rust-src rustfmt
       lima-guest:
         status: supported
         installer: apt
-        package: rustc cargo rust-src
+        package: rustc cargo rust-src rustfmt
 
   - id: xmake
     name: xmake

@@ -187,16 +187,19 @@ func TestLimaIDEProfilesComposeExactIndependentSlices(t *testing.T) {
 	}
 }
 
-func TestRustToolchainIncludesStandardLibrarySourcesForLanguageAnalysis(t *testing.T) {
+func TestRustToolchainIncludesLanguageAnalysisAndFormattingTools(t *testing.T) {
 	environment := loadCatalog(t)
 	component := catalogComponentByID(t, environment, "rust")
 	for _, target := range []catalog.TargetKind{catalog.TargetWSLGuest, catalog.TargetLimaGuest} {
-		if got := component.Targets[target].Package; got != "rustc cargo rust-src" {
-			t.Fatalf("rust %s package = %q, want rust-src for semantic language analysis", target, got)
+		if got := component.Targets[target].Package; got != "rustc cargo rust-src rustfmt" {
+			t.Fatalf("rust %s package = %q, want rust-src and rustfmt", target, got)
 		}
 	}
-	if !reflect.DeepEqual(component.Verification.Functional, []string{"dpkg-query", "-W", "rust-src"}) {
-		t.Fatalf("rust functional verification = %v, want rust-src package probe", component.Verification.Functional)
+	if !slices.Contains(component.Provides, "rustfmt") {
+		t.Fatalf("rust provides = %v, want rustfmt capability", component.Provides)
+	}
+	if !reflect.DeepEqual(component.Verification.Functional, []string{"dpkg-query", "-W", "rust-src", "rustfmt"}) {
+		t.Fatalf("rust functional verification = %v, want rust-src and rustfmt package probes", component.Verification.Functional)
 	}
 }
 
