@@ -155,12 +155,12 @@ assert(invoke("cs", "variable") == "plugin-variable")
 assert(invoke("cs", "method") == "plugin-function")
 assert(#calls.plugin == 2)
 
-assert(invoke("rust", "variable") == "<Ignore>")
-local variable = calls.lsp[#calls.lsp]
-assert(variable.context.only[1] == "refactor.extract")
-assert(variable.apply == true)
-assert(variable.filter({ kind = "refactor.extract", title = "Extract into variable" }))
-assert(not variable.filter({ kind = "refactor.extract", title = "Extract into function" }))
+assert(invoke("rust", "function") == "<Ignore>")
+local rust_function = calls.lsp[#calls.lsp]
+assert(rust_function.context.only[1] == "refactor.extract")
+assert(rust_function.apply == true)
+assert(rust_function.filter({ kind = "refactor.extract", title = "Extract into function" }))
+assert(not rust_function.filter({ kind = "refactor.extract", title = "Extract into variable" }))
 
 assert(invoke("go", "method") == "<Ignore>")
 local method = calls.lsp[#calls.lsp]
@@ -182,6 +182,40 @@ assert(#calls.lsp == lsp_count)
 assert(vim.wait(500, function() return #calls.notifications == 2 end))
 assert(calls.notifications[1]:find("C#", 1, true), vim.inspect(calls.notifications))
 assert(calls.notifications[2]:find("Rust", 1, true), vim.inspect(calls.notifications))
+
+vim.cmd "enew"
+vim.bo.filetype = "rust"
+vim.api.nvim_buf_set_lines(0, 0, -1, false, {
+  "fn main() {",
+  "    println!(\"Hello, world!\");",
+  "}",
+})
+local literal = {
+  type = function() return "string_literal" end,
+  range = function() return 1, 13, 1, 28 end,
+  parent = function() return nil end,
+}
+vim.treesitter.get_parser = function()
+  return { parse = function() end }
+end
+vim.treesitter.get_node = function()
+  return {
+    type = function() return "string_content" end,
+    parent = function() return literal end,
+  }
+end
+vim.keymap.set("x", "<leader>rv", function() return refactor.extract "variable" end, { expr = true })
+vim.ui.input = function(_, callback) callback "message" end
+vim.api.nvim_win_set_cursor(0, { 2, 0 })
+vim.fn.feedkeys(vim.keycode('f"lvi"<leader>rv'), "mx")
+assert(vim.wait(500, function()
+  return vim.deep_equal(vim.api.nvim_buf_get_lines(0, 0, -1, false), {
+    "fn main() {",
+    "    let message = \"Hello, world!\";",
+    "    println!(\"{}\", message);",
+    "}",
+  })
+end), "Rust macro string Extract Variable failed: " .. vim.inspect(vim.api.nvim_buf_get_lines(0, 0, -1, false)))
 
 vim.cmd "qa!"
 `
