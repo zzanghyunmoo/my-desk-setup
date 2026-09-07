@@ -28,6 +28,7 @@ macOS host                         Windows host
 ├─ GUI applications               ├─ GUI applications
 ├─ WezTerm                        ├─ WezTerm
 ├─ host coding agents             ├─ host coding agents
+├─ Unity/VS Code game tools       ├─ Unity/VS Code game tools
 ├─ Lima lifecycle                 └─ WSL2 lifecycle
 └─ Xcode/iOS manual exception
         │                                  │
@@ -43,7 +44,8 @@ Lima Ubuntu 26.04                 WSL Ubuntu 26.04
 host coding agents는 호스트에서 orchestration을 할 수 있게 남겨 둔다. 실제
 checkout, build, test와 primary editor work의 표준 위치는 Linux guest다.
 Flutter의 주 개발 환경도 guest이며 Xcode, Apple signing과 iOS build는
-macOS host의 수동 예외다.
+macOS host의 수동 예외다. Unity Editor, Unity Hub와 VS Code GUI는 GPU 및 native
+host integration을 위해 macOS/Windows host가 소유하며 WSL/Lima에 설치하지 않는다.
 
 Docker Engine은 guest-local systemd service다. `DOCKER_HOST`가 외부 host
 socket을 가리키면 conflict로 처리한다. Docker Desktop이나 host engine을

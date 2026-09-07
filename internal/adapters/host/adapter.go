@@ -29,7 +29,10 @@ type Options struct {
 	ComSpec               string
 	AppData               string
 	LocalAppData          string
+	ProgramFiles          string
 	PathExt               string
+	CodeExecutable        string
+	UnityExecutable       string
 }
 
 type GuestBootstrapArchiveError struct {
@@ -145,8 +148,22 @@ func NewWithOptions(
 	}
 	for _, componentID := range []string{
 		"notion-desktop", "linear-desktop", "slack", "kakaotalk", "chrome",
+		"visual-studio-code", "unity-hub",
 	} {
 		byID[componentID] = desktop
+	}
+	extension := VSCodeExtension{
+		Platform: platform, Port: port, Executable: options.CodeExecutable,
+		LocalAppData: options.LocalAppData, ProgramFiles: options.ProgramFiles,
+	}
+	for _, componentID := range []string{
+		"vscode-csharp", "vscode-csharp-dev-kit", "vscode-unity",
+	} {
+		byID[componentID] = extension
+	}
+	byID["unity-editor"] = UnityEditor{
+		Platform: platform, Architecture: architecture, Port: port,
+		Executable: options.UnityExecutable,
 	}
 	tempRoot := options.HarnessTempRoot
 	if tempRoot == "" {

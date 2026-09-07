@@ -1,0 +1,11 @@
+schema_version: 1
+id: game-development
+description: Host-owned Unity 6.3 LTS development environment.
+selection:
+  - visual-studio-code
+  - vscode-csharp
+  - vscode-csharp-dev-kit
+  - vscode-unity
+  - unity-hub
+  - unity-cli
+  - unity-editor

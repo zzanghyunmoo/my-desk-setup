@@ -28,11 +28,13 @@ func (desktop Desktop) Observe(
 	}
 	if desktop.Platform == "darwin" {
 		applications := map[string]string{
-			"notion-desktop": "Notion",
-			"linear-desktop": "Linear",
-			"slack":          "Slack",
-			"kakaotalk":      "KakaoTalk",
-			"chrome":         "Google Chrome",
+			"notion-desktop":     "Notion",
+			"linear-desktop":     "Linear",
+			"slack":              "Slack",
+			"kakaotalk":          "KakaoTalk",
+			"chrome":             "Google Chrome",
+			"visual-studio-code": "Visual Studio Code",
+			"unity-hub":          "Unity Hub",
 		}
 		name := applications[action.ComponentID]
 		if name == "" {

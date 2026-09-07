@@ -54,6 +54,7 @@ go build -o ./mds ./cmd/mds
 ```sh
 ./mds plan --all --format json
 ./mds plan --profile owner --format json
+./mds plan --profile game-development --format json
 ./mds plan --component codex --format json
 ./mds plan --interactive
 ```
@@ -133,6 +134,13 @@ certification을 위한 전용 runner는
 - Slack, KakaoTalk, Notion, Linear, Chrome 계정 로그인
 - Docker registry 로그인
 - Xcode license, Apple ID, signing 설정
+- Unity Hub/Editor 로그인과 Unity 라이선스 활성화
+- C# Dev Kit 라이선스 entitlement 확인
+
+`game-development` profile은 macOS/Windows 호스트에 VS Code, 검토된 C#/C# Dev
+Kit/Unity 확장, Unity Hub, Unity CLI와 Unity 6.3 LTS Editor를 준비한다. Editor는
+`6000.3.23f1`/`09d2ecc7fb28`로 고정하며 추가 Build Support 모듈이나 Unity
+프로젝트는 만들지 않는다. WSL/Lima guest는 이 GUI 개발 환경을 지원하지 않는다.
 
 `doctor`와 target evidence는 auth 상태를 조회하거나 credential을 저장하지
 않는다.

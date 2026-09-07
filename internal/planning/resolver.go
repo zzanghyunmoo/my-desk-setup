@@ -131,6 +131,21 @@ func actionFor(
 		)
 	}
 	sort.Strings(action.Dependencies)
+	if component.VersionPolicy.Mode == "pinned" &&
+		(component.ID == "vscode-csharp" ||
+			component.ID == "vscode-csharp-dev-kit" ||
+			component.ID == "vscode-unity" ||
+			component.ID == "unity-editor") {
+		action.Inputs = map[string]string{"install_ref": item.Support.Package}
+	}
+	if component.ID == "unity-editor" &&
+		!supportsUnityEditorTarget(facts.OS, facts.Architecture) {
+		action.Status = ActionActionRequired
+		action.Reason = fmt.Sprintf(
+			"Unity Editor %s is reviewed only for Apple Silicon macOS and x64 Windows",
+			action.Version,
+		)
+	}
 	if component.ID == "lima" || component.ID == "wsl" {
 		if specification, exists := environment.Targets["ubuntu-26.04"]; exists {
 			image := specification.Images[facts.Architecture]
@@ -182,6 +197,11 @@ func actionFor(
 		action.Reason = item.Support.Reason
 	}
 	return action
+}
+
+func supportsUnityEditorTarget(osName, architecture string) bool {
+	return (osName == "darwin" && architecture == "arm64") ||
+		(osName == "windows" && architecture == "amd64")
 }
 
 func resolvedVersion(environment catalog.Environment, component catalog.Component) string {

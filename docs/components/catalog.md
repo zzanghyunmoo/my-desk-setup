@@ -61,6 +61,7 @@ mds catalog --format json
 | --- | --- | --- |
 | terminal GUI | `wezterm` | macOS/Windows host |
 | desktop apps | `notion-desktop`, `linear-desktop`, `slack`, `kakaotalk`, `chrome` | host |
+| Unity game development | `visual-studio-code`, `vscode-csharp`, `vscode-csharp-dev-kit`, `vscode-unity`, `unity-hub`, `unity-cli`, `unity-editor` | macOS/Windows host |
 | guest runtime | `lima`, `wsl` | 각각 macOS/Windows host |
 | iOS 예외 | `xcode` | macOS host, manual |
 | base CLI | `base-cli` | WSL/Lima guest |
@@ -127,6 +128,9 @@ NvChad-derived Neovim config와 managed agent launcher는 ownership marker가
 ## Profile
 
 `owner`는 전체 개인 환경 의도를, `minimal`은 작은 개발 core를 표현한다.
+`game-development`는 manager-owned VS Code/Unity Hub/Unity CLI와 exact VS Code
+extension 및 Unity Editor identity를 조합한다. Unity 로그인, 라이선스 활성화,
+Build Support module과 project 생성은 사용자 소유이며 doctor의 성공 조건이 아니다.
 profile은 target별 imperative script가 아니라 component ID 집합이다. profile
 변경은 resolver 입력만 바꾸며 component adapter 구현을 복제하지 않는다.
 
