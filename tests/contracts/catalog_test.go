@@ -1199,6 +1199,90 @@ func TestCertificationProfilesPreserveAllAndOwnerXcodeTruthfulness(t *testing.T)
 	}
 }
 
+func TestGameDevelopmentProfilePinsHostToolsAndKeepsGuestsUnsupported(t *testing.T) {
+	environment := loadCatalog(t)
+	profile, err := planning.Profile("game-development")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, facts := range []target.Facts{
+		certificationFacts(t, target.KindMacOSHost, "local", "darwin", "arm64"),
+		certificationFacts(t, target.KindWindowsHost, "local", "windows", "amd64"),
+	} {
+		first, err := planning.Build(environment, facts, profile)
+		if err != nil {
+			t.Fatal(err)
+		}
+		second, err := planning.Build(environment, facts, profile)
+		if err != nil || first.Digest != second.Digest {
+			t.Fatalf("nondeterministic game-development plan: %v %s %s", err, first.Digest, second.Digest)
+		}
+		if len(first.Actions) != 7 || len(first.Blockers) != 0 {
+			t.Fatalf("host game-development plan = %+v", first)
+		}
+		for _, action := range first.Actions {
+			switch action.ComponentID {
+			case "vscode-csharp":
+				if action.Version != "2.151.28" || action.Inputs["install_ref"] != "ms-dotnettools.csharp" {
+					t.Fatalf("C# action = %+v", action)
+				}
+			case "vscode-csharp-dev-kit":
+				if action.Version != "3.32.194" || action.Inputs["install_ref"] != "ms-dotnettools.csdevkit" {
+					t.Fatalf("Dev Kit action = %+v", action)
+				}
+			case "vscode-unity":
+				if action.Version != "1.3.1" || action.Inputs["install_ref"] != "visualstudiotoolsforunity.vstuc" {
+					t.Fatalf("Unity extension action = %+v", action)
+				}
+			case "unity-editor":
+				if action.Version != "6000.3.23f1" || action.Inputs["install_ref"] != "09d2ecc7fb28" {
+					t.Fatalf("Editor action = %+v", action)
+				}
+			}
+		}
+	}
+	unreviewedTarget := certificationFacts(
+		t,
+		target.KindMacOSHost,
+		"local",
+		"darwin",
+		"amd64",
+	)
+	unreviewedPlan, err := planning.Build(environment, unreviewedTarget, profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	foundUnreviewedEditor := false
+	for _, action := range unreviewedPlan.Actions {
+		if action.ComponentID != "unity-editor" {
+			continue
+		}
+		foundUnreviewedEditor = true
+		if action.Status != planning.ActionActionRequired {
+			t.Fatalf("unreviewed Unity Editor target action = %+v", action)
+		}
+	}
+	if !foundUnreviewedEditor {
+		t.Fatal("unreviewed target plan has no Unity Editor action")
+	}
+
+	for _, kind := range []target.Kind{target.KindWSLGuest, target.KindLimaGuest} {
+		facts := certificationFacts(t, kind, "guest", "linux", "amd64")
+		plan, err := planning.Build(environment, facts, profile)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(plan.Blockers) != 7 {
+			t.Fatalf("guest blockers = %d, want 7", len(plan.Blockers))
+		}
+		for _, action := range plan.Actions {
+			if action.Status != planning.ActionUnsupported {
+				t.Fatalf("guest action = %+v", action)
+			}
+		}
+	}
+}
+
 func TestCertificationProfilesCoverEveryAutomatableComponent(t *testing.T) {
 	environment := loadCatalog(t)
 	for _, test := range []struct {

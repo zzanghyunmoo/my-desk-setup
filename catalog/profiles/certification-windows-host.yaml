@@ -13,3 +13,10 @@ selection:
   - slack
   - wezterm
   - wsl
+  - visual-studio-code
+  - vscode-csharp
+  - vscode-csharp-dev-kit
+  - vscode-unity
+  - unity-hub
+  - unity-cli
+  - unity-editor

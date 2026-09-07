@@ -147,3 +147,96 @@ components:
       lima-guest:
         status: unsupported
         reason: Guest all excludes desktop applications.
+
+  - id: visual-studio-code
+    name: Visual Studio Code
+    kind: editor
+    provides: [visual-studio-code, host-code-editor]
+    dependencies: []
+    version_policy:
+      mode: manager
+    verification:
+      command: [code, --version]
+    targets:
+      macos-host: {status: supported, installer: brew, package: visual-studio-code}
+      windows-host: {status: supported, installer: winget, package: Microsoft.VisualStudioCode}
+      wsl-guest: {status: unsupported, reason: Visual Studio Code GUI belongs to the Windows host.}
+      lima-guest: {status: unsupported, reason: Visual Studio Code GUI belongs to the macOS host.}
+
+  - id: vscode-csharp
+    name: Visual Studio Code C# extension
+    kind: editor
+    provides: [vscode-csharp]
+    dependencies: [visual-studio-code]
+    version_policy: {mode: pinned, lock_key: vscode-csharp}
+    verification: {command: [code, --list-extensions, --show-versions]}
+    targets:
+      macos-host: {status: supported, installer: script, package: ms-dotnettools.csharp}
+      windows-host: {status: supported, installer: script, package: ms-dotnettools.csharp}
+      wsl-guest: {status: unsupported, reason: VS Code host extensions belong to the Windows host.}
+      lima-guest: {status: unsupported, reason: VS Code host extensions belong to the macOS host.}
+
+  - id: vscode-csharp-dev-kit
+    name: Visual Studio Code C# Dev Kit extension
+    kind: editor
+    provides: [vscode-csharp-dev-kit]
+    dependencies: [visual-studio-code, vscode-csharp]
+    version_policy: {mode: pinned, lock_key: vscode-csharp-dev-kit}
+    verification: {command: [code, --list-extensions, --show-versions]}
+    targets:
+      macos-host: {status: supported, installer: script, package: ms-dotnettools.csdevkit}
+      windows-host: {status: supported, installer: script, package: ms-dotnettools.csdevkit}
+      wsl-guest: {status: unsupported, reason: VS Code host extensions belong to the Windows host.}
+      lima-guest: {status: unsupported, reason: VS Code host extensions belong to the macOS host.}
+
+  - id: vscode-unity
+    name: Visual Studio Code Unity extension
+    kind: editor
+    provides: [vscode-unity]
+    dependencies: [visual-studio-code, vscode-csharp, vscode-csharp-dev-kit]
+    version_policy: {mode: pinned, lock_key: vscode-unity}
+    verification: {command: [code, --list-extensions, --show-versions]}
+    targets:
+      macos-host: {status: supported, installer: script, package: visualstudiotoolsforunity.vstuc}
+      windows-host: {status: supported, installer: script, package: visualstudiotoolsforunity.vstuc}
+      wsl-guest: {status: unsupported, reason: VS Code host extensions belong to the Windows host.}
+      lima-guest: {status: unsupported, reason: VS Code host extensions belong to the macOS host.}
+
+  - id: unity-hub
+    name: Unity Hub
+    kind: gui
+    provides: [unity-hub]
+    dependencies: []
+    version_policy: {mode: manager}
+    verification: {command: [unity-hub, --version]}
+    targets:
+      macos-host: {status: supported, installer: brew, package: unity-hub}
+      windows-host: {status: supported, installer: winget, package: Unity.UnityHub}
+      wsl-guest: {status: unsupported, reason: Unity Hub GUI belongs to the Windows host.}
+      lima-guest: {status: unsupported, reason: Unity Hub GUI belongs to the macOS host.}
+
+  - id: unity-cli
+    name: Unity CLI
+    kind: cli
+    provides: [unity-cli]
+    dependencies: []
+    version_policy: {mode: manager}
+    verification: {command: [unity, --version]}
+    targets:
+      macos-host: {status: supported, installer: brew, package: unity-cli}
+      windows-host: {status: supported, installer: winget, package: Unity.CLI}
+      wsl-guest: {status: unsupported, reason: Unity Editor management belongs to the Windows host.}
+      lima-guest: {status: unsupported, reason: Unity Editor management belongs to the macOS host.}
+
+  - id: unity-editor
+    name: Unity 6.3 LTS Editor
+    kind: platform
+    provides: [unity-editor]
+    dependencies: [unity-cli, unity-hub]
+    version_policy: {mode: pinned, lock_key: unity-editor}
+    verification: {command: [unity, editors, --installed, --format, json]}
+    targets:
+      macos-host: {status: supported, installer: script, package: 09d2ecc7fb28}
+      windows-host: {status: supported, installer: script, package: 09d2ecc7fb28}
+      wsl-guest: {status: unsupported, reason: Unity Editor GUI belongs to the Windows host.}
+      lima-guest: {status: unsupported, reason: Unity Editor GUI belongs to the macOS host.}

@@ -14,12 +14,15 @@ import (
 )
 
 var homebrewCasks = map[string]bool{
-	"chrome":         true,
-	"kakaotalk":      true,
-	"linear-desktop": true,
-	"notion-desktop": true,
-	"slack":          true,
-	"wezterm":        true,
+	"chrome":             true,
+	"kakaotalk":          true,
+	"linear-desktop":     true,
+	"notion-desktop":     true,
+	"slack":              true,
+	"unity-cli":          true,
+	"unity-hub":          true,
+	"visual-studio-code": true,
+	"wezterm":            true,
 }
 
 // HomebrewPrerequisite converts a missing host package manager into an

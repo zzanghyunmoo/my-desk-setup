@@ -253,6 +253,7 @@ func currentAdapter(
 				ComSpec:      runtimeEnvironment(system, "ComSpec"),
 				AppData:      runtimeEnvironment(system, "APPDATA"),
 				LocalAppData: runtimeEnvironment(system, "LOCALAPPDATA"),
+				ProgramFiles: runtimeEnvironment(system, "ProgramFiles"),
 				PathExt:      runtimeEnvironment(system, "PATHEXT"),
 			},
 		)

@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/zzanghyunmoo/my-desk-setup/internal/adapters"
@@ -14,9 +16,10 @@ import (
 // Desktop uses the native app probe on macOS and exact WinGet inventory on
 // Windows. It never launches an app or authenticates.
 type Desktop struct {
-	Platform string
-	Port     transport.Port
-	Delegate adapters.Component
+	Platform         string
+	Port             transport.Port
+	Delegate         adapters.Component
+	ApplicationsRoot string
 }
 
 func (desktop Desktop) Observe(
@@ -28,11 +31,13 @@ func (desktop Desktop) Observe(
 	}
 	if desktop.Platform == "darwin" {
 		applications := map[string]string{
-			"notion-desktop": "Notion",
-			"linear-desktop": "Linear",
-			"slack":          "Slack",
-			"kakaotalk":      "KakaoTalk",
-			"chrome":         "Google Chrome",
+			"notion-desktop":     "Notion",
+			"linear-desktop":     "Linear",
+			"slack":              "Slack",
+			"kakaotalk":          "KakaoTalk",
+			"chrome":             "Google Chrome",
+			"visual-studio-code": "Visual Studio Code",
+			"unity-hub":          "Unity Hub",
 		}
 		name := applications[action.ComponentID]
 		if name == "" {
@@ -41,11 +46,19 @@ func (desktop Desktop) Observe(
 				action.ComponentID,
 			)
 		}
-		if _, err := desktop.Port.Run(ctx, transport.Command{
+		openResult, openErr := desktop.Port.Run(ctx, transport.Command{
 			Executable: "open",
 			Arguments:  []string{"-Ra", name},
-		}); err != nil {
-			return adapters.Observation{State: adapters.StateAbsent}, nil
+		})
+		if openErr != nil || openResult.ExitCode != 0 {
+			applicationsRoot := desktop.ApplicationsRoot
+			if applicationsRoot == "" {
+				applicationsRoot = "/Applications"
+			}
+			info, statErr := os.Stat(filepath.Join(applicationsRoot, name+".app"))
+			if statErr != nil || !info.IsDir() {
+				return adapters.Observation{State: adapters.StateAbsent}, nil
+			}
 		}
 		return adapters.Observation{
 			State: adapters.StateReady, InstalledVersion: "manager-owned",

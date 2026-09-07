@@ -16,3 +16,10 @@ selection:
   - linear-desktop
   - wsl
   - gh
+  - visual-studio-code
+  - vscode-csharp
+  - vscode-csharp-dev-kit
+  - vscode-unity
+  - unity-hub
+  - unity-cli
+  - unity-editor
