@@ -29,8 +29,6 @@ type unityCLIEnvelope struct {
 
 type unityEditorInfo struct {
 	Version      string `json:"version"`
-	Changeset    string `json:"changeset"`
-	Revision     string `json:"revision"`
 	Architecture string `json:"architecture"`
 }
 
@@ -66,13 +64,10 @@ func (editor UnityEditor) Observe(ctx context.Context, action planning.Action) (
 		if installed.Version != action.Version {
 			continue
 		}
-		changeset := installed.Changeset
-		if changeset == "" {
-			changeset = installed.Revision
-		}
-		if changeset != wantedChangeset {
-			return adapters.Observation{State: adapters.StateConflict, InstalledVersion: installed.Version, Detail: "installed Unity Editor changeset differs from reviewed changeset"}, nil
-		}
+		// Unity CLI beta.8 does not expose the changeset in installed-editor
+		// inventory. The reviewed changeset remains a required, digest-bound
+		// install input; the installed release is identified by its unique
+		// version and architecture, then structurally checked by Verify.
 		if !matchesUnityArchitecture(reviewedArchitecture, installed.Architecture) {
 			return adapters.Observation{State: adapters.StateConflict, InstalledVersion: installed.Version, Detail: "installed Unity Editor architecture differs from reviewed target"}, nil
 		}

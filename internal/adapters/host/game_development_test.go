@@ -121,7 +121,7 @@ func TestUnityEditorReadyAndVerifyUseReadOnlyCLI(t *testing.T) {
 	port := &gamePort{run: func(command transport.Command) (transport.Result, error) {
 		calls++
 		if calls == 1 {
-			return transport.Result{Stdout: `{"success":true,"data":[{"version":"6000.3.23f1","changeset":"09d2ecc7fb28","architecture":"arm64"}]}`}, nil
+			return transport.Result{Stdout: `{"success":true,"command":"editors","data":[{"version":"6000.3.23f1","alias":"6.3.23f1","architecture":"arm64","location":"/Applications/Unity/Hub/Editor/6000.3.23f1/Unity.app","modules":"","default":false}],"errors":[],"warnings":[]}`}, nil
 		}
 		return transport.Result{Stdout: `{"success":true,"data":[]}`}, nil
 	}}
@@ -136,6 +136,26 @@ func TestUnityEditorReadyAndVerifyUseReadOnlyCLI(t *testing.T) {
 	}
 	if !reflect.DeepEqual(port.commands[1].Arguments, want) {
 		t.Fatalf("verify args = %v", port.commands[1].Arguments)
+	}
+}
+
+func TestMacDesktopFallsBackToInstalledBundleBeforeLaunchServicesRefresh(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, "Unity Hub.app"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	port := &gamePort{run: func(transport.Command) (transport.Result, error) {
+		return transport.Result{}, errors.New("LaunchServices has not registered the app yet")
+	}}
+	desktop := Desktop{
+		Platform: "darwin", Port: port,
+		Delegate: VSCodeExtension{Port: port}, ApplicationsRoot: root,
+	}
+	observation, err := desktop.Observe(context.Background(), planning.Action{
+		ComponentID: "unity-hub", Package: "unity-hub",
+	})
+	if err != nil || observation.State != adapters.StateReady {
+		t.Fatalf("observation=%+v err=%v", observation, err)
 	}
 }
 
@@ -186,8 +206,8 @@ func TestHostRouterUsesGameDevelopmentAdapters(t *testing.T) {
 
 func TestUnityEditorMismatchAndCommandFailureAreNotReady(t *testing.T) {
 	for name, runner := range map[string]func(transport.Command) (transport.Result, error){
-		"changeset-mismatch": func(transport.Command) (transport.Result, error) {
-			return transport.Result{Stdout: `{"success":true,"data":[{"version":"6000.3.23f1","changeset":"wrong","architecture":"arm64"}]}`}, nil
+		"architecture-mismatch": func(transport.Command) (transport.Result, error) {
+			return transport.Result{Stdout: `{"success":true,"data":[{"version":"6000.3.23f1","architecture":"x86_64"}]}`}, nil
 		},
 		"missing-architecture": func(transport.Command) (transport.Result, error) {
 			return transport.Result{Stdout: `{"success":true,"data":[{"version":"6000.3.23f1","changeset":"09d2ecc7fb28"}]}`}, nil
