@@ -43,8 +43,13 @@ Windows host의 확장 adapter가 `Code.exe`에 확장 관리 인자만 전달�
 
 `Code.exe`에 그 스크립트를 첫 인자로 전달하고, 해당 자식 프로세스에만
 `ELECTRON_RUN_AS_NODE=1`과 빈 `VSCODE_DEV`를 적용한다. shell에서 launcher 내용을
-실행하거나 문자열로 인자를 보간하지 않는다. 해석한 경로가 설치 폴더를 벗어나거나
-파일이 없으면 conflict로 종료하며 GUI로 대체하지 않는다.
+실행하거나 문자열로 인자를 보간하지 않는다. 정규화한 문자열 경로가 설치 폴더를
+벗어나거나, 참조 파일이 없거나 일반 파일이 아니면 conflict로 종료하며 GUI로
+대체하지 않는다.
+
+기존에 선택한 VS Code 설치와 그 내부의 vendor 관리 링크는 신뢰한다. 이 검사는
+링크의 최종 물리 경로, 설치 파일의 서명·무결성 또는 악성으로 변조된 설치를
+검증하는 보안 경계가 아니다. 기존 설치의 실행 권한 범위를 확장하지 않는다.
 
 기존 확장 버전 충돌을 자동으로 덮어쓰지 않는 정책은 변경하지 않았다.
 이번 실제 설정에서는 사용자의 명시적 진행 요청에 따라 확장을 catalog pin으로
@@ -61,7 +66,7 @@ stdout과 종료 코드로 받을 수 있다. 실행 및 조회가 같은 comman
 - [회귀 테스트](../../../internal/adapters/host/vscode_extensions_test.go)는 일반 및
   버전별 설치 구조에서 목록 조회와 설치가 모두 CLI 모드인지 확인한다.
 - launcher가 없는 설치를 확장 미설치로 잘못 취급하거나 GUI로 실행하지 않는다.
-- 지원하지 않는 launcher 문법, 설치 경로 이탈, 참조한 script 누락도 조회·설치 모두
+- 지원하지 않는 launcher 문법, 문자열 경로 이탈, script 누락·디렉터리도 조회·설치 모두
   conflict로 차단하며 외부 명령을 실행하지 않는지 회귀 테스트로 확인한다.
 - 수정 전 두 테스트가 실패했고, 수정 후 host adapter 전체 테스트가 통과했다.
 - 실제 Windows에서 `mds doctor --profile game-development --format json`이

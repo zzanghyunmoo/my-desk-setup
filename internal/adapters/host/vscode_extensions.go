@@ -102,12 +102,17 @@ func (extension VSCodeExtension) command(arguments ...string) (transport.Command
 		return transport.Command{}, errors.New("installed VS Code launcher has no supported CLI entry point")
 	}
 	cli := filepath.Join(installation, "bin", strings.ReplaceAll(match[1], `\`, string(filepath.Separator)))
+	// Keep launcher paths lexically inside the already-trusted VS Code installation.
 	relative, err := filepath.Rel(installation, cli)
 	if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
 		return transport.Command{}, errors.New("VS Code CLI entry point escapes its installation")
 	}
-	if _, err := os.Stat(cli); err != nil {
+	info, err := os.Stat(cli)
+	if err != nil {
 		return transport.Command{}, fmt.Errorf("locate installed VS Code CLI entry point: %w", err)
+	}
+	if !info.Mode().IsRegular() {
+		return transport.Command{}, errors.New("installed VS Code CLI entry point is not a regular file")
 	}
 	command.Arguments = append([]string{cli}, arguments...)
 	command.Environment = map[string]string{"ELECTRON_RUN_AS_NODE": "1", "VSCODE_DEV": ""}

@@ -89,13 +89,15 @@ func TestVSCodeExtensionMissingWindowsLauncherNeverStartsGUI(t *testing.T) {
 
 func TestVSCodeExtensionInvalidWindowsLauncherNeverRunsCommands(t *testing.T) {
 	for _, scenario := range []struct {
-		name     string
-		launcher string
-		detail   string
+		name      string
+		launcher  string
+		detail    string
+		scriptDir bool
 	}{
-		{"unsupported syntax", "@echo off\r\n", "no supported CLI entry point"},
-		{"path escape", `"%~dp0..\..\outside\resources\app\out\cli.js"`, "escapes its installation"},
-		{"missing script", `"%~dp0..\resources\app\out\cli.js"`, "locate installed VS Code CLI entry point"},
+		{"unsupported syntax", "@echo off\r\n", "no supported CLI entry point", false},
+		{"path escape", `"%~dp0..\..\outside\resources\app\out\cli.js"`, "escapes its installation", false},
+		{"missing script", `"%~dp0..\resources\app\out\cli.js"`, "locate installed VS Code CLI entry point", false},
+		{"directory script", `"%~dp0..\resources\app\out\cli.js"`, "not a regular file", true},
 	} {
 		t.Run(scenario.name, func(t *testing.T) {
 			// Given a readable launcher and an existing script outside the installation.
@@ -114,6 +116,11 @@ func TestVSCodeExtensionInvalidWindowsLauncherNeverRunsCommands(t *testing.T) {
 			}
 			if err := os.MkdirAll(filepath.Join(install, "bin"), 0o755); err != nil {
 				t.Fatal(err)
+			}
+			if scenario.scriptDir {
+				if err := os.MkdirAll(filepath.Join(install, "resources", "app", "out", "cli.js"), 0o755); err != nil {
+					t.Fatal(err)
+				}
 			}
 			if err := os.WriteFile(filepath.Join(install, "bin", "code.cmd"), []byte(scenario.launcher), 0o644); err != nil {
 				t.Fatal(err)
