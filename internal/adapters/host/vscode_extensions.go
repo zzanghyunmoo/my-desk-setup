@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/zzanghyunmoo/my-desk-setup/internal/adapters"
@@ -27,10 +28,11 @@ func (extension VSCodeExtension) Observe(ctx context.Context, action planning.Ac
 	if extension.Port == nil {
 		return adapters.Observation{}, errors.New("VS Code extension adapter requires a port")
 	}
-	result, err := extension.Port.Run(ctx, transport.Command{
-		Executable: extension.executable(),
-		Arguments:  []string{"--list-extensions", "--show-versions"},
-	})
+	command, err := extension.command("--list-extensions", "--show-versions")
+	if err != nil {
+		return adapters.Observation{State: adapters.StateConflict, Detail: err.Error()}, nil
+	}
+	result, err := extension.Port.Run(ctx, command)
 	if err != nil {
 		if errors.Is(err, exec.ErrNotFound) || errors.Is(err, os.ErrNotExist) {
 			return adapters.Observation{State: adapters.StateAbsent}, nil
@@ -73,11 +75,48 @@ func (extension VSCodeExtension) Apply(ctx context.Context, action planning.Acti
 	if ref == "" || action.Version == "" {
 		return errors.New("VS Code extension action requires exact install_ref and version")
 	}
-	_, err = extension.Port.Run(ctx, transport.Command{
-		Executable: extension.executable(),
-		Arguments:  []string{"--install-extension", ref + "@" + action.Version, "--force"},
-	})
+	command, err := extension.command("--install-extension", ref+"@"+action.Version, "--force")
+	if err != nil {
+		return err
+	}
+	_, err = extension.Port.Run(ctx, command)
 	return err
+}
+
+var windowsCodeCLI = regexp.MustCompile(`"%~dp0([^"\r\n]*\\resources\\app\\out\\cli\.js)"`)
+
+func (extension VSCodeExtension) command(arguments ...string) (transport.Command, error) {
+	command := transport.Command{Executable: extension.executable(), Arguments: arguments}
+	if extension.Platform != "windows" || !strings.EqualFold(filepath.Base(command.Executable), "Code.exe") {
+		return command, nil
+	}
+	installation := filepath.Dir(command.Executable)
+	launcher, err := os.ReadFile(filepath.Join(installation, "bin", "code.cmd"))
+	if err != nil {
+		return transport.Command{}, fmt.Errorf("read installed VS Code CLI launcher: %w", err)
+	}
+	// Follow the vendor launcher: current Windows installs version the CLI folder.
+	// Invoke Node directly so neither GUI startup nor cmd.exe interpolation occurs.
+	match := windowsCodeCLI.FindStringSubmatch(string(launcher))
+	if len(match) != 2 {
+		return transport.Command{}, errors.New("installed VS Code launcher has no supported CLI entry point")
+	}
+	cli := filepath.Join(installation, "bin", strings.ReplaceAll(match[1], `\`, string(filepath.Separator)))
+	// Keep launcher paths lexically inside the already-trusted VS Code installation.
+	relative, err := filepath.Rel(installation, cli)
+	if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+		return transport.Command{}, errors.New("VS Code CLI entry point escapes its installation")
+	}
+	info, err := os.Stat(cli)
+	if err != nil {
+		return transport.Command{}, fmt.Errorf("locate installed VS Code CLI entry point: %w", err)
+	}
+	if !info.Mode().IsRegular() {
+		return transport.Command{}, errors.New("installed VS Code CLI entry point is not a regular file")
+	}
+	command.Arguments = append([]string{cli}, arguments...)
+	command.Environment = map[string]string{"ELECTRON_RUN_AS_NODE": "1", "VSCODE_DEV": ""}
+	return command, nil
 }
 
 func (extension VSCodeExtension) Verify(ctx context.Context, action planning.Action) error {

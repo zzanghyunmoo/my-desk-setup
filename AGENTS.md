@@ -20,6 +20,9 @@
 
 ## 검증
 
+- `docs/solutions/`에는 설치·검증 문제의 해결 기록이 category별로 정리되어 있다.
+  YAML의 `module`, `tags`, `problem_type`으로 관련 구현·진단 지식을 찾을 수 있다.
+
 변경에 맞는 `go test ./...`, `go vet ./...`, `go build ./cmd/mds`를 기본으로
 실행한다. 실제 OS나 VM이 필요한 검증은 실행 대상과 결과 또는 미실행 이유를
 work evidence에 기록한다.
